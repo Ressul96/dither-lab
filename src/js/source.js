@@ -29,6 +29,7 @@ let playbackSyncSuspended = false;
 let pendingPlayPromise = null;
 let playRequestToken = 0;
 let renderVersion = 0;
+let sourceToken = 0;
 let nativeRenderInFlight = false;
 
 export function initSource() {
@@ -74,6 +75,7 @@ async function loadVideo(src, path, options = {}) {
   const { video: v, canvas: outputCanvas, splitCanvas: outputSplitCanvas } = ensureEls();
   stopDrawLoop();
   disablePlayerControls();
+  sourceToken += 1;
   try {
     v.pause();
   } catch {}
@@ -145,6 +147,7 @@ export function clearSource() {
 
   stopDrawLoop();
   renderVersion += 1;
+  sourceToken += 1;
   playRequestToken += 1;
   pendingPlayPromise = null;
   hasDitherOutput = false;
@@ -680,6 +683,7 @@ function renderCurrentFrame() {
   if (!v || v.readyState < 2 || !canvas || !ctx) return;
 
   const currentRenderVersion = ++renderVersion;
+  const currentSourceToken = sourceToken;
   ensureFrameBuffers(v.videoWidth, v.videoHeight);
   drawSourceFrame(v);
 
@@ -692,7 +696,7 @@ function renderCurrentFrame() {
   commitProcessedFrame(graphOutput);
   commitDitherFrame(graphOutputs.ditherOutput);
   presentPreview();
-  queueNativePreview(graph, currentRenderVersion);
+  queueNativePreview(graph, currentRenderVersion, currentSourceToken);
 }
 
 function drawSourceFrame(v) {
@@ -716,13 +720,15 @@ function commitDitherFrame(image) {
   ditherCtx.drawImage(image, 0, 0, ditherCanvas.width, ditherCanvas.height);
 }
 
-function queueNativePreview(graph, currentRenderVersion) {
+function queueNativePreview(graph, currentRenderVersion, currentSourceToken) {
   if (nativeRenderInFlight || !canUseNativeRender(graph)) return;
   nativeRenderInFlight = true;
 
   void evaluateNativeGraphOutputs(graph, sourceCanvas)
     .then((nativeOutputs) => {
-      if (!nativeOutputs || currentRenderVersion !== renderVersion) return;
+      if (!nativeOutputs) return;
+      if (currentRenderVersion !== renderVersion) return;
+      if (currentSourceToken !== sourceToken) return;
       commitProcessedFrame(nativeOutputs.viewerOutput);
       commitDitherFrame(nativeOutputs.ditherOutput);
       presentPreview();
