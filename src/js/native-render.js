@@ -1,3 +1,5 @@
+import { pruneHiddenGraph } from "./graph-runtime.js";
+
 const NATIVE_SUPPORTED_TYPES = new Set([
   "source",
   "adjust",
@@ -15,15 +17,17 @@ let nativeRenderWarningShown = false;
 
 export function canUseNativeRender(graph) {
   if (!window.__TAURI__?.core?.invoke) return false;
-  if (!graph?.nodes?.length) return false;
-  if (!graph.nodes.every((node) => NATIVE_SUPPORTED_TYPES.has(node.type))) return false;
-  return graph.nodes.some((node) => !PASS_THROUGH_TYPES.has(node.type));
+  const scoped = pruneHiddenGraph(graph);
+  if (!scoped?.nodes?.length) return false;
+  if (!scoped.nodes.every((node) => NATIVE_SUPPORTED_TYPES.has(node.type))) return false;
+  return scoped.nodes.some((node) => !PASS_THROUGH_TYPES.has(node.type));
 }
 
 export async function evaluateNativeGraphOutputs(graph, sourceCanvas) {
   if (!canUseNativeRender(graph) || !sourceCanvas?.width || !sourceCanvas?.height) return null;
   if (nativeRenderAvailable === false) return null;
 
+  const scoped = pruneHiddenGraph(graph);
   const context = sourceCanvas.getContext("2d", { alpha: false, willReadFrequently: true });
   if (!context) return null;
 
@@ -32,12 +36,12 @@ export async function evaluateNativeGraphOutputs(graph, sourceCanvas) {
     width: sourceCanvas.width,
     height: sourceCanvas.height,
     pixels: Array.from(sourceFrame.data),
-    nodes: graph.nodes.map((node) => ({
+    nodes: scoped.nodes.map((node) => ({
       id: node.id,
       type: node.type,
       params: node.params ?? {},
     })),
-    edges: graph.edges.map((edge) => ({
+    edges: scoped.edges.map((edge) => ({
       fromNode: edge.fromNode,
       fromSocket: edge.fromSocket,
       toNode: edge.toNode,

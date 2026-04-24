@@ -12,26 +12,43 @@ export function evaluateViewerOutput(graph, context) {
   return evaluateGraphOutputs(graph, context).viewerOutput;
 }
 
+export function isNodeHidden(node) {
+  return Boolean(node && node.visible === false);
+}
+
+export function pruneHiddenGraph(graph) {
+  if (!graph?.nodes?.length) return graph ?? { nodes: [], edges: [] };
+  const visibleNodes = graph.nodes.filter((node) => !isNodeHidden(node));
+  if (visibleNodes.length === graph.nodes.length) return graph;
+
+  const visibleIds = new Set(visibleNodes.map((node) => node.id));
+  const visibleEdges = (graph.edges ?? []).filter(
+    (edge) => visibleIds.has(edge.fromNode) && visibleIds.has(edge.toNode)
+  );
+  return { ...graph, nodes: visibleNodes, edges: visibleEdges };
+}
+
 export function evaluateGraphOutputs(graph, context) {
-  if (!graph?.nodes?.length) {
+  const scoped = pruneHiddenGraph(graph);
+  if (!scoped?.nodes?.length) {
     return {
       viewerOutput: null,
       ditherOutput: null,
     };
   }
 
-  const order = topologicalSort(graph);
+  const order = topologicalSort(scoped);
   const results = new Map();
 
   for (const nodeId of order) {
-    const node = getNodeById(nodeId, graph);
+    const node = getNodeById(nodeId, scoped);
     if (!node) continue;
 
-    const output = evaluateNode(node, graph, results, context);
+    const output = evaluateNode(node, scoped, results, context);
     results.set(node.id, output ?? null);
   }
 
-  const viewerNode = graph.nodes.find((node) => node.type === "viewer-output");
+  const viewerNode = scoped.nodes.find((node) => node.type === "viewer-output");
   if (!viewerNode) {
     return {
       viewerOutput: null,
@@ -39,7 +56,7 @@ export function evaluateGraphOutputs(graph, context) {
     };
   }
 
-  const ditherNodeId = findNearestUpstreamNodeOfType(viewerNode.id, graph, "dither");
+  const ditherNodeId = findNearestUpstreamNodeOfType(viewerNode.id, scoped, "dither");
   return {
     viewerOutput: results.get(viewerNode.id) ?? null,
     ditherOutput: ditherNodeId ? results.get(ditherNodeId) ?? null : null,
