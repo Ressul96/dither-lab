@@ -19,7 +19,7 @@ export function writeMonochrome(data, offset, value) {
   data[offset] = value;
   data[offset + 1] = value;
   data[offset + 2] = value;
-  data[offset + 3] = 255;
+  // data[offset + 3] left untouched so the source alpha survives.
 }
 
 export function readLuminance(data, width, height) {
@@ -58,7 +58,8 @@ export function writeRGB(data, r, g, b) {
     data[offset] = clamp(Math.round(r[i]), 0, 255);
     data[offset + 1] = clamp(Math.round(g[i]), 0, 255);
     data[offset + 2] = clamp(Math.round(b[i]), 0, 255);
-    data[offset + 3] = 255;
+    // Preserve original alpha; the ImageData buffer is the input, so offset+3
+    // already holds the source alpha value.
   }
 }
 
@@ -66,7 +67,7 @@ export function writePixel(data, offset, r, g, b) {
   data[offset] = r;
   data[offset + 1] = g;
   data[offset + 2] = b;
-  data[offset + 3] = 255;
+  // Alpha preserved: caller already has source alpha at offset+3.
 }
 
 export function preAdjustRGB(r, g, b, threshold, invert) {
