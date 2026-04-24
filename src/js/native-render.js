@@ -32,10 +32,14 @@ export async function evaluateNativeGraphOutputs(graph, sourceCanvas) {
   if (!context) return null;
 
   const sourceFrame = context.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+  const pixels = new Uint8Array(
+    sourceFrame.data.buffer,
+    sourceFrame.data.byteOffset,
+    sourceFrame.data.byteLength
+  );
   const request = {
     width: sourceCanvas.width,
     height: sourceCanvas.height,
-    pixels: Array.from(sourceFrame.data),
     nodes: scoped.nodes.map((node) => ({
       id: node.id,
       type: node.type,
@@ -50,7 +54,10 @@ export async function evaluateNativeGraphOutputs(graph, sourceCanvas) {
   };
 
   try {
-    const response = await window.__TAURI__.core.invoke("native_render_graph", { request });
+    const response = await window.__TAURI__.core.invoke("native_render_graph", {
+      request,
+      pixels,
+    });
     nativeRenderAvailable = true;
     return {
       viewerOutput: frameToCanvas(response.viewerOutput),

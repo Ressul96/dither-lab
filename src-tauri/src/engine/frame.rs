@@ -7,7 +7,6 @@ use std::collections::{HashMap, VecDeque};
 pub struct NativeRenderRequest {
     pub width: u32,
     pub height: u32,
-    pub pixels: Vec<u8>,
     pub nodes: Vec<NativeGraphNode>,
     pub edges: Vec<NativeGraphEdge>,
 }
@@ -54,12 +53,18 @@ struct FrameBuffer {
 }
 
 #[tauri::command]
-pub fn native_render_graph(request: NativeRenderRequest) -> Result<NativeRenderResponse, String> {
-    render_graph(request).map_err(|error| error.to_string())
+pub fn native_render_graph(
+    request: NativeRenderRequest,
+    pixels: Vec<u8>,
+) -> Result<NativeRenderResponse, String> {
+    render_graph(request, pixels).map_err(|error| error.to_string())
 }
 
-fn render_graph(request: NativeRenderRequest) -> Result<NativeRenderResponse, RenderError> {
-    let source = FrameBuffer::new(request.width, request.height, request.pixels)?;
+fn render_graph(
+    request: NativeRenderRequest,
+    pixels: Vec<u8>,
+) -> Result<NativeRenderResponse, RenderError> {
+    let source = FrameBuffer::new(request.width, request.height, pixels)?;
     let order = topological_sort(&request.nodes, &request.edges);
     let mut results: HashMap<String, FrameBuffer> = HashMap::new();
 
