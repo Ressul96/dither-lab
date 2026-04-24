@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dither Lab</title>
+    <link rel="stylesheet" href="./styles/main.css" />
+    <script type="module" src="./js/main.js" defer></script>
+  </head>
+  <body>
+    <div id="app">
+      <aside class="inspector" id="inspector">
+        <div class="inspector-header">
+          <div class="panel-titlebar">
+            <h1>Dither Lab</h1>
+            <button
+              class="panel-toggle"
+              type="button"
+              data-panel-toggle="left"
+              aria-label="Hide left panel"
+              title="Hide left panel"
+            >
+              ‹
+            </button>
+          </div>
+          <p class="hint">Drop a video or use File -> Open Source</p>
+        </div>
+
+        <div class="inspector-body">
+          <section class="section collapsed" data-section="source">
+            <div class="section-header">
+              <button class="section-toggle" aria-expanded="false">
+                <span>Source Info</span>
+                <span class="chevron"></span>
+              </button>
+            </div>
+            <div class="section-body">
+              <div class="row"><span class="label">Type</span><span class="value" data-readout="type">—</span></div>
+              <div class="row"><span class="label">Resolution</span><span class="value" data-readout="resolution">—</span></div>
+              <div class="row"><span class="label">Duration</span><span class="value" data-readout="duration">—</span></div>
+              <div class="row"><span class="label">Missing frames</span><span class="value" data-readout="missing">—</span></div>
+            </div>
+          </section>
+
+          <section class="section" data-section="graph-tools">
+            <div class="section-header">
+              <button class="section-toggle" aria-expanded="true">
+                <span>Nodes</span>
+                <span class="chevron"></span>
+              </button>
+            </div>
+            <div class="section-body">
+              <div class="tool-grid node-palette">
+                <div class="palette-item type-adjust" data-palette-node="adjust" draggable="true">Adjust</div>
+                <div class="palette-item type-blur" data-palette-node="blur" draggable="true">Blur</div>
+                <div class="palette-item type-dither" data-palette-node="dither" draggable="true">Dither</div>
+                <div class="palette-item type-glow" data-palette-node="glow" draggable="true">Glow</div>
+                <div class="palette-item type-distort" data-palette-node="distort" draggable="true">Distort</div>
+                <div class="palette-item type-mix" data-palette-node="mix" draggable="true">Mix</div>
+              </div>
+              <p class="hint">
+                Click to insert before Viewer Output, drag onto an edge to insert there, or drop
+                on empty canvas to create a free node.
+              </p>
+            </div>
+          </section>
+
+          <section class="section collapsed" data-section="presets">
+            <div class="section-header">
+              <button class="section-toggle" aria-expanded="false">
+                <span>Presets</span>
+                <span class="chevron"></span>
+              </button>
+            </div>
+            <div class="section-body">
+              <div class="preset-grid">
+                <div class="preset-card">
+                  <span class="favorite">★</span>
+                  <span class="preset-name">Gameboy</span>
+                </div>
+                <div class="preset-card">
+                  <span class="favorite">★</span>
+                  <span class="preset-name">Newspaper</span>
+                </div>
+                <div class="preset-card">
+                  <span class="favorite">★</span>
+                  <span class="preset-name">Mac Plus</span>
+                </div>
+                <div class="preset-card">
+                  <span class="favorite">★</span>
+                  <span class="preset-name">Terminal</span>
+                </div>
+              </div>
+              <button class="btn" disabled>Save current as preset...</button>
+            </div>
+          </section>
+
+          <section class="section collapsed" data-section="project">
+            <div class="section-header">
+              <button class="section-toggle" aria-expanded="false">
+                <span>Project</span>
+                <span class="chevron"></span>
+              </button>
+            </div>
+            <div class="section-body">
+              <div class="row"><span class="label">Preview</span><span class="value">Viewer Output</span></div>
+              <div class="row"><span class="label">Export</span><span class="value">Viewer Output</span></div>
+              <div class="row"><span class="label">Status</span><span class="value">Graph save/load ready</span></div>
+              <div class="tool-grid">
+                <button class="btn" data-action="new-project">New</button>
+                <button class="btn" data-action="open-project">Open</button>
+                <button class="btn" data-action="save-project">Save</button>
+                <button class="btn" data-action="save-project-as">Save As</button>
+              </div>
+              <p class="hint">
+                Projects are stored as local JSON-based `.ditherlab` files with source path,
+                graph, trim, and compare state.
+              </p>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <div class="resize-handle" data-target="inspector" data-side="right"></div>
+
+      <main class="workspace" id="workspace">
+        <button
+          class="workspace-edge-toggle workspace-edge-toggle--left"
+          type="button"
+          data-panel-toggle="left"
+          aria-label="Show left panel"
+          title="Show left panel"
+        >
+          ›
+        </button>
+        <button
+          class="workspace-edge-toggle workspace-edge-toggle--right"
+          type="button"
+          data-panel-toggle="right"
+          aria-label="Show right panel"
+          title="Show right panel"
+        >
+          ‹
+        </button>
+
+        <section class="preview-shell" aria-label="Preview">
+          <div class="stage" id="stage">
+            <video id="sourceVideo" class="source-video" muted playsinline></video>
+
+            <div class="floating-card preview-toolbar">
+              <div class="segmented compare-mode">
+                <button class="active" data-mode="processed">Processed</button>
+                <button data-mode="dither-only">Dither Only</button>
+                <button data-mode="original">Original</button>
+                <button data-mode="split">Split</button>
+                <button data-mode="side-by-side">Side by Side</button>
+              </div>
+            </div>
+
+            <div class="floating-card pixel-inspector hidden" id="pixelInspector">
+              <div class="row"><span class="label">Pos</span><span class="value mono">—</span></div>
+              <div class="row"><span class="label">Source</span><span class="value mono">—</span></div>
+              <div class="row"><span class="label">Processed</span><span class="value mono">—</span></div>
+            </div>
+
+            <div class="stage-canvas">
+              <div class="empty-state" id="emptyState">
+                <div class="drop-prompt">
+                  <p class="primary">Drop a video here</p>
+                  <p class="secondary">or use File -> Open Source</p>
+                </div>
+              </div>
+              <div class="stage-dropzone hidden" id="stageDropzone" aria-hidden="true">
+                <div class="stage-dropzone-card">
+                  <p class="primary">Drop video to import</p>
+                  <p class="secondary">Release to load into the viewer</p>
+                </div>
+              </div>
+              <canvas id="output" class="output hidden"></canvas>
+              <div class="split-overlay hidden" id="splitOverlay" aria-hidden="true">
+                <canvas id="outputSplitOverlay" class="output output-overlay hidden"></canvas>
+              </div>
+              <button
+                class="split-divider hidden"
+                id="splitDivider"
+                type="button"
+                aria-label="Move split divider"
+                title="Move split divider"
+              >
+                <span class="split-divider-line"></span>
+                <span class="split-divider-grip"></span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <div class="resize-handle resize-handle-row" data-target="workspace-rows"></div>
+
+        <section class="node-editor-shell" aria-label="Node Editor">
+          <div class="node-editor-surface" id="nodeEditor">
+            <svg class="graph-edges" id="graphEdges" aria-hidden="true"></svg>
+            <div class="graph-node-layer" id="graphNodes"></div>
+          </div>
+        </section>
+
+        <div class="scopes-drawer" id="scopesDrawer" aria-hidden="true">
+          <div class="scopes-drawer-header">
+            <span class="scopes-label">Scopes</span>
+            <div class="segmented">
+              <button class="active">Processed</button>
+              <button>Original</button>
+              <button>Dither Only</button>
+            </div>
+            <button class="icon-btn" id="scopesClose" title="Close scopes">×</button>
+          </div>
+          <div class="scopes-panels">
+            <div class="scope"><header>Histogram</header><canvas></canvas></div>
+            <div class="scope"><header>Waveform</header><canvas></canvas></div>
+            <div class="scope"><header>Vectorscope-lite</header><canvas></canvas></div>
+          </div>
+        </div>
+
+        <div class="floating-card player-card" id="playerCard">
+          <div class="player-row player-timeline">
+            <span class="time-label tabular">00:00:00</span>
+            <div class="timeline">
+              <div class="trim-rail">
+                <div class="trim-dim trim-dim--left"></div>
+                <div class="trim-selection"></div>
+                <div class="trim-dim trim-dim--right"></div>
+                <div class="trim-handle trim-in" title="Trim In">
+                  <span class="trim-handle-label">In</span>
+                </div>
+                <div class="trim-handle trim-out" title="Trim Out">
+                  <span class="trim-handle-label">Out</span>
+                </div>
+              </div>
+              <input type="range" class="scrubber" min="0" max="1000" value="0" disabled />
+            </div>
+            <span class="time-label tabular">00:00:00</span>
+          </div>
+
+          <div class="player-row player-transport">
+            <div class="transport-side transport-side--left">
+              <button class="btn trim-action" data-action="set-in" title="Set Trim In" disabled>Set In</button>
+              <button class="btn trim-action" data-action="set-out" title="Set Trim Out" disabled>Set Out</button>
+              <button class="icon-btn" data-action="reset-trim" title="Reset trim" disabled>↺</button>
+              <button class="icon-btn" data-action="snap-playhead" title="Snap playhead to handle" disabled>⇥</button>
+            </div>
+            <div class="transport-main">
+              <button class="icon-btn" data-action="restart" title="Restart (Home)" disabled>⏮</button>
+              <button class="icon-btn" data-action="prev-frame" title="Previous frame (←)" disabled>⏴</button>
+              <button
+                class="icon-btn primary transport-play"
+                data-action="toggle-play"
+                title="Play / Pause (Space)"
+                disabled
+              >
+                ▶
+              </button>
+              <button class="icon-btn" data-action="next-frame" title="Next frame (→)" disabled>⏵</button>
+            </div>
+            <div class="transport-side transport-side--right"></div>
+          </div>
+
+          <div class="player-row player-compare">
+            <div class="ab-controls">
+              <button class="icon-btn" data-action="ab-hold" title="Hold to preview original" disabled>A/B</button>
+              <button class="btn" data-action="capture-a" disabled>Capture A</button>
+              <button class="btn" data-action="capture-b" disabled>Capture B</button>
+              <button class="btn" data-action="swap-ab" disabled>Swap</button>
+              <button class="btn" id="scopesToggle" aria-pressed="false" title="Toggle scopes">Scopes</button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <div class="resize-handle" data-target="right-panel" data-side="left"></div>
+
+      <aside class="right-panel node-inspector-panel" id="rightPanel">
+        <div class="panel-chrome">
+          <div class="panel-titlebar">
+            <h2>Inspector</h2>
+            <button
+              class="panel-toggle"
+              type="button"
+              data-panel-toggle="right"
+              aria-label="Hide right panel"
+              title="Hide right panel"
+            >
+              ›
+            </button>
+          </div>
+        </div>
+        <div class="node-inspector-body" id="nodeInspector"></div>
+        <div class="right-panel-footer">
+          <button class="btn primary right-panel-export" data-action="export" disabled>Export</button>
+        </div>
+      </aside>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "smoke",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "/Users/resulercan/Desktop/dither-lab/smoke/nocache_server.py",
+        "/Users/resulercan/Desktop/dither-lab",
+        "5177"
+      ],
+      "port": 5177
+    },
+    {
+      "name": "smoke-alt",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "/Users/resulercan/Desktop/dither-lab/smoke/nocache_server.py",
+        "/Users/resulercan/Desktop/dither-lab",
+        "5181"
+      ],
+      "port": 5181
+    }
+  ]
+}

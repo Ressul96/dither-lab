@@ -1,0 +1,76 @@
+const NATIVE_SUPPORTED_TYPES = new Set([
+  "source",
+  "adjust",
+  "blur",
+  "glow",
+  "distort",
+  "mix",
+  "viewer-output",
+]);
+
+const PASS_THROUGH_TYPES = new Set(["source", "viewer-output"]);
+
+let nativeRenderAvailable = null;
+let nativeRenderWarningShown = false;
+
+export function canUseNativeRender(graph) {
+  if (!window.__TAURI__?.core?.invoke) return false;
+  if (!graph?.nodes?.length) return false;
+  if (!graph.nodes.every((node) => NATIVE_SUPPORTED_TYPES.has(node.type))) return false;
+  return graph.nodes.some((node) => !PASS_THROUGH_TYPES.has(node.type));
+}
+
+export async function evaluateNativeGraphOutputs(graph, sourceCanvas) {
+  if (!canUseNativeRender(graph) || !sourceCanvas?.width || !sourceCanvas?.height) return null;
+  if (nativeRenderAvailable === false) return null;
+
+  const context = sourceCanvas.getContext("2d", { alpha: false, willReadFrequently: true });
+  if (!context) return null;
+
+  const sourceFrame = context.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+  const request = {
+    width: sourceCanvas.width,
+    height: sourceCanvas.height,
+    pixels: Array.from(sourceFrame.data),
+    nodes: graph.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      params: node.params ?? {},
+    })),
+    edges: graph.edges.map((edge) => ({
+      fromNode: edge.fromNode,
+      fromSocket: edge.fromSocket,
+      toNode: edge.toNode,
+      toSocket: edge.toSocket,
+    })),
+  };
+
+  try {
+    const response = await window.__TAURI__.core.invoke("native_render_graph", { request });
+    nativeRenderAvailable = true;
+    return {
+      viewerOutput: frameToCanvas(response.viewerOutput),
+      ditherOutput: response.ditherOutput ? frameToCanvas(response.ditherOutput) : null,
+    };
+  } catch (error) {
+    nativeRenderAvailable = false;
+    if (!nativeRenderWarningShown) {
+      nativeRenderWarningShown = true;
+      console.warn("[native-render] disabled after failed invoke", error);
+    }
+    return null;
+  }
+}
+
+function frameToCanvas(frame) {
+  if (!frame?.width || !frame?.height || !frame?.pixels) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = frame.width;
+  canvas.height = frame.height;
+  const context = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
+  if (!context) return null;
+
+  const pixels = new Uint8ClampedArray(frame.pixels);
+  context.putImageData(new ImageData(pixels, frame.width, frame.height), 0, 0);
+  return canvas;
+}

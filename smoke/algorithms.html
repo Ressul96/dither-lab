@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Dither Lab Smoke — Algorithms x Palettes</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; padding: 16px; background: #101012; color: #ddd; font: 12px/1.4 system-ui, sans-serif; }
+      h1 { margin: 0 0 4px; font-size: 14px; }
+      #summary { margin: 0 0 16px; color: #9aa; }
+      #summary.fail { color: #f66; }
+      #summary.ok { color: #6c6; }
+      table { border-collapse: collapse; }
+      th, td { padding: 6px 8px; border: 1px solid #2a2a30; text-align: center; vertical-align: top; }
+      th { position: sticky; top: 0; background: #1a1a1e; font-weight: 500; }
+      th.row { position: sticky; left: 0; text-align: left; z-index: 2; }
+      canvas { image-rendering: pixelated; display: block; margin: 0 auto; background: #000; }
+      .err { color: #f66; font-size: 10px; }
+      .meta { display: block; color: #778; font-size: 10px; }
+    </style>
+  </head>
+  <body>
+    <h1>Algorithm × Palette Smoke</h1>
+    <p id="summary">running…</p>
+    <div id="table-wrap"></div>
+
+    <script type="module">
+      import { listAlgorithms, runAlgorithm } from "../src/js/dither/index.js";
+      import { listPalettes, getPalette } from "../src/js/palettes.js";
+
+      const CELL = 96;
+
+      // Synthetic gradient + color swatches, wide enough to exercise RGB + luminance paths.
+      function makeSource(width, height) {
+        const c = document.createElement("canvas");
+        c.width = width;
+        c.height = height;
+        const ctx = c.getContext("2d");
+        const grad = ctx.createLinearGradient(0, 0, width, 0);
+        grad.addColorStop(0, "#000");
+        grad.addColorStop(0.5, "#888");
+        grad.addColorStop(1, "#fff");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, width, Math.floor(height / 2));
+        const colors = ["#e33", "#3e3", "#33e", "#ee3", "#3ee", "#e3e"];
+        const bw = Math.floor(width / colors.length);
+        for (let i = 0; i < colors.length; i++) {
+          ctx.fillStyle = colors[i];
+          ctx.fillRect(i * bw, Math.floor(height / 2), bw, Math.floor(height / 2));
+        }
+        return ctx.getImageData(0, 0, width, height);
+      }
+
+      const PALETTE_IDS = ["monochrome", "gameboy-dmg", "pico-8", "nes"];
+
+      function main() {
+        const algos = listAlgorithms();
+        const palettes = PALETTE_IDS.map(getPalette).filter(Boolean);
+
+        const table = document.createElement("table");
+        const thead = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        headRow.appendChild(document.createElement("th"));
+        for (const p of palettes) {
+          const th = document.createElement("th");
+          th.textContent = p.name;
+          const meta = document.createElement("span");
+          meta.className = "meta";
+          meta.textContent = `${p.colors.length} colors`;
+          th.appendChild(meta);
+          headRow.appendChild(th);
+        }
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement("tbody");
+        table.appendChild(tbody);
+        document.getElementById("table-wrap").appendChild(table);
+
+        let total = 0;
+        let failed = 0;
+        const errors = [];
+
+        const params = {
+          threshold: 128,
+          invert: false,
+          errorStrength: 100,
+          serpentine: true,
+          seed: 1337,
+        };
+
+        for (const algo of algos) {
+          const tr = document.createElement("tr");
+          const rowHead = document.createElement("th");
+          rowHead.className = "row";
+          rowHead.textContent = algo.name;
+          const meta = document.createElement("span");
+          meta.className = "meta";
+          meta.textContent = `${algo.family} · ${algo.id}`;
+          rowHead.appendChild(meta);
+          tr.appendChild(rowHead);
+
+          for (const palette of palettes) {
+            const td = document.createElement("td");
+            const canvas = document.createElement("canvas");
+            canvas.width = CELL;
+            canvas.height = CELL;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+            try {
+              total++;
+              const src = makeSource(CELL, CELL);
+              runAlgorithm(algo.id, src, params, palette);
+              ctx.putImageData(src, 0, 0);
+              td.appendChild(canvas);
+            } catch (err) {
+              failed++;
+              const msg = `${algo.id} × ${palette.id}: ${err.message}`;
+              console.error(msg, err);
+              errors.push(msg);
+              const node = document.createElement("div");
+              node.className = "err";
+              node.textContent = err.message;
+              td.appendChild(node);
+            }
+            tr.appendChild(td);
+          }
+          tbody.appendChild(tr);
+        }
+
+        const summary = document.getElementById("summary");
+        if (failed === 0) {
+          summary.className = "ok";
+          summary.textContent = `OK — ${algos.length} algorithms × ${palettes.length} palettes = ${total} combos passed`;
+        } else {
+          summary.className = "fail";
+          summary.textContent = `FAIL — ${failed}/${total} combos threw`;
+        }
+
+        window.__smoke = { total, failed, errors, algoCount: algos.length, paletteCount: palettes.length };
+      }
+
+      main();
+    </script>
+  </body>
+</html>
