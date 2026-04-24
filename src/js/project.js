@@ -70,7 +70,13 @@ export async function openProject() {
 
   const path = typeof selected === "string" ? selected : selected.path;
   const raw = await tauri.fs.readTextFile(path);
-  const project = JSON.parse(raw);
+  let project;
+  try {
+    project = JSON.parse(raw);
+  } catch (error) {
+    console.error("[project] project file is not valid JSON", error);
+    throw new Error("Project file is corrupt or not valid JSON.");
+  }
   await applyProject(project);
   currentProjectPath = path;
   return project;
@@ -84,7 +90,37 @@ async function writeProjectFile(path) {
   }
 
   const project = buildProjectPayload();
-  await tauri.fs.writeTextFile(path, JSON.stringify(project, null, 2));
+  const payload = JSON.stringify(project, null, 2);
+  const tmpPath = `${path}.tmp`;
+
+  await tauri.fs.writeTextFile(tmpPath, payload);
+
+  const rename = tauri.fs.rename ?? tauri.fs.renameFile;
+  if (typeof rename === "function") {
+    try {
+      await rename(tmpPath, path);
+    } catch (error) {
+      // Some targets reject rename-over-existing; fall back to remove + rename.
+      if (typeof tauri.fs.remove === "function") {
+        try {
+          await tauri.fs.remove(path);
+        } catch {}
+        await rename(tmpPath, path);
+      } else {
+        throw error;
+      }
+    }
+  } else {
+    // No rename available; do the safest single write we can.
+    console.warn("[project] fs.rename unavailable; falling back to direct write");
+    await tauri.fs.writeTextFile(path, payload);
+    if (typeof tauri.fs.remove === "function") {
+      try {
+        await tauri.fs.remove(tmpPath);
+      } catch {}
+    }
+  }
+
   return project;
 }
 
