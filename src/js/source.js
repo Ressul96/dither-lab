@@ -2,7 +2,13 @@ import { getState, dispatch, subscribe } from "./state.js";
 import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
 import { evaluateGraphOutputs } from "./graph-runtime.js";
 import { canUseNativeRender, evaluateNativeGraphOutputs } from "./native-render.js";
-import { releaseBuffer } from "./image-ops.js";
+import { acquireBuffer, releaseBuffer } from "./image-ops.js";
+
+const FRAME_CACHE_TARGET_BYTES = 150_000_000;
+const FRAME_CACHE_MIN = 8;
+const frameCache = new Map();
+let frameCacheCap = FRAME_CACHE_MIN;
+let frameCacheStamp = 0;
 
 const VIDEO_EXTENSIONS = ["mp4", "mov", "webm", "m4v", "mkv", "avi"];
 const SIDE_BY_SIDE_GAP = 24;
@@ -78,6 +84,7 @@ async function loadVideo(src, path, options = {}) {
   stopDrawLoop();
   disablePlayerControls();
   sourceToken += 1;
+  clearFrameCache();
   try {
     v.pause();
   } catch {}
@@ -154,6 +161,7 @@ export function clearSource() {
   pendingPlayPromise = null;
   hasDitherOutput = false;
   sampleLayout = null;
+  clearFrameCache();
 
   if (v) {
     try {
@@ -339,7 +347,9 @@ function ensureFrameBuffers(width, height) {
   if (sourceBuffer.width !== width || sourceBuffer.height !== height) {
     sourceBuffer.width = width;
     sourceBuffer.height = height;
+    clearFrameCache();
   }
+  recomputeFrameCacheCap(width, height);
 
   if (processedBuffer.width !== width || processedBuffer.height !== height) {
     processedBuffer.width = width;
@@ -765,8 +775,67 @@ function recyclePreviewOutput(image) {
 
 function drawSourceFrame(v) {
   if (!sourceCtx || !sourceCanvas) return;
+  const key = sourceFrameKey(v);
+  if (key !== null) {
+    const cached = frameCache.get(key);
+    if (cached) {
+      frameCache.delete(key);
+      frameCache.set(key, cached);
+      sourceCtx.drawImage(cached, 0, 0, sourceCanvas.width, sourceCanvas.height);
+      return;
+    }
+  }
   sourceCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
   sourceCtx.drawImage(v, 0, 0, sourceCanvas.width, sourceCanvas.height);
+  if (key !== null) cacheCurrentFrame(key);
+}
+
+function sourceFrameKey(v) {
+  if (!v?.src || !Number.isFinite(v.currentTime)) return null;
+  const fps = getState().source.sourceFps || 30;
+  if (!fps) return null;
+  return `${frameCacheStamp}|${Math.round(v.currentTime * fps)}`;
+}
+
+function cacheCurrentFrame(key) {
+  if (!sourceCanvas?.width || !sourceCanvas?.height) return;
+  const snapshot = acquireBuffer(sourceCanvas.width, sourceCanvas.height);
+  const ctx = snapshot.getContext("2d", { alpha: false });
+  if (!ctx) {
+    releaseBuffer(snapshot);
+    return;
+  }
+  ctx.drawImage(sourceCanvas, 0, 0);
+  frameCache.set(key, snapshot);
+  while (frameCache.size > frameCacheCap) {
+    const oldestKey = frameCache.keys().next().value;
+    const old = frameCache.get(oldestKey);
+    frameCache.delete(oldestKey);
+    if (old) releaseBuffer(old);
+  }
+}
+
+function clearFrameCache() {
+  for (const canvas of frameCache.values()) releaseBuffer(canvas);
+  frameCache.clear();
+  frameCacheStamp += 1;
+}
+
+function recomputeFrameCacheCap(width, height) {
+  if (!width || !height) {
+    frameCacheCap = FRAME_CACHE_MIN;
+    return;
+  }
+  const bytesPerFrame = width * height * 4;
+  const cap = Math.max(FRAME_CACHE_MIN, Math.floor(FRAME_CACHE_TARGET_BYTES / bytesPerFrame));
+  if (cap === frameCacheCap) return;
+  frameCacheCap = cap;
+  while (frameCache.size > frameCacheCap) {
+    const oldestKey = frameCache.keys().next().value;
+    const old = frameCache.get(oldestKey);
+    frameCache.delete(oldestKey);
+    if (old) releaseBuffer(old);
+  }
 }
 
 function commitProcessedFrame(image) {
