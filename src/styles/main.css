@@ -1449,6 +1449,88 @@ body.resizing-y * {
   flex-wrap: wrap;
 }
 
+.export-sheet__progress {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+}
+
+.export-sheet__progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.export-sheet__progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.export-sheet__progress-fill {
+  height: 100%;
+  background: var(--accent, #7aa2ff);
+  transition: width 90ms linear;
+}
+
+.export-sheet__ffmpeg {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.export-sheet__ffmpeg-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.export-sheet__ffmpeg-status .hint {
+  margin: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.export-sheet__ffmpeg .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+  flex: 0 0 auto;
+}
+
+.export-sheet__ffmpeg.is-ok {
+  border-color: rgba(122, 200, 122, 0.35);
+  background: rgba(122, 200, 122, 0.08);
+}
+
+.export-sheet__ffmpeg.is-ok .dot {
+  background: #7ac87a;
+}
+
+.export-sheet__ffmpeg.is-error {
+  border-color: rgba(255, 110, 110, 0.4);
+  background: rgba(255, 110, 110, 0.08);
+}
+
+.export-sheet__ffmpeg.is-error .dot {
+  background: #ff6e6e;
+}
+
 @media (max-width: 1280px) {
   :root {
     --inspector-w: 300px;

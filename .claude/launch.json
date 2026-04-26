@@ -20,6 +20,16 @@
         "5181"
       ],
       "port": 5181
+    },
+    {
+      "name": "worktree",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "/Users/resulercan/Desktop/dither-lab/smoke/nocache_server.py",
+        "/Users/resulercan/Desktop/dither-lab/.claude/worktrees/intelligent-mcnulty-d10306",
+        "5182"
+      ],
+      "port": 5182
     }
   ]
 }

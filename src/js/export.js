@@ -1,12 +1,38 @@
 import { getState, subscribe } from "./state.js";
-import { getCurrentExportFrameCanvas, hasCurrentDitherFrame } from "./source.js";
+import {
+  beginExportSession,
+  endExportSession,
+  getCurrentExportFrameCanvas,
+  hasCurrentDitherFrame,
+  seekForExport,
+} from "./source.js";
 
 const STILL_FORMATS = Object.freeze([
   { id: "png", label: "PNG", extension: "png", mime: "image/png", quality: undefined },
   { id: "jpeg", label: "JPEG", extension: "jpg", mime: "image/jpeg", quality: 0.92 },
 ]);
 
+const SEQUENCE_FORMATS = STILL_FORMATS;
+const MIN_PADDING = 1;
+const MAX_PADDING = 8;
+const MIN_START_INDEX = 0;
+const MAX_START_INDEX = 9_999_999;
+
+const VIDEO_CODECS = Object.freeze([
+  { id: "libx264", label: "H.264 (libx264)", extension: "mp4", mime: "video/mp4" },
+]);
+const VIDEO_PRESETS = Object.freeze([
+  { id: "ultrafast", label: "Ultrafast" },
+  { id: "veryfast", label: "Very Fast" },
+  { id: "fast", label: "Fast" },
+  { id: "medium", label: "Medium" },
+  { id: "slow", label: "Slow" },
+]);
+const MIN_CRF = 0;
+const MAX_CRF = 51;
+
 let exportInFlight = false;
+let exportAbortController = null;
 let exportSheetEl = null;
 let exportSheetState = createDefaultExportState();
 
@@ -36,6 +62,9 @@ export async function openExport(options = {}) {
   renderExportSheet();
   exportSheetEl.classList.remove("hidden");
   exportSheetEl.setAttribute("aria-hidden", "false");
+  if (exportSheetState.mode === "video" && !exportSheetState.ffmpeg.checked) {
+    ensureFfmpegAvailability().catch(() => {});
+  }
   return true;
 }
 
@@ -67,6 +96,9 @@ function ensureExportSheet() {
       exportSheetState.mode = modeButton.dataset.exportMode || "still";
       exportSheetState.error = "";
       renderExportSheet();
+      if (exportSheetState.mode === "video" && !exportSheetState.ffmpeg.checked) {
+        ensureFfmpegAvailability().catch(() => {});
+      }
       return;
     }
 
@@ -79,6 +111,18 @@ function ensureExportSheet() {
         break;
       case "choose-path":
         await chooseExportPath();
+        break;
+      case "choose-directory":
+        await chooseExportDirectory();
+        break;
+      case "choose-video-path":
+        await chooseVideoExportPath();
+        break;
+      case "recheck-ffmpeg":
+        await ensureFfmpegAvailability({ force: true });
+        break;
+      case "cancel-progress":
+        cancelInFlightExport();
         break;
       case "submit":
         await submitExport();
@@ -119,6 +163,51 @@ function ensureExportSheet() {
       case "custom-height":
         exportSheetState.customHeight = clampDimension(target.value, exportSheetState.customHeight);
         break;
+      case "seq-format":
+        exportSheetState.sequence.format = getSequenceFormat(target.value).id;
+        break;
+      case "seq-name":
+        exportSheetState.sequence.namePrefix = sanitizeFilePrefix(target.value);
+        break;
+      case "seq-padding":
+        exportSheetState.sequence.padding = clampPadding(target.value);
+        break;
+      case "seq-start":
+        exportSheetState.sequence.startIndex = clampStartIndex(target.value);
+        break;
+      case "seq-range":
+        exportSheetState.sequence.range = target.value === "full" ? "full" : "trimmed";
+        break;
+      case "seq-fps-mode":
+        exportSheetState.sequence.fpsMode = target.value === "custom" ? "custom" : "source";
+        break;
+      case "seq-custom-fps":
+        exportSheetState.sequence.customFps = clampFps(target.value);
+        break;
+      case "video-codec":
+        exportSheetState.video.codec = getVideoCodec(target.value).id;
+        if (exportSheetState.video.destinationChosen && exportSheetState.video.outputPath) {
+          exportSheetState.video.outputPath = replacePathExtension(
+            exportSheetState.video.outputPath,
+            getVideoCodec(exportSheetState.video.codec).extension
+          );
+        }
+        break;
+      case "video-preset":
+        exportSheetState.video.preset = getVideoPreset(target.value).id;
+        break;
+      case "video-crf":
+        exportSheetState.video.crf = clampCrf(target.value);
+        break;
+      case "video-range":
+        exportSheetState.video.range = target.value === "full" ? "full" : "trimmed";
+        break;
+      case "video-fps-mode":
+        exportSheetState.video.fpsMode = target.value === "custom" ? "custom" : "source";
+        break;
+      case "video-custom-fps":
+        exportSheetState.video.customFps = clampFps(target.value);
+        break;
       default:
         break;
     }
@@ -145,11 +234,31 @@ function renderExportSheet() {
   if (!panel) return;
 
   const ditherAvailable = exportSheetState.open ? hasCurrentDitherFrame() : false;
-  const stillDisabled = exportInFlight || (exportSheetState.target === "dither-only" && !ditherAvailable);
-  const submitLabel =
-    exportSheetState.mode === "still"
-      ? `Export ${getStillFormat(exportSheetState.stillFormat).label}`
-      : "Coming Soon";
+  const mode = exportSheetState.mode;
+  const dirty = exportSheetState.target === "dither-only" && !ditherAvailable;
+  const progress = exportSheetState.progress;
+
+  let bodyHtml = "";
+  if (mode === "still") bodyHtml = renderStillExportFields(ditherAvailable);
+  else if (mode === "sequence") bodyHtml = renderSequenceExportFields(ditherAvailable);
+  else bodyHtml = renderVideoExportFields(ditherAvailable);
+
+  let submitLabel = "Coming Soon";
+  let submitDisabled = true;
+  if (mode === "still") {
+    submitLabel = `Export ${getStillFormat(exportSheetState.stillFormat).label}`;
+    submitDisabled = exportInFlight || dirty;
+  } else if (mode === "sequence") {
+    submitLabel = progress.active
+      ? `Exporting ${progress.frame} / ${progress.total}`
+      : `Export ${getSequenceFormat(exportSheetState.sequence.format).label} Sequence`;
+    submitDisabled = exportInFlight || dirty;
+  } else if (mode === "video") {
+    submitLabel = progress.active
+      ? `Encoding ${progress.frame} / ${progress.total}`
+      : `Export ${getVideoCodec(exportSheetState.video.codec).label.split(" ")[0]} Video`;
+    submitDisabled = exportInFlight || dirty || !exportSheetState.ffmpeg.available;
+  }
 
   panel.innerHTML = `
     <div class="export-sheet__header">
@@ -176,11 +285,9 @@ function renderExportSheet() {
         </div>
       </div>
 
-      ${
-        exportSheetState.mode === "still"
-          ? renderStillExportFields(ditherAvailable)
-          : renderComingSoonFields()
-      }
+      ${bodyHtml}
+
+      ${progress.active ? renderProgressBlock(progress) : ""}
     </div>
 
     <div class="export-sheet__footer">
@@ -192,12 +299,16 @@ function renderExportSheet() {
         }
       </p>
       <div class="export-sheet__actions">
-        <button class="btn" type="button" data-export-action="close">Cancel</button>
+        ${
+          progress.active
+            ? `<button class="btn" type="button" data-export-action="cancel-progress">Cancel Export</button>`
+            : `<button class="btn" type="button" data-export-action="close">Cancel</button>`
+        }
         <button
           class="btn primary"
           type="button"
           data-export-action="submit"
-          ${exportSheetState.mode !== "still" || stillDisabled ? "disabled" : ""}
+          ${submitDisabled ? "disabled" : ""}
         >${escapeHtml(submitLabel)}</button>
       </div>
     </div>
@@ -307,56 +418,399 @@ function renderStillExportFields(ditherAvailable) {
   `;
 }
 
-function renderComingSoonFields() {
+function renderVideoExportFields(ditherAvailable) {
+  const video = exportSheetState.video;
+  const codec = getVideoCodec(video.codec);
+  const sourceFps = getActiveSourceFps();
+  const effectiveFps = video.fpsMode === "custom" ? video.customFps : sourceFps;
+  const rangeSeconds = getVideoRangeSeconds(video.range);
+  const totalFrames = estimateSequenceFrames(effectiveFps, rangeSeconds);
+  const customSize = resolveStillSize();
+  const ffmpeg = exportSheetState.ffmpeg;
+  const destinationLabel = video.destinationChosen && video.outputPath
+    ? video.outputPath
+    : `Choose an output ${codec.extension.toUpperCase()} file…`;
+
   return `
-    <section class="export-sheet__placeholder">
-      <p class="hint">
-        This sheet scaffolds the upcoming export pipeline. Current-frame still export is wired now;
-        video and sequence export land in the next implementation tick.
-      </p>
-      <div class="export-sheet__placeholder-grid">
-        <div class="field">
-          <label>Output Target</label>
-          <div class="dropdown">
-            <select disabled>
-              <option>Viewer Output</option>
-            </select>
-          </div>
-        </div>
-        <div class="field">
-          <label>Range</label>
-          <div class="dropdown">
-            <select disabled>
-              <option>Trimmed Range</option>
-            </select>
-          </div>
-        </div>
-        <div class="field">
-          <label>Resolution</label>
-          <div class="dropdown">
-            <select disabled>
-              <option>Source</option>
-            </select>
-          </div>
-        </div>
-        <div class="field">
-          <label>FPS</label>
-          <div class="dropdown">
-            <select disabled>
-              <option>Source</option>
-            </select>
-          </div>
+    <div class="export-sheet__grid">
+      <div class="field">
+        <label>Output Target</label>
+        <div class="dropdown">
+          <select data-export-field="target">
+            <option value="viewer-output" ${exportSheetState.target === "viewer-output" ? "selected" : ""}>
+              Viewer Output
+            </option>
+            <option
+              value="dither-only"
+              ${exportSheetState.target === "dither-only" ? "selected" : ""}
+              ${ditherAvailable ? "" : "disabled"}
+            >
+              Dither Only${ditherAvailable ? "" : " (Unavailable)"}
+            </option>
+          </select>
         </div>
       </div>
-    </section>
+
+      <div class="field">
+        <label>Codec</label>
+        <div class="dropdown">
+          <select data-export-field="video-codec">
+            ${VIDEO_CODECS.map((item) => `
+              <option value="${item.id}" ${item.id === video.codec ? "selected" : ""}>
+                ${escapeHtml(item.label)}
+              </option>
+            `).join("")}
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="export-sheet__grid">
+      <div class="field">
+        <label>Range</label>
+        <div class="dropdown">
+          <select data-export-field="video-range">
+            <option value="trimmed" ${video.range === "trimmed" ? "selected" : ""}>Trimmed Range</option>
+            <option value="full" ${video.range === "full" ? "selected" : ""}>Full Video</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>FPS</label>
+        <div class="dropdown">
+          <select data-export-field="video-fps-mode">
+            <option value="source" ${video.fpsMode === "source" ? "selected" : ""}>Source (${sourceFps})</option>
+            <option value="custom" ${video.fpsMode === "custom" ? "selected" : ""}>Custom</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    ${
+      video.fpsMode === "custom"
+        ? `
+          <div class="export-sheet__grid">
+            <div class="field">
+              <label>Custom FPS</label>
+              <input type="number" min="1" max="120" step="1" value="${video.customFps}" data-export-field="video-custom-fps" />
+            </div>
+            <div class="field">
+              <label>Estimated Frames</label>
+              <div class="row export-sheet__size-preview">
+                <span class="value mono">${totalFrames}</span>
+              </div>
+            </div>
+          </div>
+        `
+        : ""
+    }
+
+    <div class="export-sheet__grid">
+      <div class="field">
+        <label>Resolution</label>
+        <div class="dropdown">
+          <select data-export-field="resolution-mode">
+            <option value="source" ${exportSheetState.resolutionMode === "source" ? "selected" : ""}>Source</option>
+            <option value="half" ${exportSheetState.resolutionMode === "half" ? "selected" : ""}>Half</option>
+            <option value="custom" ${exportSheetState.resolutionMode === "custom" ? "selected" : ""}>Custom</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>${video.fpsMode === "custom" ? "Size" : "Estimated Frames"}</label>
+        <div class="row export-sheet__size-preview">
+          <span class="value mono">${
+            video.fpsMode === "custom"
+              ? `${customSize.width} × ${customSize.height}`
+              : totalFrames
+          }</span>
+        </div>
+      </div>
+    </div>
+
+    ${
+      exportSheetState.resolutionMode === "custom"
+        ? `
+          <div class="export-sheet__grid">
+            <div class="field">
+              <label>Width</label>
+              <input type="number" min="1" max="8192" step="1" value="${exportSheetState.customWidth}" data-export-field="custom-width" />
+            </div>
+            <div class="field">
+              <label>Height</label>
+              <input type="number" min="1" max="8192" step="1" value="${exportSheetState.customHeight}" data-export-field="custom-height" />
+            </div>
+          </div>
+        `
+        : ""
+    }
+
+    <div class="export-sheet__grid">
+      <div class="field">
+        <label>Preset</label>
+        <div class="dropdown">
+          <select data-export-field="video-preset">
+            ${VIDEO_PRESETS.map((item) => `
+              <option value="${item.id}" ${item.id === video.preset ? "selected" : ""}>
+                ${escapeHtml(item.label)}
+              </option>
+            `).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Quality (CRF ${video.crf})</label>
+        <input type="number" min="${MIN_CRF}" max="${MAX_CRF}" step="1" value="${video.crf}" data-export-field="video-crf" />
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Destination</label>
+      <div class="export-sheet__path-row">
+        <input
+          type="text"
+          readonly
+          value="${escapeHtml(destinationLabel)}"
+          aria-label="Output video file"
+        />
+        <button class="btn" type="button" data-export-action="choose-video-path">Choose…</button>
+      </div>
+    </div>
+
+    <div class="export-sheet__ffmpeg ${ffmpeg.available ? "is-ok" : ffmpeg.checked ? "is-error" : ""}">
+      <div class="export-sheet__ffmpeg-status">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="hint">${escapeHtml(renderFfmpegStatusText(ffmpeg))}</span>
+      </div>
+      <button class="btn" type="button" data-export-action="recheck-ffmpeg" ${ffmpeg.checking ? "disabled" : ""}>
+        ${ffmpeg.checking ? "Checking…" : ffmpeg.checked ? "Re-check" : "Check FFmpeg"}
+      </button>
+    </div>
+  `;
+}
+
+function renderFfmpegStatusText(ffmpeg) {
+  if (!ffmpeg.checked) return "FFmpeg availability has not been checked yet.";
+  if (ffmpeg.available) return `FFmpeg detected${ffmpeg.version ? ` — ${ffmpeg.version}` : ""}.`;
+  return ffmpeg.error
+    ? `FFmpeg not available: ${ffmpeg.error}`
+    : "FFmpeg not available on this system.";
+}
+
+function renderSequenceExportFields(ditherAvailable) {
+  const seq = exportSheetState.sequence;
+  const format = getSequenceFormat(seq.format);
+  const sourceFps = getActiveSourceFps();
+  const effectiveFps = seq.fpsMode === "custom" ? seq.customFps : sourceFps;
+  const rangeSeconds = getSequenceRangeSeconds(seq.range);
+  const totalFrames = estimateSequenceFrames(effectiveFps, rangeSeconds);
+  const previewName = buildFrameFilename(seq, format, seq.startIndex);
+  const destinationLabel = seq.directoryChosen && seq.directory
+    ? seq.directory
+    : "Choose an output folder…";
+  const customSize = resolveStillSize();
+
+  return `
+    <div class="export-sheet__grid">
+      <div class="field">
+        <label>Output Target</label>
+        <div class="dropdown">
+          <select data-export-field="target">
+            <option value="viewer-output" ${exportSheetState.target === "viewer-output" ? "selected" : ""}>
+              Viewer Output
+            </option>
+            <option
+              value="dither-only"
+              ${exportSheetState.target === "dither-only" ? "selected" : ""}
+              ${ditherAvailable ? "" : "disabled"}
+            >
+              Dither Only${ditherAvailable ? "" : " (Unavailable)"}
+            </option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Format</label>
+        <div class="dropdown">
+          <select data-export-field="seq-format">
+            ${SEQUENCE_FORMATS.map((item) => `
+              <option value="${item.id}" ${item.id === seq.format ? "selected" : ""}>
+                ${escapeHtml(item.label)}
+              </option>
+            `).join("")}
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="export-sheet__grid">
+      <div class="field">
+        <label>Range</label>
+        <div class="dropdown">
+          <select data-export-field="seq-range">
+            <option value="trimmed" ${seq.range === "trimmed" ? "selected" : ""}>Trimmed Range</option>
+            <option value="full" ${seq.range === "full" ? "selected" : ""}>Full Video</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>FPS</label>
+        <div class="dropdown">
+          <select data-export-field="seq-fps-mode">
+            <option value="source" ${seq.fpsMode === "source" ? "selected" : ""}>Source (${sourceFps})</option>
+            <option value="custom" ${seq.fpsMode === "custom" ? "selected" : ""}>Custom</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    ${
+      seq.fpsMode === "custom"
+        ? `
+          <div class="export-sheet__grid">
+            <div class="field">
+              <label>Custom FPS</label>
+              <input type="number" min="1" max="120" step="1" value="${seq.customFps}" data-export-field="seq-custom-fps" />
+            </div>
+            <div class="field">
+              <label>Estimated Frames</label>
+              <div class="row export-sheet__size-preview">
+                <span class="value mono">${totalFrames}</span>
+              </div>
+            </div>
+          </div>
+        `
+        : ""
+    }
+
+    <div class="export-sheet__grid">
+      <div class="field">
+        <label>Resolution</label>
+        <div class="dropdown">
+          <select data-export-field="resolution-mode">
+            <option value="source" ${exportSheetState.resolutionMode === "source" ? "selected" : ""}>Source</option>
+            <option value="half" ${exportSheetState.resolutionMode === "half" ? "selected" : ""}>Half</option>
+            <option value="custom" ${exportSheetState.resolutionMode === "custom" ? "selected" : ""}>Custom</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>${seq.fpsMode === "custom" ? "Size" : "Estimated Frames"}</label>
+        <div class="row export-sheet__size-preview">
+          <span class="value mono">${
+            seq.fpsMode === "custom"
+              ? `${customSize.width} × ${customSize.height}`
+              : totalFrames
+          }</span>
+        </div>
+      </div>
+    </div>
+
+    ${
+      exportSheetState.resolutionMode === "custom"
+        ? `
+          <div class="export-sheet__grid">
+            <div class="field">
+              <label>Width</label>
+              <input type="number" min="1" max="8192" step="1" value="${exportSheetState.customWidth}" data-export-field="custom-width" />
+            </div>
+            <div class="field">
+              <label>Height</label>
+              <input type="number" min="1" max="8192" step="1" value="${exportSheetState.customHeight}" data-export-field="custom-height" />
+            </div>
+          </div>
+        `
+        : ""
+    }
+
+    <div class="export-sheet__grid">
+      <div class="field">
+        <label>Filename Prefix</label>
+        <input
+          type="text"
+          value="${escapeHtml(seq.namePrefix)}"
+          maxlength="120"
+          data-export-field="seq-name"
+          aria-label="Filename prefix"
+        />
+      </div>
+      <div class="field">
+        <label>Preview</label>
+        <div class="row export-sheet__size-preview">
+          <span class="value mono">${escapeHtml(previewName)}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="export-sheet__grid">
+      <div class="field">
+        <label>Padding (digits)</label>
+        <input type="number" min="${MIN_PADDING}" max="${MAX_PADDING}" step="1" value="${seq.padding}" data-export-field="seq-padding" />
+      </div>
+      <div class="field">
+        <label>Start Index</label>
+        <input type="number" min="${MIN_START_INDEX}" max="${MAX_START_INDEX}" step="1" value="${seq.startIndex}" data-export-field="seq-start" />
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Output Folder</label>
+      <div class="export-sheet__path-row">
+        <input
+          type="text"
+          readonly
+          value="${escapeHtml(destinationLabel)}"
+          aria-label="Output folder"
+        />
+        <button class="btn" type="button" data-export-action="choose-directory">Choose…</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderProgressBlock(progress) {
+  const ratio = progress.total > 0 ? Math.min(1, progress.frame / progress.total) : 0;
+  const percent = Math.round(ratio * 100);
+  return `
+    <div class="export-sheet__progress">
+      <div class="export-sheet__progress-meta">
+        <span class="mono">${progress.frame} / ${progress.total}</span>
+        <span class="mono">${percent}%</span>
+      </div>
+      <div class="export-sheet__progress-bar">
+        <div class="export-sheet__progress-fill" style="width:${percent}%"></div>
+      </div>
+    </div>
   `;
 }
 
 function renderStatusText(ditherAvailable) {
-  if (exportInFlight) return "Exporting current frame…";
-  if (exportSheetState.mode !== "still") return "Video and sequence writers are scaffolded but not wired yet.";
+  const mode = exportSheetState.mode;
+  if (exportSheetState.progress.active) {
+    return exportSheetState.progress.cancelled
+      ? "Cancelling export…"
+      : exportSheetState.progress.kind === "video"
+        ? "Streaming frames into the FFmpeg encoder."
+        : "Rendering frames through the preview graph.";
+  }
+  if (exportInFlight && mode === "still") return "Exporting current frame…";
   if (exportSheetState.target === "dither-only" && !ditherAvailable) {
     return "Dither-only export becomes available once the graph produces a dither output.";
+  }
+  if (mode === "sequence") {
+    return exportSheetState.sequence.directoryChosen
+      ? "Sequence export renders each frame through the same graph as preview."
+      : "Pick an output folder to render the numbered image sequence.";
+  }
+  if (mode === "video") {
+    if (!exportSheetState.ffmpeg.checked) return "Checking whether FFmpeg is reachable on your system…";
+    if (!exportSheetState.ffmpeg.available) return "Install FFmpeg or expose it on PATH to enable video export.";
+    return exportSheetState.video.destinationChosen
+      ? "Video export pipes RGBA frames straight to FFmpeg — preview parity is preserved."
+      : "Pick a destination file to encode the trimmed range.";
   }
   return "Still export uses the same rendered frame buffers as preview.";
 }
@@ -372,8 +826,14 @@ async function chooseExportPath() {
 }
 
 async function submitExport() {
-  if (exportSheetState.mode !== "still" || exportInFlight) return null;
+  if (exportInFlight) return null;
+  if (exportSheetState.mode === "still") return submitStillExport();
+  if (exportSheetState.mode === "sequence") return submitSequenceExport();
+  if (exportSheetState.mode === "video") return submitVideoExport();
+  return null;
+}
 
+async function submitStillExport() {
   const canvas = buildStillExportCanvas();
   if (!canvas?.width || !canvas?.height) {
     exportSheetState.error = "Nothing is available to export for the selected target.";
@@ -414,6 +874,115 @@ async function submitExport() {
   }
 
   return exportedPath;
+}
+
+async function submitSequenceExport() {
+  const seq = exportSheetState.sequence;
+  const source = getState().source;
+  if (!source.loaded) {
+    exportSheetState.error = "Load a source before exporting.";
+    renderExportSheet();
+    return null;
+  }
+
+  if (!seq.directoryChosen || !seq.directory) {
+    const dir = await chooseExportDirectory();
+    if (!dir) return null;
+  }
+
+  const format = getSequenceFormat(seq.format);
+  const fps = seq.fpsMode === "custom" ? seq.customFps : getActiveSourceFps();
+  const rangeSeconds = getSequenceRangeSeconds(seq.range);
+  const totalFrames = estimateSequenceFrames(fps, rangeSeconds);
+  if (totalFrames <= 0) {
+    exportSheetState.error = "Range is empty — adjust trim handles or switch to Full Video.";
+    renderExportSheet();
+    return null;
+  }
+
+  const ditherAvailable = hasCurrentDitherFrame();
+  if (exportSheetState.target === "dither-only" && !ditherAvailable) {
+    exportSheetState.error = "Dither-only target requires a dither node in the graph.";
+    renderExportSheet();
+    return null;
+  }
+
+  exportInFlight = true;
+  exportAbortController = new AbortController();
+  exportSheetState.error = "";
+  exportSheetState.progress = { active: true, frame: 0, total: totalFrames, cancelled: false, kind: "sequence" };
+  renderExportSheet();
+  syncExportActions(source);
+
+  const signal = exportAbortController.signal;
+  const startTime = getSequenceStartTime(seq.range);
+  let writtenCount = 0;
+  let failure = null;
+
+  beginExportSession();
+  try {
+    for (let i = 0; i < totalFrames; i++) {
+      if (signal.aborted) break;
+      const t = Math.min(startTime + i / fps, startTime + rangeSeconds);
+      const ok = await seekForExport(t);
+      if (!ok) throw new Error(`Frame seek failed at ${t.toFixed(3)}s (frame ${i + 1}).`);
+      if (signal.aborted) break;
+
+      const canvas = buildStillExportCanvas();
+      if (!canvas?.width || !canvas?.height) {
+        throw new Error(`Frame ${i + 1} produced an empty canvas.`);
+      }
+
+      const bytes = await canvasToImageBytes(canvas, format);
+      if (signal.aborted) break;
+
+      const fileName = buildFrameFilename(seq, format, seq.startIndex + i);
+      const fullPath = joinPath(seq.directory, fileName);
+      const written = await writeImage(fullPath, bytes);
+      if (!written) throw new Error(`Failed to write ${fileName}.`);
+      writtenCount += 1;
+
+      exportSheetState.progress.frame = writtenCount;
+      renderExportSheet();
+    }
+  } catch (error) {
+    failure = error;
+  } finally {
+    endExportSession();
+    const cancelled = signal.aborted;
+    exportAbortController = null;
+    exportInFlight = false;
+    exportSheetState.progress = {
+      active: false,
+      frame: writtenCount,
+      total: totalFrames,
+      cancelled,
+      kind: "sequence",
+    };
+
+    if (failure && !cancelled) {
+      exportSheetState.error = failure.message || "Sequence export failed.";
+    } else if (cancelled) {
+      exportSheetState.error = `Cancelled after ${writtenCount} / ${totalFrames} frames.`;
+    } else {
+      exportSheetState.error = "";
+    }
+
+    syncExportActions(getState().source);
+    if (exportSheetState.open) renderExportSheet();
+    if (!failure && !cancelled && writtenCount === totalFrames) {
+      closeExportSheet({ force: true });
+    }
+  }
+
+  return writtenCount === totalFrames && !failure ? seq.directory : null;
+}
+
+function cancelInFlightExport() {
+  if (!exportAbortController || exportSheetState.progress.cancelled) return;
+  exportSheetState.progress.cancelled = true;
+  exportAbortController.abort();
+  renderExportSheet();
 }
 
 function buildStillExportCanvas() {
@@ -578,6 +1147,41 @@ function createDefaultExportState() {
     error: "",
     lastSourceWidth: 0,
     lastSourceHeight: 0,
+    sequence: {
+      format: "png",
+      directory: "",
+      directoryChosen: false,
+      namePrefix: "frame",
+      padding: 5,
+      startIndex: 1,
+      range: "trimmed",
+      fpsMode: "source",
+      customFps: 30,
+    },
+    video: {
+      codec: "libx264",
+      preset: "medium",
+      crf: 18,
+      outputPath: "",
+      destinationChosen: false,
+      range: "trimmed",
+      fpsMode: "source",
+      customFps: 30,
+    },
+    ffmpeg: {
+      checked: false,
+      available: false,
+      error: "",
+      version: "",
+      checking: false,
+    },
+    progress: {
+      active: false,
+      frame: 0,
+      total: 0,
+      cancelled: false,
+      kind: "",
+    },
   };
 }
 
@@ -608,4 +1212,380 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+async function chooseExportDirectory() {
+  const tauri = window.__TAURI__;
+  if (!tauri?.dialog?.open) {
+    exportSheetState.error = "Folder picker is only available in the desktop app.";
+    renderExportSheet();
+    return null;
+  }
+
+  const seq = exportSheetState.sequence;
+  let selected;
+  try {
+    selected = await tauri.dialog.open({
+      title: "Choose Sequence Output Folder",
+      directory: true,
+      multiple: false,
+      defaultPath: seq.directoryChosen ? seq.directory : undefined,
+    });
+  } catch (error) {
+    exportSheetState.error = error?.message || "Folder picker failed.";
+    renderExportSheet();
+    return null;
+  }
+
+  if (!selected) return null;
+  const dir = typeof selected === "string" ? selected : selected.path || "";
+  if (!dir) return null;
+
+  exportSheetState.sequence.directory = dir;
+  exportSheetState.sequence.directoryChosen = true;
+  exportSheetState.error = "";
+  renderExportSheet();
+  return dir;
+}
+
+function getSequenceFormat(id) {
+  return SEQUENCE_FORMATS.find((format) => format.id === id) ?? SEQUENCE_FORMATS[0];
+}
+
+function getActiveSourceFps() {
+  const { source } = getState();
+  const fps = Math.round(Number(source.fps || source.sourceFps || 30));
+  return Math.max(1, Math.min(120, Number.isFinite(fps) ? fps : 30));
+}
+
+function getSequenceRangeSeconds(range) {
+  const { source, playback } = getState();
+  const duration = Math.max(0, Number(source.duration) || 0);
+  if (range === "full" || !playback) return duration;
+  const start = clampTime(playback.trimStart, duration);
+  const end = clampTime(playback.trimEnd, duration);
+  return Math.max(0, end - start);
+}
+
+function getSequenceStartTime(range) {
+  const { source, playback } = getState();
+  const duration = Math.max(0, Number(source.duration) || 0);
+  if (range === "full" || !playback) return 0;
+  return clampTime(playback.trimStart, duration);
+}
+
+function clampTime(value, duration) {
+  const t = Number(value);
+  if (!Number.isFinite(t) || t < 0) return 0;
+  if (duration > 0 && t > duration) return duration;
+  return t;
+}
+
+function estimateSequenceFrames(fps, seconds) {
+  if (!(fps > 0) || !(seconds > 0)) return 0;
+  return Math.max(0, Math.floor(seconds * fps + 1e-6));
+}
+
+function buildFrameFilename(seq, format, index) {
+  const prefix = seq.namePrefix || "frame";
+  const padded = String(Math.max(0, Math.floor(index))).padStart(seq.padding, "0");
+  return `${prefix}_${padded}.${format.extension}`;
+}
+
+function joinPath(dir, file) {
+  if (!dir) return file;
+  const normalized = String(dir).replace(/[\\/]+$/, "");
+  const sep = normalized.includes("\\") ? "\\" : "/";
+  return `${normalized}${sep}${file}`;
+}
+
+function clampPadding(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return MIN_PADDING;
+  return Math.max(MIN_PADDING, Math.min(MAX_PADDING, n));
+}
+
+function clampStartIndex(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(MIN_START_INDEX, Math.min(MAX_START_INDEX, n));
+}
+
+function clampFps(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return 30;
+  return Math.max(1, Math.min(120, n));
+}
+
+function sanitizeFilePrefix(value) {
+  const trimmed = String(value ?? "").replace(/[\\/:*?"<>|\x00-\x1f]/g, "").slice(0, 120);
+  return trimmed || "frame";
+}
+
+function getVideoCodec(id) {
+  return VIDEO_CODECS.find((codec) => codec.id === id) ?? VIDEO_CODECS[0];
+}
+
+function getVideoPreset(id) {
+  return VIDEO_PRESETS.find((preset) => preset.id === id) ?? VIDEO_PRESETS[0];
+}
+
+function clampCrf(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return 18;
+  return Math.max(MIN_CRF, Math.min(MAX_CRF, n));
+}
+
+function getVideoRangeSeconds(range) {
+  return getSequenceRangeSeconds(range);
+}
+
+function getVideoStartTime(range) {
+  return getSequenceStartTime(range);
+}
+
+function tauriInvoke() {
+  const tauri = window.__TAURI__;
+  return tauri?.core?.invoke || tauri?.invoke || null;
+}
+
+async function ensureFfmpegAvailability(options = {}) {
+  const ffmpeg = exportSheetState.ffmpeg;
+  if (!options.force && ffmpeg.checked) return ffmpeg.available;
+  if (ffmpeg.checking) return ffmpeg.available;
+
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    exportSheetState.ffmpeg = {
+      checked: true,
+      available: false,
+      version: "",
+      error: "Video export requires the desktop app.",
+      checking: false,
+    };
+    if (exportSheetState.open) renderExportSheet();
+    return false;
+  }
+
+  exportSheetState.ffmpeg = { ...ffmpeg, checking: true };
+  if (exportSheetState.open) renderExportSheet();
+
+  try {
+    const result = await invoke("ffmpeg_check_available");
+    exportSheetState.ffmpeg = {
+      checked: true,
+      available: !!result?.available,
+      version: result?.version || "",
+      error: result?.error || "",
+      checking: false,
+    };
+  } catch (error) {
+    exportSheetState.ffmpeg = {
+      checked: true,
+      available: false,
+      version: "",
+      error: error?.message || String(error),
+      checking: false,
+    };
+  }
+
+  if (exportSheetState.open) renderExportSheet();
+  return exportSheetState.ffmpeg.available;
+}
+
+async function chooseVideoExportPath() {
+  const tauri = window.__TAURI__;
+  const codec = getVideoCodec(exportSheetState.video.codec);
+  if (!tauri?.dialog?.save) {
+    exportSheetState.error = "Video file picker is only available in the desktop app.";
+    renderExportSheet();
+    return null;
+  }
+
+  let selected;
+  try {
+    selected = await tauri.dialog.save({
+      title: "Export Video",
+      defaultPath: exportSheetState.video.destinationChosen ? exportSheetState.video.outputPath : suggestedVideoExportName(),
+      filters: [{ name: codec.label, extensions: [codec.extension] }],
+    });
+  } catch (error) {
+    exportSheetState.error = error?.message || "File picker failed.";
+    renderExportSheet();
+    return null;
+  }
+
+  if (!selected) return null;
+  const path = ensurePathExtension(typeof selected === "string" ? selected : selected.path || "", codec.extension);
+  if (!path) return null;
+  exportSheetState.video.outputPath = path;
+  exportSheetState.video.destinationChosen = true;
+  exportSheetState.error = "";
+  renderExportSheet();
+  return path;
+}
+
+function suggestedVideoExportName() {
+  const { source } = getState();
+  const codec = getVideoCodec(exportSheetState.video.codec);
+  const baseName = (source.path.split(/[/\\]/).pop() || "export").replace(/\.[^.]+$/, "");
+  const targetSuffix = exportSheetState.target === "dither-only" ? "-dither" : "";
+  return `${baseName}-export${targetSuffix}.${codec.extension}`;
+}
+
+function readCanvasRGBA(canvas) {
+  if (!canvas?.width || !canvas?.height) return null;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  return new Uint8Array(image.data.buffer, image.data.byteOffset, image.data.byteLength);
+}
+
+async function submitVideoExport() {
+  const video = exportSheetState.video;
+  const source = getState().source;
+  if (!source.loaded) {
+    exportSheetState.error = "Load a source before exporting.";
+    renderExportSheet();
+    return null;
+  }
+
+  const ok = await ensureFfmpegAvailability();
+  if (!ok) {
+    exportSheetState.error = exportSheetState.ffmpeg.error || "FFmpeg is not available on this system.";
+    renderExportSheet();
+    return null;
+  }
+
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    exportSheetState.error = "Video export requires the desktop app.";
+    renderExportSheet();
+    return null;
+  }
+
+  if (!video.destinationChosen || !video.outputPath) {
+    const path = await chooseVideoExportPath();
+    if (!path) return null;
+  }
+
+  const fps = video.fpsMode === "custom" ? video.customFps : getActiveSourceFps();
+  const rangeSeconds = getVideoRangeSeconds(video.range);
+  const totalFrames = estimateSequenceFrames(fps, rangeSeconds);
+  if (totalFrames <= 0) {
+    exportSheetState.error = "Range is empty — adjust trim handles or switch to Full Video.";
+    renderExportSheet();
+    return null;
+  }
+
+  const ditherAvailable = hasCurrentDitherFrame();
+  if (exportSheetState.target === "dither-only" && !ditherAvailable) {
+    exportSheetState.error = "Dither-only target requires a dither node in the graph.";
+    renderExportSheet();
+    return null;
+  }
+
+  const probeCanvas = buildStillExportCanvas();
+  if (!probeCanvas?.width || !probeCanvas?.height) {
+    exportSheetState.error = "Nothing is available to export for the selected target.";
+    renderExportSheet();
+    return null;
+  }
+  const width = probeCanvas.width;
+  const height = probeCanvas.height;
+
+  exportInFlight = true;
+  exportAbortController = new AbortController();
+  exportSheetState.error = "";
+  exportSheetState.progress = { active: true, frame: 0, total: totalFrames, cancelled: false, kind: "video" };
+  renderExportSheet();
+  syncExportActions(source);
+
+  const signal = exportAbortController.signal;
+  const startTime = getVideoStartTime(video.range);
+  let writtenCount = 0;
+  let failure = null;
+  let sessionStarted = false;
+
+  beginExportSession();
+  try {
+    await invoke("ffmpeg_start_encode", {
+      config: {
+        outputPath: exportSheetState.video.outputPath,
+        width,
+        height,
+        fps,
+        codec: video.codec,
+        quality: video.crf,
+        preset: video.preset,
+      },
+    });
+    sessionStarted = true;
+
+    for (let i = 0; i < totalFrames; i++) {
+      if (signal.aborted) break;
+      const t = Math.min(startTime + i / fps, startTime + rangeSeconds);
+      const seekOk = await seekForExport(t);
+      if (!seekOk) throw new Error(`Frame seek failed at ${t.toFixed(3)}s (frame ${i + 1}).`);
+      if (signal.aborted) break;
+
+      const canvas = buildStillExportCanvas();
+      if (!canvas?.width || !canvas?.height) {
+        throw new Error(`Frame ${i + 1} produced an empty canvas.`);
+      }
+      if (canvas.width !== width || canvas.height !== height) {
+        throw new Error(`Frame ${i + 1} dimensions changed mid-encode.`);
+      }
+      const pixels = readCanvasRGBA(canvas);
+      if (!pixels) throw new Error(`Frame ${i + 1} could not be read as RGBA.`);
+
+      await invoke("ffmpeg_write_frame", { pixels });
+      writtenCount += 1;
+      exportSheetState.progress.frame = writtenCount;
+      renderExportSheet();
+    }
+
+    if (!signal.aborted) {
+      const finishResult = await invoke("ffmpeg_finish_encode");
+      sessionStarted = false;
+      console.info("[export] ffmpeg finished", finishResult);
+    }
+  } catch (error) {
+    failure = error;
+  } finally {
+    if (sessionStarted) {
+      try {
+        await invoke("ffmpeg_cancel_encode");
+      } catch (cancelError) {
+        console.warn("[export] ffmpeg cancel failed", cancelError);
+      }
+    }
+    endExportSession();
+    const cancelled = signal.aborted;
+    exportAbortController = null;
+    exportInFlight = false;
+    exportSheetState.progress = {
+      active: false,
+      frame: writtenCount,
+      total: totalFrames,
+      cancelled,
+      kind: "video",
+    };
+
+    if (failure && !cancelled) {
+      exportSheetState.error = failure.message || "Video export failed.";
+    } else if (cancelled) {
+      exportSheetState.error = `Cancelled after ${writtenCount} / ${totalFrames} frames.`;
+    } else {
+      exportSheetState.error = "";
+    }
+
+    syncExportActions(getState().source);
+    if (exportSheetState.open) renderExportSheet();
+    if (!failure && !cancelled && writtenCount === totalFrames) {
+      closeExportSheet({ force: true });
+    }
+  }
+
+  return writtenCount === totalFrames && !failure ? exportSheetState.video.outputPath : null;
 }

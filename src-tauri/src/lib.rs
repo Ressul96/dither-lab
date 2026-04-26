@@ -1,6 +1,10 @@
 pub mod engine;
 
 use engine::frame::native_render_graph;
+use engine::video_export::{
+    ffmpeg_cancel_encode, ffmpeg_check_available, ffmpeg_finish_encode, ffmpeg_start_encode,
+    ffmpeg_write_frame, VideoExportState,
+};
 use tauri::menu::{AboutMetadataBuilder, Menu, MenuEvent, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
@@ -11,13 +15,21 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .manage(VideoExportState::new())
         .setup(|app| {
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             Ok(())
         })
         .on_menu_event(on_menu_event)
-        .invoke_handler(tauri::generate_handler![native_render_graph])
+        .invoke_handler(tauri::generate_handler![
+            native_render_graph,
+            ffmpeg_check_available,
+            ffmpeg_start_encode,
+            ffmpeg_write_frame,
+            ffmpeg_finish_encode,
+            ffmpeg_cancel_encode,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

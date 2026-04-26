@@ -31,6 +31,7 @@ let playRequestToken = 0;
 let renderVersion = 0;
 let sourceToken = 0;
 let nativeRenderInFlight = false;
+let exportSessionActive = false;
 
 export function initSource() {
   wireSourceDropTarget();
@@ -570,6 +571,61 @@ export function seek(seconds) {
   syncPlaybackState(v, { currentTime: target });
 }
 
+export function beginExportSession() {
+  const { video: v } = ensureEls();
+  if (v) {
+    playRequestToken += 1;
+    pendingPlayPromise = null;
+    try { v.pause(); } catch {}
+    syncPlaybackState(v, { playing: false });
+  }
+  exportSessionActive = true;
+  playbackSyncSuspended = true;
+}
+
+export function endExportSession() {
+  exportSessionActive = false;
+  playbackSyncSuspended = false;
+  const { video: v } = ensureEls();
+  if (v) syncPlaybackState(v);
+}
+
+export async function seekForExport(seconds) {
+  const { video: v } = ensureEls();
+  if (!v?.src) return false;
+  const duration = Number.isFinite(v.duration) ? v.duration : 0;
+  const target = Math.max(0, Math.min(duration, Number(seconds) || 0));
+  const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+
+  if (Math.abs(before - target) <= 0.0005) {
+    renderCurrentFrame();
+    return true;
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finalize = (ok) => {
+      if (settled) return;
+      settled = true;
+      v.removeEventListener("seeked", onSeeked);
+      v.removeEventListener("error", onError);
+      clearTimeout(timer);
+      if (ok) renderCurrentFrame();
+      resolve(ok);
+    };
+    const onSeeked = () => finalize(true);
+    const onError = () => finalize(false);
+    const timer = setTimeout(() => finalize(false), 5000);
+    v.addEventListener("seeked", onSeeked);
+    v.addEventListener("error", onError);
+    try {
+      v.currentTime = target;
+    } catch {
+      finalize(false);
+    }
+  });
+}
+
 export function stepFrame(direction) {
   const { video: v } = ensureEls();
   if (!v?.src) return;
@@ -721,6 +777,7 @@ function commitDitherFrame(image) {
 }
 
 function queueNativePreview(graph, currentRenderVersion, currentSourceToken) {
+  if (exportSessionActive) return;
   if (nativeRenderInFlight || !canUseNativeRender(graph)) return;
   nativeRenderInFlight = true;
 
