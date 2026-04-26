@@ -437,6 +437,11 @@ function startNodeDrag(e, nodeEl) {
   if (!node) return;
 
   e.preventDefault();
+  // Lock pointer to this node so the browser cannot start its own drag (e.g. button
+  // native dragstart, focus-driven cancel) before we cross the move threshold.
+  try {
+    nodeEl.setPointerCapture(e.pointerId);
+  } catch (_) {}
 
   const originX = e.clientX;
   const originY = e.clientY;
@@ -480,6 +485,11 @@ function startNodeDrag(e, nodeEl) {
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
     document.removeEventListener("pointercancel", onUp);
+    try {
+      if (nodeEl.hasPointerCapture?.(e.pointerId)) {
+        nodeEl.releasePointerCapture(e.pointerId);
+      }
+    } catch (_) {}
     document.body.classList.remove("dragging-node");
     if (!moved) {
       selectNode(nodeId);
@@ -1052,6 +1062,7 @@ function renderNode(node, selectedNodeId) {
     <button
       class="graph-node${selected}"
       type="button"
+      draggable="false"
       data-node-id="${escapeHtml(node.id)}"
       style="left:${toSceneX(node.x)}px;top:${toSceneY(node.y)}px"
       title="${escapeHtml(node.id)}"
