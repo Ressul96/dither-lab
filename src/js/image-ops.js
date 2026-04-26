@@ -99,6 +99,9 @@ export function applyGlowNode(input, params) {
   outCtx.drawImage(blurred, 0, 0);
   outCtx.globalCompositeOperation = "source-over";
   outCtx.globalAlpha = 1;
+  releaseBuffer(base);
+  if (blurred !== bright) releaseBuffer(bright);
+  releaseBuffer(blurred);
   return output;
 }
 
@@ -188,6 +191,7 @@ export function applyDitherNode(input, params) {
   blurredContext.putImageData(imageData, 0, 0);
 
   if (workWidth === input.width && workHeight === input.height) {
+    if (blurredWork !== work) releaseBuffer(work);
     return blurredWork;
   }
 
@@ -205,6 +209,8 @@ export function applyDitherNode(input, params) {
     output.width,
     output.height
   );
+  if (blurredWork !== work) releaseBuffer(work);
+  releaseBuffer(blurredWork);
   return output;
 }
 
@@ -347,11 +353,43 @@ function blurVertical(source, target, width, height, radius) {
   }
 }
 
+const bufferPool = new Map();
+const POOL_LIMIT_PER_SHAPE = 8;
+
 function createBuffer(width, height) {
+  return acquireBuffer(width, height);
+}
+
+export function acquireBuffer(width, height) {
+  const key = `${width}x${height}`;
+  const stack = bufferPool.get(key);
+  if (stack && stack.length > 0) {
+    const reused = stack.pop();
+    const ctx = reused.getContext("2d", { willReadFrequently: true });
+    if (ctx) {
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.filter = "none";
+      ctx.imageSmoothingEnabled = true;
+      ctx.clearRect(0, 0, width, height);
+    }
+    return reused;
+  }
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   return canvas;
+}
+
+export function releaseBuffer(canvas) {
+  if (!canvas?.width || !canvas?.height) return;
+  const key = `${canvas.width}x${canvas.height}`;
+  let stack = bufferPool.get(key);
+  if (!stack) {
+    stack = [];
+    bufferPool.set(key, stack);
+  }
+  if (stack.length < POOL_LIMIT_PER_SHAPE) stack.push(canvas);
 }
 
 function luminance8(r, g, b) {

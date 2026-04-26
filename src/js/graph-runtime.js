@@ -6,6 +6,7 @@ import {
   applyDitherNode,
   applyGlowNode,
   applyMixNode,
+  releaseBuffer,
 } from "./image-ops.js";
 
 export function evaluateViewerOutput(graph, context) {
@@ -50,6 +51,7 @@ export function evaluateGraphOutputs(graph, context) {
 
   const viewerNode = scoped.nodes.find((node) => node.type === "viewer-output");
   if (!viewerNode) {
+    releaseIntermediateBuffers(results, new Set(), context);
     return {
       viewerOutput: null,
       ditherOutput: null,
@@ -57,10 +59,28 @@ export function evaluateGraphOutputs(graph, context) {
   }
 
   const ditherNodeId = findNearestUpstreamNodeOfType(viewerNode.id, scoped, "dither");
-  return {
-    viewerOutput: results.get(viewerNode.id) ?? null,
-    ditherOutput: ditherNodeId ? results.get(ditherNodeId) ?? null : null,
-  };
+  const viewerOutput = results.get(viewerNode.id) ?? null;
+  const ditherOutput = ditherNodeId ? results.get(ditherNodeId) ?? null : null;
+
+  const keep = new Set();
+  if (viewerOutput) keep.add(viewerOutput);
+  if (ditherOutput) keep.add(ditherOutput);
+  releaseIntermediateBuffers(results, keep, context);
+
+  return { viewerOutput, ditherOutput };
+}
+
+function releaseIntermediateBuffers(results, keep, context) {
+  const sourceImage = context?.sourceImage ?? null;
+  const seen = new Set();
+  for (const output of results.values()) {
+    if (!output) continue;
+    if (output === sourceImage) continue;
+    if (keep.has(output)) continue;
+    if (seen.has(output)) continue;
+    seen.add(output);
+    releaseBuffer(output);
+  }
 }
 
 function evaluateNode(node, graph, results, context) {

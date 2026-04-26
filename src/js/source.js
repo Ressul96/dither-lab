@@ -2,6 +2,7 @@ import { getState, dispatch, subscribe } from "./state.js";
 import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
 import { evaluateGraphOutputs } from "./graph-runtime.js";
 import { canUseNativeRender, evaluateNativeGraphOutputs } from "./native-render.js";
+import { releaseBuffer } from "./image-ops.js";
 
 const VIDEO_EXTENSIONS = ["mp4", "mov", "webm", "m4v", "mkv", "avi"];
 const SIDE_BY_SIDE_GAP = 24;
@@ -751,8 +752,15 @@ function renderCurrentFrame() {
 
   commitProcessedFrame(graphOutput);
   commitDitherFrame(graphOutputs.ditherOutput);
+  recyclePreviewOutput(graphOutput);
+  recyclePreviewOutput(graphOutputs.ditherOutput);
   presentPreview();
   queueNativePreview(graph, currentRenderVersion, currentSourceToken);
+}
+
+function recyclePreviewOutput(image) {
+  if (!image || image === sourceCanvas) return;
+  releaseBuffer(image);
 }
 
 function drawSourceFrame(v) {
@@ -788,6 +796,8 @@ function queueNativePreview(graph, currentRenderVersion, currentSourceToken) {
       if (currentSourceToken !== sourceToken) return;
       commitProcessedFrame(nativeOutputs.viewerOutput);
       commitDitherFrame(nativeOutputs.ditherOutput);
+      recyclePreviewOutput(nativeOutputs.viewerOutput);
+      recyclePreviewOutput(nativeOutputs.ditherOutput);
       presentPreview();
     })
     .finally(() => {
