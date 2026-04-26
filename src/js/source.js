@@ -39,6 +39,7 @@ let renderVersion = 0;
 let sourceToken = 0;
 let nativeRenderInFlight = false;
 let exportSessionActive = false;
+let renderQueued = false;
 
 export function initSource() {
   wireSourceDropTarget();
@@ -46,7 +47,20 @@ export function initSource() {
   previewSubscriptionsWired = true;
 
   subscribe("view", () => presentPreview());
-  subscribe("graph", () => renderCurrentFrame());
+  subscribe("graph", () => scheduleRender());
+}
+
+// Coalesce multiple render requests within the same animation frame. Slider
+// drags and event handlers can fire several dispatches per frame; without this
+// each one would re-evaluate the whole graph synchronously.
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => {
+    if (!renderQueued) return;
+    renderQueued = false;
+    renderCurrentFrame();
+  });
 }
 
 export async function openSource() {
@@ -391,7 +405,7 @@ function wireVideoEvents(v) {
   v.addEventListener("seeked", () => {
     if (playbackSyncSuspended) return;
     syncPlaybackState(v);
-    renderCurrentFrame();
+    scheduleRender();
   });
 
   v.addEventListener("ended", () => {
@@ -985,6 +999,9 @@ function startDrawLoop() {
     if (!playbackSyncSuspended) {
       if (!enforceTrimPlayback(v)) {
         syncPlaybackState(v);
+        // Clear the scheduler flag so any queued render in this frame is
+        // suppressed — tick already covered this paint.
+        renderQueued = false;
         renderCurrentFrame();
       }
     }
