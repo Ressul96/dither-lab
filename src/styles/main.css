@@ -728,31 +728,51 @@ body.resizing-y * {
   min-width: 1px;
 }
 
+.graph-socket-hit {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.graph-socket-hit::before {
+  content: "";
+  position: absolute;
+  inset: calc(-18px / var(--graph-zoom, 1));
+  border-radius: 50%;
+}
+
 .graph-socket-dot {
   width: 16px;
   height: 16px;
   border-radius: var(--radius-pill);
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.88);
-  cursor: crosshair;
-  touch-action: none;
+  pointer-events: none;
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
-.graph-socket-dot:hover {
+.graph-socket-hit:hover .graph-socket-dot {
   transform: scale(1.25);
   box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.08);
 }
 
-.graph-socket-dot.drop-target {
+.graph-socket-hit.drop-target .graph-socket-dot {
   transform: scale(1.35);
   box-shadow: 0 0 0 6px rgba(74, 222, 128, 0.35);
 }
 
-.graph-socket-dot.drop-reject {
+.graph-socket-hit.drop-reject {
+  cursor: not-allowed;
+}
+
+.graph-socket-hit.drop-reject .graph-socket-dot {
   transform: scale(1.1);
   box-shadow: 0 0 0 6px rgba(248, 113, 113, 0.35);
-  cursor: not-allowed;
 }
 
 .graph-edge--ghost {

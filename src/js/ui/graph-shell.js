@@ -1,7 +1,6 @@
 import { DEFAULT_GRAPH_VIEW, dispatch, getState, subscribe } from "../state.js";
 import {
   addEdge,
-  commitLayout,
   createFreeNode,
   ensureBootGraph,
   getNodeById,
@@ -341,7 +340,7 @@ function initViewportInteractions() {
 
   editorEl.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
-    if (e.target.closest("[data-node-id]") || e.target.closest(".graph-socket-dot")) return;
+    if (e.target.closest("[data-node-id]") || e.target.closest(".graph-socket-hit")) return;
     startEditorPan(e);
   });
 }
@@ -396,7 +395,7 @@ function startEditorPan(e) {
 function onGraphPointerDown(e) {
   if (e.button !== 0) return;
 
-  const socket = e.target.closest(".graph-socket-dot");
+  const socket = e.target.closest(".graph-socket-hit");
   if (socket) {
     startSocketDrag(e, socket);
     return;
@@ -438,7 +437,6 @@ function startNodeDrag(e, nodeEl) {
   if (!node) return;
 
   e.preventDefault();
-  selectNode(nodeId);
 
   const originX = e.clientX;
   const originY = e.clientY;
@@ -446,38 +444,75 @@ function startNodeDrag(e, nodeEl) {
   const startY = node.y;
   const startZoom = getState().graphView.zoom || 1;
   let moved = false;
+  let liveEl = nodeEl;
+  let edgeRenderQueued = false;
   document.body.classList.add("dragging-node");
-  try {
-    nodeEl.setPointerCapture(e.pointerId);
-  } catch {}
+
+  const scheduleEdgeRender = () => {
+    if (edgeRenderQueued) return;
+    edgeRenderQueued = true;
+    requestAnimationFrame(() => {
+      edgeRenderQueued = false;
+      renderEdges();
+    });
+  };
 
   const onMove = (ev) => {
     const dx = ev.clientX - originX;
     const dy = ev.clientY - originY;
     if (!moved && Math.hypot(dx, dy) < 3) return;
-    moved = true;
+    if (!moved) {
+      moved = true;
+      selectNodeWithoutDispatch(nodeId);
+    }
     const nextX = startX + dx / startZoom;
     const nextY = startY + dy / startZoom;
     mutateNodePosition(nodeId, nextX, nextY);
-    nodeEl.style.left = `${toSceneX(nextX)}px`;
-    nodeEl.style.top = `${toSceneY(nextY)}px`;
-    renderEdges();
+    if (!liveEl.isConnected) {
+      liveEl = nodesEl.querySelector(`[data-node-id="${cssEscape(nodeId)}"]`) || liveEl;
+    }
+    liveEl.style.left = `${toSceneX(nextX)}px`;
+    liveEl.style.top = `${toSceneY(nextY)}px`;
+    scheduleEdgeRender();
   };
 
   const onUp = () => {
-    nodeEl.removeEventListener("pointermove", onMove);
-    nodeEl.removeEventListener("pointerup", onUp);
-    nodeEl.removeEventListener("pointercancel", onUp);
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.removeEventListener("pointercancel", onUp);
     document.body.classList.remove("dragging-node");
-    try {
-      nodeEl.releasePointerCapture(e.pointerId);
-    } catch {}
-    if (moved) commitLayout();
+    if (!moved) {
+      selectNode(nodeId);
+    } else {
+      const liveSelected = nodesEl.querySelector(`[data-node-id="${cssEscape(nodeId)}"]`);
+      liveSelected?.classList.add("selected");
+      const previouslySelected = getState().graph.selectedNodeId;
+      if (previouslySelected && previouslySelected !== nodeId) {
+        const prev = nodesEl.querySelector(`[data-node-id="${cssEscape(previouslySelected)}"]`);
+        prev?.classList.remove("selected");
+      }
+      selectNodeWithoutDispatch(nodeId);
+      renderInspector();
+      renderEdges();
+    }
   };
 
-  nodeEl.addEventListener("pointermove", onMove);
-  nodeEl.addEventListener("pointerup", onUp);
-  nodeEl.addEventListener("pointercancel", onUp);
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("pointercancel", onUp);
+}
+
+function selectNodeWithoutDispatch(nodeId) {
+  const { graph } = getState();
+  if (graph.selectedNodeId === nodeId) return;
+  graph.selectedNodeId = nodeId;
+}
+
+function cssEscape(value) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return String(value).replace(/(["\\])/g, "\\$1");
 }
 
 function startSocketDrag(e, socketEl) {
@@ -546,24 +581,27 @@ function startSocketDrag(e, socketEl) {
 
 function findSocketAt(clientX, clientY, fromKind = "") {
   let best = null;
+  const zoom = getState().graphView.zoom || 1;
+  const hitRadius = SOCKET_HIT_RADIUS * Math.max(1, 1 / Math.max(zoom, 0.35));
 
-  for (const dot of nodesEl.querySelectorAll(".graph-socket-dot")) {
+  for (const hit of nodesEl.querySelectorAll(".graph-socket-hit")) {
+    const dot = hit.querySelector(".graph-socket-dot") ?? hit;
     const rect = dot.getBoundingClientRect();
     const dx = clientX - (rect.left + rect.width / 2);
     const dy = clientY - (rect.top + rect.height / 2);
     const distance = Math.hypot(dx, dy);
-    if (distance > SOCKET_HIT_RADIUS) continue;
+    if (distance > hitRadius) continue;
 
-    const kind = dot.dataset.socketKind;
+    const kind = hit.dataset.socketKind;
     const compatibleBoost = kind && fromKind && kind !== fromKind ? -4 : 0;
     const score = distance + compatibleBoost;
     if (best && best.score <= score) continue;
 
     best = {
-      nodeId: dot.dataset.socketNode,
-      socketName: dot.dataset.socketName,
+      nodeId: hit.dataset.socketNode,
+      socketName: hit.dataset.socketName,
       kind,
-      el: dot,
+      el: hit,
       score,
     };
   }
@@ -1048,19 +1086,19 @@ function renderSocket(socket, kind, nodeId) {
     return `<span class="graph-socket-placeholder"></span>`;
   }
 
-  const dot = `
+  const hit = `
     <span
-      class="graph-socket-dot"
+      class="graph-socket-hit"
       data-socket-node="${escapeHtml(nodeId)}"
       data-socket-name="${escapeHtml(socket.name)}"
       data-socket-kind="${kind}"
-    ></span>
+    ><span class="graph-socket-dot"></span></span>
   `;
   const label = `<span class="graph-socket-label">${escapeHtml(socket.label)}</span>`;
 
   return `
     <span class="graph-socket graph-socket--${kind}">
-      ${kind === "input" ? `${dot}${label}` : `${label}${dot}`}
+      ${kind === "input" ? `${hit}${label}` : `${label}${hit}`}
     </span>
   `;
 }
@@ -1531,6 +1569,7 @@ function applyGraphViewport() {
   editorEl.style.setProperty("--graph-grid-size", String(gridSize));
   editorEl.style.setProperty("--graph-grid-offset-x", String(offsetX));
   editorEl.style.setProperty("--graph-grid-offset-y", String(offsetY));
+  editorEl.style.setProperty("--graph-zoom", String(graphView.zoom));
 }
 
 function clientToWorld(clientX, clientY) {
