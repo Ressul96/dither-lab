@@ -9,6 +9,7 @@ export function initStage() {
   const stageCanvas = document.querySelector(".stage-canvas");
   const splitOverlay = document.getElementById("splitOverlay");
   const splitDivider = document.getElementById("splitDivider");
+  const zoomToggle = document.getElementById("zoomToggle");
   if (!stage || !canvas || !stageCanvas || !splitOverlay || !splitDivider) return;
 
   const outputs = [canvas, splitCanvas].filter(Boolean);
@@ -18,24 +19,21 @@ export function initStage() {
   wirePixelInspector(canvas);
   wireSplitDivider(stageCanvas, splitDivider);
   wireContextMenu(stage);
+  wireZoomToggle(zoomToggle, outputs);
+  wireZoomShortcuts(outputs);
+
+  const sync = () =>
+    syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs, zoomToggle);
 
   if (typeof ResizeObserver === "function") {
-    const observer = new ResizeObserver(() =>
-      syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs)
-    );
+    const observer = new ResizeObserver(sync);
     observer.observe(stageCanvas);
     observer.observe(canvas);
   }
 
-  window.addEventListener("resize", () =>
-    syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs)
-  );
-  subscribe("view", () =>
-    syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs)
-  );
-  subscribe("source", () =>
-    syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs)
-  );
+  window.addEventListener("resize", sync);
+  subscribe("view", sync);
+  subscribe("source", sync);
 }
 
 function wireZoom(stage, outputs) {
@@ -127,6 +125,26 @@ function applyTransform(outputs) {
       canvas.style.transform = `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`;
     }
   }
+  applyImageRendering(outputs);
+}
+
+// Switch between pixelated (sharp pixels at >=100% zoom) and auto/bilinear
+// (less misleading downscale of dither patterns under 100%). The dither output
+// itself is always rendered at source resolution; image-rendering only affects
+// how the displayed canvas is sampled at the current display size.
+function applyImageRendering(outputs) {
+  const { view } = getState();
+  for (const canvas of outputs) {
+    if (!canvas || !canvas.width || !canvas.height) continue;
+    let effectiveScale;
+    if (view.fit) {
+      const rect = canvas.getBoundingClientRect();
+      effectiveScale = canvas.width > 0 ? rect.width / canvas.width : 1;
+    } else {
+      effectiveScale = view.zoom;
+    }
+    canvas.style.imageRendering = effectiveScale >= 0.999 ? "pixelated" : "auto";
+  }
 }
 
 export function resetZoom() {
@@ -135,6 +153,46 @@ export function resetZoom() {
     document.getElementById("output"),
     document.getElementById("outputSplitOverlay"),
   ]);
+}
+
+function setActualPixels(outputs) {
+  dispatch("view", { zoom: 1, fit: false, panX: 0, panY: 0 });
+  applyTransform(outputs);
+}
+
+function wireZoomToggle(zoomToggle, outputs) {
+  if (!zoomToggle) return;
+  zoomToggle.addEventListener("click", () => {
+    const { view } = getState();
+    // 1:1 → Fit → 1:1 ...
+    if (!view.fit && Math.abs(view.zoom - 1) < 0.001) {
+      dispatch("view", { zoom: 1, fit: true, panX: 0, panY: 0 });
+    } else {
+      dispatch("view", { zoom: 1, fit: false, panX: 0, panY: 0 });
+    }
+    applyTransform(outputs);
+  });
+}
+
+function wireZoomShortcuts(outputs) {
+  document.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+    ) {
+      return;
+    }
+    if (e.key === "0") {
+      e.preventDefault();
+      dispatch("view", { zoom: 1, fit: true, panX: 0, panY: 0 });
+      applyTransform(outputs);
+    } else if (e.key === "1") {
+      e.preventDefault();
+      setActualPixels(outputs);
+    }
+  });
 }
 
 function wirePixelInspector(canvas) {
@@ -162,8 +220,9 @@ export function togglePixelInspector() {
   if (hud) hud.classList.toggle("hidden", !next);
 }
 
-function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs) {
+function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs, zoomToggle) {
   applyTransform(outputs);
+  syncZoomToggle(zoomToggle, canvas);
 
   const { source, view } = getState();
   const compare = source.loaded ? view.compare : "processed";
@@ -195,6 +254,38 @@ function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, s
   splitDivider.style.top = "0";
   splitDivider.style.bottom = "0";
   splitDivider.style.height = "";
+}
+
+function syncZoomToggle(zoomToggle, canvas) {
+  if (!zoomToggle) return;
+  const label = zoomToggle.querySelector(".zoom-label");
+  const accuracy = zoomToggle.querySelector(".zoom-accuracy");
+  if (!label || !accuracy) return;
+
+  const { view } = getState();
+  let effectiveScale;
+  let displayPercent;
+  if (view.fit) {
+    if (canvas?.width && canvas?.height) {
+      const rect = canvas.getBoundingClientRect();
+      effectiveScale = rect.width > 0 ? rect.width / canvas.width : 1;
+    } else {
+      effectiveScale = 1;
+    }
+    displayPercent = Math.round(effectiveScale * 100);
+    label.textContent = displayPercent === 100 ? "Fit · 1:1" : `Fit · ${displayPercent}%`;
+  } else {
+    effectiveScale = view.zoom;
+    displayPercent = Math.round(view.zoom * 100);
+    label.textContent = `${displayPercent}%`;
+  }
+
+  // 1:1 (or zoomed in) on a sharp dither canvas = the user is looking at the
+  // exact pixels that will be exported. Anything below that is a downscale
+  // approximation, so the badge flips to "approx" to set expectations.
+  const exact = effectiveScale >= 0.999;
+  accuracy.dataset.state = exact ? "exact" : "approx";
+  accuracy.textContent = exact ? "1:1 export-accurate" : "approx · downscaled";
 }
 
 // Right-click context menu ----------------------------------------

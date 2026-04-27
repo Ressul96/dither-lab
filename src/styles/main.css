@@ -553,11 +553,62 @@ body.resizing-y * {
   transform: translateX(-50%);
   padding: 6px;
   z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .preview-toolbar .segmented {
   flex-wrap: wrap;
   justify-content: center;
+}
+
+.zoom-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(20, 20, 26, 0.6);
+  color: var(--text-primary);
+  font-size: var(--text-label);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.zoom-pill:hover {
+  background: rgba(28, 28, 34, 0.85);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.zoom-label {
+  font-variant-numeric: tabular-nums;
+  min-width: 36px;
+  text-align: center;
+}
+
+.zoom-accuracy {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+}
+
+.zoom-accuracy[data-state="approx"] {
+  background: rgba(255, 196, 96, 0.16);
+  color: #f3c469;
+}
+
+.zoom-accuracy[data-state="exact"] {
+  background: rgba(120, 220, 140, 0.16);
+  color: #8ad79a;
+}
+
+.zoom-accuracy[data-state="exact"]::before {
+  content: "● ";
+  font-size: 10px;
 }
 
 .pixel-inspector {
