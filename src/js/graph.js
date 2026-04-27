@@ -108,13 +108,13 @@ const NODE_DEFINITIONS = Object.freeze({
     outputs: [{ name: "image", label: "Image" }],
     defaultParams: { threshold: 205, radius: 18, strength: 70 },
   },
-  distort: {
-    label: "Distort",
+  "lens-distort": {
+    label: "Lens Distortion",
     family: "Effect",
-    description: "Offsets rows along a sine wave for scanline wobble.",
+    description: "Radial barrel/pincushion warp with optional chromatic aberration.",
     inputs: [{ name: "image", label: "Image" }],
     outputs: [{ name: "image", label: "Image" }],
-    defaultParams: { amplitude: 8, frequency: 4, phase: 0 },
+    defaultParams: { distortion: 0, dispersion: 0, fit: false },
   },
   mix: {
     label: "Mix",
@@ -149,7 +149,7 @@ const TYPE_ORDER = {
   scale: 8,
   dither: 9,
   glow: 10,
-  distort: 11,
+  "lens-distort": 11,
   mix: 12,
   "viewer-output": 13,
 };

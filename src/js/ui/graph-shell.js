@@ -1181,8 +1181,8 @@ function renderNodeSpecifics(node) {
       return renderDitherNode(node);
     case "glow":
       return renderGlowNode(node);
-    case "distort":
-      return renderDistortNode(node);
+    case "lens-distort":
+      return renderLensDistortNode(node);
     case "mix":
       return renderMixNode(node);
     case "viewer-output":
@@ -1459,13 +1459,19 @@ function renderGlowNode(node) {
   `;
 }
 
-function renderDistortNode(node) {
+function renderLensDistortNode(node) {
   const params = node.params;
+  const distortLabel =
+    params.distortion === 0
+      ? "0 (none)"
+      : params.distortion > 0
+        ? `${params.distortion}% barrel`
+        : `${Math.abs(params.distortion)}% pincushion`;
   return `
     <section class="node-panel-section">
-      ${renderRangeField("Amplitude", "amplitude", params.amplitude, 0, 64, `${params.amplitude}px`)}
-      ${renderRangeField("Frequency", "frequency", params.frequency, 0, 24, `${params.frequency}x`)}
-      ${renderRangeField("Phase", "phase", params.phase, -180, 180, `${params.phase}°`)}
+      ${renderRangeField("Distortion", "distortion", params.distortion, -100, 100, distortLabel)}
+      ${renderRangeField("Dispersion", "dispersion", params.dispersion, 0, 100, `${params.dispersion}%`)}
+      ${renderCheckboxField("Fit to frame", "fit", params.fit)}
     </section>
   `;
 }
@@ -1726,7 +1732,7 @@ function initGraphContextMenu() {
     <button data-add-node="scale">Add Scale</button>
     <button data-add-node="dither">Add Dither</button>
     <button data-add-node="glow">Add Glow</button>
-    <button data-add-node="distort">Add Distort</button>
+    <button data-add-node="lens-distort">Add Lens Distortion</button>
     <button data-add-node="mix">Add Mix</button>
   `;
 

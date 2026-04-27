@@ -263,27 +263,108 @@ export function applyToneMapNode(input, params) {
   return output;
 }
 
-export function applyDistortNode(input, params) {
+// Lens Distortion — radial barrel/pincushion warp with optional chromatic
+// aberration. Replaces the old sine-wave Distort node, which wasn't really
+// what "distort" meant in any compositor. Math follows Blender's
+// node_composite_lens_distortion: a per-pixel scale factor based on the
+// squared distance from center, with a separate scale per RGB channel for
+// the dispersion split. Single-tap bilinear samples per channel — no
+// multi-step integration since we're targeting moderate user values.
+export function applyLensDistortNode(input, params) {
   if (!input?.width || !input?.height) return null;
-  const amplitude = Math.max(0, Number(params.amplitude ?? 0));
-  const frequency = Math.max(0, Number(params.frequency ?? 0));
-  const phase = Number(params.phase ?? 0);
-  if (amplitude === 0 || frequency === 0) return input;
+  const distortion = clamp(Number(params.distortion ?? 0) / 100, -0.999, 1);
+  const dispersion = clamp(Number(params.dispersion ?? 0) / 100, 0, 1);
+  const fit = !!params.fit;
+  if (distortion === 0 && dispersion === 0) return input;
 
   const width = input.width;
   const height = input.height;
+
+  // Pull source pixels once.
+  const srcBuf = createBuffer(width, height);
+  const sctx = srcBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+  sctx.drawImage(input, 0, 0);
+  const srcData = sctx.getImageData(0, 0, width, height).data;
+  releaseBuffer(srcBuf);
+
   const output = createBuffer(width, height);
   const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, width, height);
+  const outData = ctx.createImageData(width, height);
+  const out = outData.data;
 
-  const phaseRad = (phase / 180) * Math.PI;
-  const cyclesPerHeight = frequency * Math.PI * 2;
-  for (let y = 0; y < height; y++) {
-    const shift = Math.sin((y / height) * cyclesPerHeight + phaseRad) * amplitude;
-    ctx.drawImage(input, 0, y, width, 1, shift, y, width, 1);
+  // Per-channel distortion scaled to [-1, 1] but clamped above -0.999 (where
+  // the sqrt would explode). Dispersion splits R lower / B higher around G.
+  const dispScale = 4;
+  const dR = clamp(distortion * dispScale - dispersion * dispScale, -0.999 * dispScale, dispScale);
+  const dG = clamp(distortion * dispScale, -0.999 * dispScale, dispScale);
+  const dB = clamp(distortion * dispScale + dispersion * dispScale, -0.999 * dispScale, dispScale);
+
+  // "Fit" zooms output uv so the worst-case corner still lands inside the
+  // input — derived by solving scale_fit * dist_scale_at_corner = 0.5.
+  let fitScale = 1;
+  if (fit) {
+    const dMax = Math.max(dR, dG, dB);
+    const denom = 4 + dMax;
+    if (denom > 0) fitScale = 4 / denom;
   }
+
+  const cx = width / 2;
+  const cy = height / 2;
+
+  for (let y = 0; y < height; y++) {
+    const v = ((y + 0.5 - cy) / cy) * fitScale;
+    for (let x = 0; x < width; x++) {
+      const u = ((x + 0.5 - cx) / cx) * fitScale;
+      const r2 = u * u + v * v;
+      const i = (y * width + x) * 4;
+
+      // If the largest channel distortion would push the source point
+      // outside the image even before sampling, write black + transparent.
+      if (Math.max(dR, dG, dB) * r2 > 1) {
+        out[i] = 0;
+        out[i + 1] = 0;
+        out[i + 2] = 0;
+        out[i + 3] = 255;
+        continue;
+      }
+
+      const sR = 1 / (1 + Math.sqrt(Math.max(0, 1 - dR * r2)));
+      const sG = 1 / (1 + Math.sqrt(Math.max(0, 1 - dG * r2)));
+      const sB = 1 / (1 + Math.sqrt(Math.max(0, 1 - dB * r2)));
+
+      const xr = (u * sR + 0.5) * width;
+      const yr = (v * sR + 0.5) * height;
+      const xg = (u * sG + 0.5) * width;
+      const yg = (v * sG + 0.5) * height;
+      const xb = (u * sB + 0.5) * width;
+      const yb = (v * sB + 0.5) * height;
+
+      out[i] = sampleBilinearChannel(srcData, width, height, xr, yr, 0);
+      out[i + 1] = sampleBilinearChannel(srcData, width, height, xg, yg, 1);
+      out[i + 2] = sampleBilinearChannel(srcData, width, height, xb, yb, 2);
+      out[i + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(outData, 0, 0);
   return output;
+}
+
+function sampleBilinearChannel(data, width, height, x, y, channel) {
+  if (x < 0 || x >= width || y < 0 || y >= height) return 0;
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(x0 + 1, width - 1);
+  const y1 = Math.min(y0 + 1, height - 1);
+  const fx = x - x0;
+  const fy = y - y0;
+  const i00 = (y0 * width + x0) * 4 + channel;
+  const i10 = (y0 * width + x1) * 4 + channel;
+  const i01 = (y1 * width + x0) * 4 + channel;
+  const i11 = (y1 * width + x1) * 4 + channel;
+  const top = data[i00] * (1 - fx) + data[i10] * fx;
+  const bot = data[i01] * (1 - fx) + data[i11] * fx;
+  return Math.round(top * (1 - fy) + bot * fy);
 }
 
 export function applyMixNode(inputA, inputB, params) {

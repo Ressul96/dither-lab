@@ -5,7 +5,6 @@ const NATIVE_SUPPORTED_TYPES = new Set([
   "adjust",
   "blur",
   "glow",
-  "distort",
   "mix",
   "viewer-output",
 ]);

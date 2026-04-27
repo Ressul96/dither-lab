@@ -2,10 +2,10 @@ import { getNodeById } from "./graph.js";
 import {
   applyAdjustNode,
   applyBlurNode,
-  applyDistortNode,
   applyDitherNode,
   applyGlowNode,
   applyInvertNode,
+  applyLensDistortNode,
   applyMixNode,
   applyPixelateNode,
   applyPosterizeNode,
@@ -110,19 +110,36 @@ export function evaluateGraphOutputs(graph, context) {
 
     const output = computeNodeOutput(node, scoped, results);
     if (output) {
-      const version = `n${++versionCounter}`;
-      if (cached?.output && cached.output !== output) {
-        releaseBuffer(cached.output);
+      // A node may pass its input through unchanged (blur radius=0, lens-
+      // distort with no effect, etc.). Caching that buffer would mean the
+      // node "owns" a canvas it doesn't actually own — clearGraphCache or
+      // eviction would then return the source/upstream canvas to the pool
+      // while another node still holds it, and the next acquireBuffer
+      // would clearRect it out from under them.
+      const sourceImage = context?.sourceImage ?? null;
+      const passthrough = output === sourceImage || sharesOutputWithCachedNode(output);
+      if (passthrough) {
+        if (cached) {
+          if (cached.output) releaseBuffer(cached.output);
+          nodeCache.delete(node.id);
+        }
+        results.set(node.id, output);
+        versions.set(node.id, `pass@${inputVersions.join("|")}`);
+      } else {
+        const version = `n${++versionCounter}`;
+        if (cached?.output && cached.output !== output) {
+          releaseBuffer(cached.output);
+        }
+        nodeCache.set(node.id, {
+          type: node.type,
+          paramsHash,
+          inputVersions,
+          output,
+          version,
+        });
+        results.set(node.id, output);
+        versions.set(node.id, version);
       }
-      nodeCache.set(node.id, {
-        type: node.type,
-        paramsHash,
-        inputVersions,
-        output,
-        version,
-      });
-      results.set(node.id, output);
-      versions.set(node.id, version);
     } else {
       if (cached) {
         if (cached.output) releaseBuffer(cached.output);
@@ -162,6 +179,13 @@ function gatherCachedOutputs() {
     if (entry?.output) set.add(entry.output);
   }
   return set;
+}
+
+function sharesOutputWithCachedNode(output) {
+  for (const entry of nodeCache.values()) {
+    if (entry?.output === output) return true;
+  }
+  return false;
 }
 
 function pruneCache(reachableIds) {
@@ -252,8 +276,8 @@ function computeNodeOutput(node, graph, results) {
       return applyDitherNode(resolveInputImage(node, "image", graph, results), node.params);
     case "glow":
       return applyGlowNode(resolveInputImage(node, "image", graph, results), node.params);
-    case "distort":
-      return applyDistortNode(resolveInputImage(node, "image", graph, results), node.params);
+    case "lens-distort":
+      return applyLensDistortNode(resolveInputImage(node, "image", graph, results), node.params);
     case "mix":
       return applyMixNode(
         resolveInputImage(node, "image_a", graph, results),
