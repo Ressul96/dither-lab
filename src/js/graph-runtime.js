@@ -7,8 +7,10 @@ import {
   applyGlowNode,
   applyInvertNode,
   applyMixNode,
+  applyPixelateNode,
   applyPosterizeNode,
   applyRgbToBwNode,
+  applyScaleNode,
   applyToneMapNode,
   releaseBuffer,
 } from "./image-ops.js";
@@ -242,6 +244,10 @@ function computeNodeOutput(node, graph, results) {
       return applyToneMapNode(resolveInputImage(node, "image", graph, results), node.params);
     case "blur":
       return applyBlurNode(resolveInputImage(node, "image", graph, results), node.params);
+    case "pixelate":
+      return applyPixelateNode(resolveInputImage(node, "image", graph, results), node.params);
+    case "scale":
+      return applyScaleNode(resolveInputImage(node, "image", graph, results), node.params);
     case "dither":
       return applyDitherNode(resolveInputImage(node, "image", graph, results), node.params);
     case "glow":

@@ -1173,6 +1173,10 @@ function renderNodeSpecifics(node) {
       return renderToneMapNode(node);
     case "blur":
       return renderBlurNode(node);
+    case "pixelate":
+      return renderPixelateNode(node);
+    case "scale":
+      return renderScaleNode(node);
     case "dither":
       return renderDitherNode(node);
     case "glow":
@@ -1416,6 +1420,30 @@ function renderToneMapNode(node) {
     <section class="node-panel-section">
       ${renderRangeField("Intensity", "intensity", params.intensity, 10, 1000, `${(params.intensity / 100).toFixed(2)}x`)}
       ${renderRangeField("Whitepoint", "whitepoint", params.whitepoint, 10, 1000, `${(params.whitepoint / 100).toFixed(2)}`)}
+    </section>
+  `;
+}
+
+function renderPixelateNode(node) {
+  const params = node.params;
+  return `
+    <section class="node-panel-section">
+      ${renderRangeField("Block size", "size", params.size, 1, 64, `${params.size}px`)}
+    </section>
+  `;
+}
+
+function renderScaleNode(node) {
+  const params = node.params;
+  const filter = params.filter ?? "linear";
+  return `
+    <section class="node-panel-section">
+      ${renderRangeField("Width", "x", params.x, 10, 400, `${params.x}%`)}
+      ${renderRangeField("Height", "y", params.y, 10, 400, `${params.y}%`)}
+      ${renderSelectField("Filter", "filter", filter, [
+        { value: "linear", label: "Linear (smooth)" },
+        { value: "nearest", label: "Nearest (pixelated)" },
+      ])}
     </section>
   `;
 }
@@ -1694,6 +1722,8 @@ function initGraphContextMenu() {
     <button data-add-node="rgb-to-bw">Add RGB to BW</button>
     <button data-add-node="tone-map">Add Tone Map</button>
     <button data-add-node="blur">Add Blur</button>
+    <button data-add-node="pixelate">Add Pixelate</button>
+    <button data-add-node="scale">Add Scale</button>
     <button data-add-node="dither">Add Dither</button>
     <button data-add-node="glow">Add Glow</button>
     <button data-add-node="distort">Add Distort</button>

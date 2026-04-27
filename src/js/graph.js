@@ -59,6 +59,22 @@ const NODE_DEFINITIONS = Object.freeze({
     outputs: [{ name: "image", label: "Image" }],
     defaultParams: { intensity: 100, whitepoint: 100 },
   },
+  pixelate: {
+    label: "Pixelate",
+    family: "Process",
+    description: "Collapses NxN blocks into single colors for chunky low-res looks.",
+    inputs: [{ name: "image", label: "Image" }],
+    outputs: [{ name: "image", label: "Image" }],
+    defaultParams: { size: 8 },
+  },
+  scale: {
+    label: "Scale",
+    family: "Process",
+    description: "Resizes the image. Pair with Pixelate for retro upscaled pixel art.",
+    inputs: [{ name: "image", label: "Image" }],
+    outputs: [{ name: "image", label: "Image" }],
+    defaultParams: { x: 100, y: 100, filter: "linear" },
+  },
   dither: {
     label: "Dither",
     family: "Process",
@@ -129,11 +145,13 @@ const TYPE_ORDER = {
   "rgb-to-bw": 4,
   "tone-map": 5,
   blur: 6,
-  dither: 7,
-  glow: 8,
-  distort: 9,
-  mix: 10,
-  "viewer-output": 11,
+  pixelate: 7,
+  scale: 8,
+  dither: 9,
+  glow: 10,
+  distort: 11,
+  mix: 12,
+  "viewer-output": 13,
 };
 
 export function getNodeDefinition(type) {

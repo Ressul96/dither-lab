@@ -187,6 +187,54 @@ export function applyRgbToBwNode(input, params) {
   return output;
 }
 
+// Pixelate — collapse NxN blocks of source pixels into a single color so the
+// downstream chain (especially dither) operates on a chunky low-resolution
+// version of the image without changing canvas dimensions.
+export function applyPixelateNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const size = clamp(Math.round(Number(params.size ?? 8)), 1, 256);
+  if (size <= 1) return input;
+  const width = input.width;
+  const height = input.height;
+
+  // Two-step downscale + nearest-neighbor upscale via the canvas API is much
+  // faster than walking the pixel grid and averaging in JS, and gives the
+  // same visual result for an integer block size.
+  const blockW = Math.max(1, Math.floor(width / size));
+  const blockH = Math.max(1, Math.floor(height / size));
+  const small = createBuffer(blockW, blockH);
+  const smallCtx = small.getContext("2d", { alpha: false, willReadFrequently: false });
+  smallCtx.imageSmoothingEnabled = true;
+  smallCtx.drawImage(input, 0, 0, blockW, blockH);
+
+  const output = createBuffer(width, height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(small, 0, 0, blockW, blockH, 0, 0, width, height);
+  releaseBuffer(small);
+  return output;
+}
+
+// Scale — explicit resize node. width/height factors are stored as percentage
+// integers (100 = identity) so the inspector slider format stays consistent
+// with the rest of the chain. Output canvas matches the new dimensions, which
+// downstream nodes adapt to via their existing width/height handling.
+export function applyScaleNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const xPct = clamp(Number(params.x ?? 100), 1, 1000);
+  const yPct = clamp(Number(params.y ?? 100), 1, 1000);
+  const filter = params.filter === "nearest" ? false : true;
+  if (xPct === 100 && yPct === 100) return input;
+
+  const w = Math.max(1, Math.round((input.width * xPct) / 100));
+  const h = Math.max(1, Math.round((input.height * yPct) / 100));
+  const output = createBuffer(w, h);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
+  ctx.imageSmoothingEnabled = filter;
+  ctx.drawImage(input, 0, 0, input.width, input.height, 0, 0, w, h);
+  return output;
+}
+
 // Tone Map — extended Reinhard with intensity (pre-exposure) + whitepoint
 // (target brightest value). Useful before dither so blown highlights have
 // somewhere to go instead of clipping to white.
