@@ -121,10 +121,18 @@ const NODE_DEFINITIONS = Object.freeze({
   "lens-distort": {
     label: "Lens Distortion",
     family: "Effect",
-    description: "Radial barrel/pincushion warp with optional chromatic aberration.",
+    description: "Radial barrel/pincushion or horizontal chromatic split, with off-axis center, fit, and vignette.",
     inputs: [{ name: "image", label: "Image" }],
     outputs: [{ name: "image", label: "Image" }],
-    defaultParams: { distortion: 0, dispersion: 0, fit: false },
+    defaultParams: {
+      type: "radial",
+      distortion: 0,
+      dispersion: 0,
+      centerX: 50,
+      centerY: 50,
+      vignette: 0,
+      fit: false,
+    },
   },
   mix: {
     label: "Mix",

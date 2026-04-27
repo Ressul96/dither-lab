@@ -371,10 +371,24 @@ export function applyToneMapNode(input, params) {
 // multi-step integration since we're targeting moderate user values.
 export function applyLensDistortNode(input, params) {
   if (!input?.width || !input?.height) return null;
+  const type = String(params.type ?? "radial");
   const distortion = clamp(Number(params.distortion ?? 0) / 100, -0.999, 1);
   const dispersion = clamp(Number(params.dispersion ?? 0) / 100, 0, 1);
   const fit = !!params.fit;
-  if (distortion === 0 && dispersion === 0) return input;
+  // Center as 0..100 percent of width/height — 50 = image centre.
+  const centerXPct = clamp(Number(params.centerX ?? 50) / 100, 0, 1);
+  const centerYPct = clamp(Number(params.centerY ?? 50) / 100, 0, 1);
+  const vignette = clamp(Number(params.vignette ?? 0) / 100, 0, 1);
+  if (
+    type === "radial" &&
+    distortion === 0 &&
+    dispersion === 0 &&
+    vignette === 0 &&
+    centerXPct === 0.5 &&
+    centerYPct === 0.5
+  ) {
+    return input;
+  }
 
   const width = input.width;
   const height = input.height;
@@ -390,6 +404,24 @@ export function applyLensDistortNode(input, params) {
   const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
   const outData = ctx.createImageData(width, height);
   const out = outData.data;
+
+  // Horizontal type: just shift R left and B right by `dispersion * width`,
+  // ignoring the radial distortion field. Useful for VHS/CRT bands.
+  if (type === "horizontal") {
+    const shift = dispersion * width * 0.05;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        out[i] = sampleBilinearChannel(srcData, width, height, x + shift, y, 0);
+        out[i + 1] = srcData[i + 1];
+        out[i + 2] = sampleBilinearChannel(srcData, width, height, x - shift, y, 2);
+        out[i + 3] = 255;
+      }
+    }
+    if (vignette > 0) applyVignetteInPlace(out, width, height, centerXPct, centerYPct, vignette);
+    ctx.putImageData(outData, 0, 0);
+    return output;
+  }
 
   // Per-channel distortion scaled to [-1, 1] but clamped above -0.999 (where
   // the sqrt would explode). Dispersion splits R lower / B higher around G.
@@ -407,13 +439,18 @@ export function applyLensDistortNode(input, params) {
     if (denom > 0) fitScale = 4 / denom;
   }
 
-  const cx = width / 2;
-  const cy = height / 2;
+  // Center stays at user-controlled position; UV math normalises against the
+  // shorter half-axis from the centre so the distortion stays roughly circular
+  // even when the centre is off-axis.
+  const cx = centerXPct * width;
+  const cy = centerYPct * height;
+  const halfX = Math.max(cx, width - cx);
+  const halfY = Math.max(cy, height - cy);
 
   for (let y = 0; y < height; y++) {
-    const v = ((y + 0.5 - cy) / cy) * fitScale;
+    const v = ((y + 0.5 - cy) / halfY) * fitScale;
     for (let x = 0; x < width; x++) {
-      const u = ((x + 0.5 - cx) / cx) * fitScale;
+      const u = ((x + 0.5 - cx) / halfX) * fitScale;
       const r2 = u * u + v * v;
       const i = (y * width + x) * 4;
 
@@ -431,12 +468,12 @@ export function applyLensDistortNode(input, params) {
       const sG = 1 / (1 + Math.sqrt(Math.max(0, 1 - dG * r2)));
       const sB = 1 / (1 + Math.sqrt(Math.max(0, 1 - dB * r2)));
 
-      const xr = (u * sR + 0.5) * width;
-      const yr = (v * sR + 0.5) * height;
-      const xg = (u * sG + 0.5) * width;
-      const yg = (v * sG + 0.5) * height;
-      const xb = (u * sB + 0.5) * width;
-      const yb = (v * sB + 0.5) * height;
+      const xr = (u * sR) * halfX + cx;
+      const yr = (v * sR) * halfY + cy;
+      const xg = (u * sG) * halfX + cx;
+      const yg = (v * sG) * halfY + cy;
+      const xb = (u * sB) * halfX + cx;
+      const yb = (v * sB) * halfY + cy;
 
       out[i] = sampleBilinearChannel(srcData, width, height, xr, yr, 0);
       out[i + 1] = sampleBilinearChannel(srcData, width, height, xg, yg, 1);
@@ -445,8 +482,34 @@ export function applyLensDistortNode(input, params) {
     }
   }
 
+  if (vignette > 0) applyVignetteInPlace(out, width, height, centerXPct, centerYPct, vignette);
   ctx.putImageData(outData, 0, 0);
   return output;
+}
+
+// Smoothly darken pixels as their normalised distance from the lens centre
+// approaches 1. `amount` controls the falloff strength — 0 leaves the image
+// untouched, 1 fully blacks out the corners.
+function applyVignetteInPlace(data, width, height, centerXPct, centerYPct, amount) {
+  if (amount <= 0) return;
+  const cx = centerXPct * width;
+  const cy = centerYPct * height;
+  const halfX = Math.max(cx, width - cx);
+  const halfY = Math.max(cy, height - cy);
+  for (let y = 0; y < height; y++) {
+    const ny = (y + 0.5 - cy) / halfY;
+    for (let x = 0; x < width; x++) {
+      const nx = (x + 0.5 - cx) / halfX;
+      const r = Math.min(1, Math.sqrt(nx * nx + ny * ny));
+      // Smoothstep on r for a soft falloff that doesn't crush the centre.
+      const fall = r * r * (3 - 2 * r);
+      const factor = 1 - amount * fall;
+      const i = (y * width + x) * 4;
+      data[i] = Math.round(data[i] * factor);
+      data[i + 1] = Math.round(data[i + 1] * factor);
+      data[i + 2] = Math.round(data[i + 2] * factor);
+    }
+  }
 }
 
 function sampleBilinearChannel(data, width, height, x, y, channel) {

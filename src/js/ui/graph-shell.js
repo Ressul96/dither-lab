@@ -41,7 +41,11 @@ const GRAPH_WORLD_SIZE = 16000;
 const GRAPH_WORLD_ORIGIN = GRAPH_WORLD_SIZE / 2;
 const GRAPH_GRID_STEP = 24;
 const SOCKET_HIT_RADIUS = 28;
-const EDGE_INSERT_RADIUS = 64;
+// Generous radius around an edge counts as a drop-on-edge target. The user
+// rarely lands the ghost preview exactly on the SVG path, so a wide tolerance
+// trades a tiny bit of "free placement" precision for the much more useful
+// "drop here, snap into the chain" behaviour.
+const EDGE_INSERT_RADIUS = 110;
 const GRAPH_VIEW_PADDING = 120;
 
 let nodesEl;
@@ -1384,13 +1388,13 @@ function renderInvertNode(node) {
   const params = node.params;
   const channels = String(params.channels ?? "rgb").toLowerCase();
   const options = [
-    { value: "rgb", label: "RGB" },
-    { value: "r", label: "Red only" },
-    { value: "g", label: "Green only" },
-    { value: "b", label: "Blue only" },
-    { value: "rg", label: "Red + Green" },
-    { value: "gb", label: "Green + Blue" },
-    { value: "rb", label: "Red + Blue" },
+    ["rgb", "RGB"],
+    ["r", "Red only"],
+    ["g", "Green only"],
+    ["b", "Blue only"],
+    ["rg", "Red + Green"],
+    ["gb", "Green + Blue"],
+    ["rb", "Red + Blue"],
   ];
   return `
     <section class="node-panel-section">
@@ -1403,9 +1407,9 @@ function renderRgbToBwNode(node) {
   const params = node.params;
   const mode = String(params.mode ?? "bt709");
   const options = [
-    { value: "bt709", label: "Bt.709 (HD)" },
-    { value: "bt601", label: "Bt.601 (SD)" },
-    { value: "average", label: "Average" },
+    ["bt709", "Bt.709 (HD)"],
+    ["bt601", "Bt.601 (SD)"],
+    ["average", "Average"],
   ];
   return `
     <section class="node-panel-section">
@@ -1441,8 +1445,8 @@ function renderScaleNode(node) {
       ${renderRangeField("Width", "x", params.x, 10, 400, `${params.x}%`)}
       ${renderRangeField("Height", "y", params.y, 10, 400, `${params.y}%`)}
       ${renderSelectField("Filter", "filter", filter, [
-        { value: "linear", label: "Linear (smooth)" },
-        { value: "nearest", label: "Nearest (pixelated)" },
+        ["linear", "Linear (smooth)"],
+        ["nearest", "Nearest (pixelated)"],
       ])}
     </section>
   `;
@@ -1452,9 +1456,9 @@ function renderGlareNode(node) {
   const params = node.params;
   const type = String(params.type ?? "streaks");
   const typeOptions = [
-    { value: "streaks", label: "Streaks" },
-    { value: "bloom", label: "Bloom" },
-    { value: "fog-glow", label: "Fog Glow" },
+    ["streaks", "Streaks"],
+    ["bloom", "Bloom"],
+    ["fog-glow", "Fog Glow"],
   ];
 
   // Common params first; per-type extras follow underneath so the inspector
@@ -1488,17 +1492,31 @@ function renderGlareNode(node) {
 
 function renderLensDistortNode(node) {
   const params = node.params;
+  const type = String(params.type ?? "radial");
   const distortLabel =
     params.distortion === 0
       ? "0 (none)"
       : params.distortion > 0
         ? `${params.distortion}% barrel`
         : `${Math.abs(params.distortion)}% pincushion`;
+  const radialFields =
+    type === "radial"
+      ? `
+        ${renderRangeField("Distortion", "distortion", params.distortion, -100, 100, distortLabel)}
+        ${renderCheckboxField("Fit to frame", "fit", params.fit)}
+      `
+      : "";
   return `
     <section class="node-panel-section">
-      ${renderRangeField("Distortion", "distortion", params.distortion, -100, 100, distortLabel)}
+      ${renderSelectField("Type", "type", type, [
+        ["radial", "Radial (barrel / pincushion)"],
+        ["horizontal", "Horizontal (chromatic shift)"],
+      ])}
+      ${radialFields}
       ${renderRangeField("Dispersion", "dispersion", params.dispersion, 0, 100, `${params.dispersion}%`)}
-      ${renderCheckboxField("Fit to frame", "fit", params.fit)}
+      ${renderRangeField("Center X", "centerX", params.centerX, 0, 100, `${params.centerX}%`)}
+      ${renderRangeField("Center Y", "centerY", params.centerY, 0, 100, `${params.centerY}%`)}
+      ${renderRangeField("Vignette", "vignette", params.vignette, 0, 100, `${params.vignette}%`)}
     </section>
   `;
 }
