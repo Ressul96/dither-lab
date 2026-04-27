@@ -39,6 +39,9 @@ let sourceToken = 0;
 let nativeRenderInFlight = false;
 let exportSessionActive = false;
 let renderQueued = false;
+let previewSourceCanvas = null;
+let previewSourceCtx = null;
+const PLAYBACK_PREVIEW_SCALE = 0.5;
 
 export function initSource() {
   wireSourceDropTarget();
@@ -770,11 +773,24 @@ function renderCurrentFrame() {
   // sourceVersion is the cache identity of the current source frame. It only
   // changes when the painted contents change (new frame, new source), so the
   // node memo cache can hit on paused-video param tweaks.
-  const sourceVersion = sourceFrameKey(v) ?? `live-${currentRenderVersion}`;
+  const baseSourceVersion = sourceFrameKey(v) ?? `live-${currentRenderVersion}`;
+
+  // During playback, evaluate the effect chain on a downscaled copy of the
+  // source. The processed/dither commits already scale the result back up to
+  // full resolution so the displayed preview lines up with the export-sized
+  // canvases — only the per-pixel CPU loops shrink. Paused/scrubbing frames
+  // and export both stay at full resolution.
+  const usePlaybackScale = !v.paused && !v.ended && !exportSessionActive;
+  const sourceForEval = usePlaybackScale
+    ? buildPreviewSource(sourceCanvas)
+    : sourceCanvas;
+  const sourceVersion = usePlaybackScale
+    ? `${baseSourceVersion}@${PLAYBACK_PREVIEW_SCALE}`
+    : baseSourceVersion;
 
   const graph = ensureBootGraph();
   const graphOutputs = evaluateGraphOutputs(graph, {
-    sourceImage: sourceCanvas,
+    sourceImage: sourceForEval,
     sourceVersion,
   }) ?? { viewerOutput: null, ditherOutput: null };
   const graphOutput = graphOutputs.viewerOutput;
@@ -789,10 +805,41 @@ function renderCurrentFrame() {
 
 function recyclePreviewOutput(image) {
   if (!image || image === sourceCanvas) return;
+  // The previewSourceCanvas is a long-lived scratch buffer reused every play
+  // tick; never let the buffer pool reclaim it.
+  if (image === previewSourceCanvas) return;
   // The graph cache may pin this buffer for reuse on the next eval; only
   // recycle when nothing in the cache references it.
   if (isOutputCached(image)) return;
   releaseBuffer(image);
+}
+
+function buildPreviewSource(fullSource) {
+  if (!fullSource?.width || !fullSource?.height) return fullSource;
+  const w = Math.max(1, Math.round(fullSource.width * PLAYBACK_PREVIEW_SCALE));
+  const h = Math.max(1, Math.round(fullSource.height * PLAYBACK_PREVIEW_SCALE));
+  if (!previewSourceCanvas) {
+    previewSourceCanvas = document.createElement("canvas");
+  }
+  if (previewSourceCanvas.width !== w || previewSourceCanvas.height !== h) {
+    previewSourceCanvas.width = w;
+    previewSourceCanvas.height = h;
+    previewSourceCtx = previewSourceCanvas.getContext("2d", {
+      alpha: false,
+      willReadFrequently: false,
+    });
+  } else if (!previewSourceCtx) {
+    previewSourceCtx = previewSourceCanvas.getContext("2d", {
+      alpha: false,
+      willReadFrequently: false,
+    });
+  }
+  if (!previewSourceCtx) return fullSource;
+  // Browser does the downscale in native code — much cheaper than re-running
+  // every effect at the larger resolution would have been.
+  previewSourceCtx.imageSmoothingEnabled = true;
+  previewSourceCtx.drawImage(fullSource, 0, 0, w, h);
+  return previewSourceCanvas;
 }
 
 function drawSourceFrame(v) {

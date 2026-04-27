@@ -34,6 +34,9 @@ export function initStage() {
   window.addEventListener("resize", sync);
   subscribe("view", sync);
   subscribe("source", sync);
+  // Playback transitions also flip the badge between "1:1 export-accurate"
+  // and "playback · half-res", so re-sync when video starts/stops.
+  subscribe("playback", sync);
 }
 
 function wireZoom(stage, outputs) {
@@ -282,10 +285,22 @@ function syncZoomToggle(zoomToggle, canvas) {
 
   // 1:1 (or zoomed in) on a sharp dither canvas = the user is looking at the
   // exact pixels that will be exported. Anything below that is a downscale
-  // approximation, so the badge flips to "approx" to set expectations.
-  const exact = effectiveScale >= 0.999;
-  accuracy.dataset.state = exact ? "exact" : "approx";
-  accuracy.textContent = exact ? "1:1 export-accurate" : "approx · downscaled";
+  // approximation. During playback the effect chain itself runs at half
+  // resolution to keep up, so even a 1:1 zoom shows an approximation —
+  // the badge has to call that out so the user knows pause = truth.
+  const video = document.getElementById("sourceVideo");
+  const playing = video && !video.paused && !video.ended && video.readyState >= 2;
+  const zoomExact = effectiveScale >= 0.999;
+  if (playing) {
+    accuracy.dataset.state = "approx";
+    accuracy.textContent = "playback · half-res";
+  } else if (zoomExact) {
+    accuracy.dataset.state = "exact";
+    accuracy.textContent = "1:1 export-accurate";
+  } else {
+    accuracy.dataset.state = "approx";
+    accuracy.textContent = "approx · downscaled";
+  }
 }
 
 // Right-click context menu ----------------------------------------
