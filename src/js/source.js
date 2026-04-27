@@ -11,7 +11,6 @@ let frameCacheCap = FRAME_CACHE_MIN;
 let frameCacheStamp = 0;
 
 const VIDEO_EXTENSIONS = ["mp4", "mov", "webm", "m4v", "mkv", "avi"];
-const SIDE_BY_SIDE_GAP = 24;
 const PREVIEW_BG = "#0f0f12";
 const PLAYBACK_LOOP_EPSILON = 1 / 120;
 
@@ -897,45 +896,41 @@ function presentPreview() {
 
   if (!width || !height) return;
 
+  // Both canvases are sized to the source resolution and drawn in full;
+  // screen-space comparison clipping (split, side-by-side) is applied by
+  // CSS on the wrapper elements so zoom/pan move both layers together.
+  resizeCanvasElement(canvas, width, height);
+  resizeCanvasElement(splitCanvas, width, height);
+  clearCanvas(ctx, canvas);
+
+  const overlayActive = view.compare === "split" || view.compare === "side-by-side";
+
   switch (view.compare) {
     case "original":
-      resizeCanvasElement(canvas, width, height);
-      clearCanvas(ctx, canvas);
       ctx.drawImage(sourceCanvas, 0, 0);
-      clearSplitCanvas();
-      sampleLayout = createSingleImageLayout(width, height);
       break;
     case "split":
-      resizeCanvasElement(canvas, width, height);
-      clearCanvas(ctx, canvas);
-      ctx.drawImage(processedCanvas, 0, 0);
-      drawSourceSplit(ctx, sourceCanvas, width, height, view.splitPosition);
-      clearSplitCanvas();
-      sampleLayout = createSingleImageLayout(width, height);
-      break;
     case "side-by-side":
-      resizeCanvasElement(canvas, width, height);
-      clearCanvas(ctx, canvas);
-      sampleLayout = createSideBySideLayout(width, height);
-      drawSideBySidePreview(ctx, sourceCanvas, processedCanvas, sampleLayout);
-      clearSplitCanvas();
+      ctx.drawImage(processedCanvas, 0, 0);
+      paintOverlaySource();
       break;
     case "dither-only":
-      resizeCanvasElement(canvas, width, height);
-      clearCanvas(ctx, canvas);
       ctx.drawImage(hasDitherOutput ? ditherCanvas : processedCanvas, 0, 0);
-      clearSplitCanvas();
-      sampleLayout = createSingleImageLayout(width, height);
       break;
     case "processed":
     default:
-      resizeCanvasElement(canvas, width, height);
-      clearCanvas(ctx, canvas);
       ctx.drawImage(processedCanvas, 0, 0);
-      clearSplitCanvas();
-      sampleLayout = createSingleImageLayout(width, height);
       break;
   }
+
+  if (!overlayActive) clearSplitCanvas();
+  sampleLayout = createSingleImageLayout(width, height);
+}
+
+function paintOverlaySource() {
+  if (!splitCtx || !splitCanvas || !sourceCanvas) return;
+  splitCtx.clearRect(0, 0, splitCanvas.width, splitCanvas.height);
+  splitCtx.drawImage(sourceCanvas, 0, 0);
 }
 
 function resizeCanvasElement(targetCanvas, width, height) {
@@ -955,42 +950,6 @@ function clearCanvas(targetCtx, targetCanvas) {
 function clearSplitCanvas() {
   if (!splitCtx || !splitCanvas) return;
   clearCanvas(splitCtx, splitCanvas);
-}
-
-function drawSourceSplit(targetCtx, sourceImage, width, height, splitPosition) {
-  const splitX = Math.round(clamp(splitPosition, 0, 1) * width);
-  if (splitX <= 0) return;
-
-  targetCtx.save();
-  targetCtx.beginPath();
-  targetCtx.rect(0, 0, splitX, height);
-  targetCtx.clip();
-  targetCtx.drawImage(sourceImage, 0, 0);
-  targetCtx.restore();
-}
-
-function drawSideBySidePreview(targetCtx, sourceImage, processedImage, layout) {
-  targetCtx.save();
-  targetCtx.imageSmoothingEnabled = false;
-  targetCtx.fillStyle = PREVIEW_BG;
-  targetCtx.fillRect(layout.leftPane.x + layout.leftPane.width, 0, layout.gap, layout.displayHeight);
-  drawFittedImage(targetCtx, sourceImage, layout.leftImage);
-  drawFittedImage(targetCtx, processedImage, layout.rightImage);
-  targetCtx.restore();
-}
-
-function drawFittedImage(targetCtx, image, rect) {
-  targetCtx.drawImage(
-    image,
-    0,
-    0,
-    image.width,
-    image.height,
-    rect.x,
-    rect.y,
-    rect.width,
-    rect.height
-  );
 }
 
 function startDrawLoop() {
@@ -1092,48 +1051,6 @@ function createSingleImageLayout(width, height) {
   };
 }
 
-function createSideBySideLayout(width, height) {
-  const gap = Math.min(SIDE_BY_SIDE_GAP, Math.max(0, Math.floor(width * 0.04)));
-  const paneWidth = Math.max(1, Math.floor((width - gap) / 2));
-  const leftPane = {
-    x: 0,
-    y: 0,
-    width: paneWidth,
-    height,
-  };
-  const rightPane = {
-    x: paneWidth + gap,
-    y: 0,
-    width: Math.max(1, width - paneWidth - gap),
-    height,
-  };
-
-  return {
-    mode: "side-by-side",
-    displayWidth: width,
-    displayHeight: height,
-    imageWidth: width,
-    imageHeight: height,
-    gap,
-    leftPane,
-    rightPane,
-    leftImage: fitImageRect(leftPane, width, height),
-    rightImage: fitImageRect(rightPane, width, height),
-  };
-}
-
-function fitImageRect(container, imageWidth, imageHeight) {
-  const scale = Math.min(container.width / imageWidth, container.height / imageHeight);
-  const width = Math.max(1, Math.round(imageWidth * scale));
-  const height = Math.max(1, Math.round(imageHeight * scale));
-  return {
-    x: Math.round(container.x + (container.width - width) / 2),
-    y: Math.round(container.y + (container.height - height) / 2),
-    width,
-    height,
-  };
-}
-
 function mapDisplayPointToImage(displayX, displayY, layout) {
   if (
     displayX < 0 ||
@@ -1144,42 +1061,10 @@ function mapDisplayPointToImage(displayX, displayY, layout) {
     return null;
   }
 
-  if (layout.mode === "side-by-side") {
-    return mapSideBySidePoint(displayX, displayY, layout);
-  }
-
   return {
     x: clamp(displayX, 0, layout.imageWidth - 1),
     y: clamp(displayY, 0, layout.imageHeight - 1),
   };
-}
-
-function mapSideBySidePoint(displayX, displayY, layout) {
-  for (const rect of [layout.leftImage, layout.rightImage]) {
-    if (
-      displayX < rect.x ||
-      displayY < rect.y ||
-      displayX >= rect.x + rect.width ||
-      displayY >= rect.y + rect.height
-    ) {
-      continue;
-    }
-
-    return {
-      x: clamp(
-        Math.floor(((displayX - rect.x) / rect.width) * layout.imageWidth),
-        0,
-        layout.imageWidth - 1
-      ),
-      y: clamp(
-        Math.floor(((displayY - rect.y) / rect.height) * layout.imageHeight),
-        0,
-        layout.imageHeight - 1
-      ),
-    };
-  }
-
-  return null;
 }
 
 export function formatTime(seconds) {

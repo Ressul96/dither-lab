@@ -385,14 +385,22 @@ body.resizing-y * {
   justify-content: center;
 }
 
+.output-clip,
 .split-overlay {
   position: absolute;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
   pointer-events: none;
+}
+
+.output-clip {
+  z-index: 2;
+}
+
+.split-overlay {
   z-index: 4;
 }
 
@@ -405,12 +413,32 @@ body.resizing-y * {
   background: var(--bg-input);
 }
 
+.output-clip .output {
+  pointer-events: auto;
+}
+
 .output-overlay {
-  position: absolute;
-  left: 0;
-  top: 0;
-  max-width: none;
-  max-height: none;
+  /* Screen-space clipping is handled by .split-overlay's clip-path. The
+     overlay canvas itself is laid out and transformed identically to #output. */
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 48px);
+}
+
+/* Split: source (overlay) visible from left edge to splitPosition,
+   processed (output) shown underneath fills the rest. */
+.stage-canvas[data-compare="split"] .split-overlay {
+  clip-path: inset(0 calc((1 - var(--split-position, 0.5)) * 100%) 0 0);
+}
+
+/* Side-by-side: source on the left half, processed on the right half,
+   with a fixed gap in the middle. The clips run in screen space so zoom
+   and pan move both panes together but the divider stays put. */
+.stage-canvas[data-compare="side-by-side"] .split-overlay {
+  clip-path: inset(0 calc(50% + var(--side-gap, 12px)) 0 0);
+}
+
+.stage-canvas[data-compare="side-by-side"] .output-clip {
+  clip-path: inset(0 0 0 calc(50% + var(--side-gap, 12px)));
 }
 
 .split-divider {

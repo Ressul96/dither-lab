@@ -11,12 +11,12 @@ export function initStage() {
   const splitDivider = document.getElementById("splitDivider");
   if (!stage || !canvas || !stageCanvas || !splitOverlay || !splitDivider) return;
 
-  const outputs = [canvas].filter(Boolean);
+  const outputs = [canvas, splitCanvas].filter(Boolean);
 
   wireZoom(stage, outputs);
   wirePan(canvas, outputs);
   wirePixelInspector(canvas);
-  wireSplitDivider(canvas, splitDivider);
+  wireSplitDivider(stageCanvas, splitDivider);
   wireContextMenu(stage);
 
   if (typeof ResizeObserver === "function") {
@@ -81,14 +81,16 @@ function wirePan(canvas, outputs) {
   canvas.addEventListener("pointercancel", end);
 }
 
-function wireSplitDivider(canvas, splitDivider) {
+function wireSplitDivider(stageCanvas, splitDivider) {
   splitDivider.addEventListener("pointerdown", (e) => {
     if (getState().view.compare !== "split") return;
     e.preventDefault();
     splitDivider.setPointerCapture(e.pointerId);
 
+    // Driver coordinates are read from the unscaled stage so the divider
+    // tracks the visible window, not the (possibly zoomed/panned) image.
     const move = (ev) => {
-      const rect = canvas.getBoundingClientRect();
+      const rect = stageCanvas.getBoundingClientRect();
       if (!rect.width) return;
       dispatch("view", {
         splitPosition: clamp((ev.clientX - rect.left) / rect.width, 0, 1),
@@ -129,7 +131,10 @@ function applyTransform(outputs) {
 
 export function resetZoom() {
   dispatch("view", { zoom: 1, fit: true, panX: 0, panY: 0 });
-  applyTransform([document.getElementById("output")]);
+  applyTransform([
+    document.getElementById("output"),
+    document.getElementById("outputSplitOverlay"),
+  ]);
 }
 
 function wirePixelInspector(canvas) {
@@ -161,49 +166,35 @@ function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, s
   applyTransform(outputs);
 
   const { source, view } = getState();
-  const splitActive = source.loaded && view.compare === "split";
+  const compare = source.loaded ? view.compare : "processed";
+  const overlayActive = source.loaded && (compare === "split" || compare === "side-by-side");
+  const dividerActive = source.loaded && compare === "split";
 
-  splitOverlay.classList.add("hidden");
-  splitDivider.classList.toggle("hidden", !splitActive);
-  resetSplitOverlayCanvas(splitOverlay, splitCanvas, splitDivider);
+  // Drive CSS clip-paths via attributes / variables on the stage so layout
+  // happens in screen space (the wrappers don't carry the canvas transform).
+  stageCanvas.dataset.compare = compare;
+  stageCanvas.style.setProperty("--split-position", String(clamp(view.splitPosition, 0, 1)));
 
-  if (!splitActive) {
+  splitOverlay.classList.toggle("hidden", !overlayActive);
+  if (splitCanvas) splitCanvas.classList.toggle("hidden", !overlayActive);
+  splitDivider.classList.toggle("hidden", !dividerActive);
+
+  if (!dividerActive) {
+    splitDivider.style.left = "";
+    splitDivider.style.top = "";
+    splitDivider.style.height = "";
+    splitDivider.style.bottom = "";
     return;
   }
 
+  // Divider rides on the stage rect, not the canvas rect — pan/zoom move the
+  // image but the comparison line stays anchored to the visible window.
   const stageRect = stageCanvas.getBoundingClientRect();
-  const canvasRect = canvas.getBoundingClientRect();
-  const canvasLeft = Math.round(canvasRect.left - stageRect.left);
-  const canvasTop = Math.round(canvasRect.top - stageRect.top);
-  const canvasWidth = Math.round(canvasRect.width);
-  const canvasHeight = Math.round(canvasRect.height);
-  const splitX = Math.round(clamp(view.splitPosition, 0, 1) * canvasWidth);
-
-  splitDivider.style.left = `${canvasLeft + splitX}px`;
-  splitDivider.style.top = `${canvasTop}px`;
-  splitDivider.style.bottom = "auto";
-  splitDivider.style.height = `${canvasHeight}px`;
-}
-
-function resetSplitOverlayCanvas(splitOverlay, splitCanvas, splitDivider) {
-  if (splitOverlay) {
-    splitOverlay.style.left = "";
-    splitOverlay.style.top = "";
-    splitOverlay.style.bottom = "";
-    splitOverlay.style.width = "";
-    splitOverlay.style.height = "";
-  }
-  if (!splitCanvas) return;
-  splitCanvas.style.left = "";
-  splitCanvas.style.top = "";
-  splitCanvas.style.width = "";
-  splitCanvas.style.height = "";
-  splitCanvas.style.transform = "";
-  if (!splitDivider) return;
-  splitDivider.style.left = "";
-  splitDivider.style.top = "";
+  const splitX = Math.round(clamp(view.splitPosition, 0, 1) * stageRect.width);
+  splitDivider.style.left = `${splitX}px`;
+  splitDivider.style.top = "0";
+  splitDivider.style.bottom = "0";
   splitDivider.style.height = "";
-  splitDivider.style.bottom = "";
 }
 
 // Right-click context menu ----------------------------------------
