@@ -3,7 +3,7 @@ import {
   applyAdjustNode,
   applyBlurNode,
   applyDitherNode,
-  applyGlowNode,
+  applyGlareNode,
   applyInvertNode,
   applyLensDistortNode,
   applyMixNode,
@@ -274,8 +274,8 @@ function computeNodeOutput(node, graph, results) {
       return applyScaleNode(resolveInputImage(node, "image", graph, results), node.params);
     case "dither":
       return applyDitherNode(resolveInputImage(node, "image", graph, results), node.params);
-    case "glow":
-      return applyGlowNode(resolveInputImage(node, "image", graph, results), node.params);
+    case "glare":
+      return applyGlareNode(resolveInputImage(node, "image", graph, results), node.params);
     case "lens-distort":
       return applyLensDistortNode(resolveInputImage(node, "image", graph, results), node.params);
     case "mix":

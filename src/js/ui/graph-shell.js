@@ -1179,8 +1179,8 @@ function renderNodeSpecifics(node) {
       return renderScaleNode(node);
     case "dither":
       return renderDitherNode(node);
-    case "glow":
-      return renderGlowNode(node);
+    case "glare":
+      return renderGlareNode(node);
     case "lens-distort":
       return renderLensDistortNode(node);
     case "mix":
@@ -1448,13 +1448,40 @@ function renderScaleNode(node) {
   `;
 }
 
-function renderGlowNode(node) {
+function renderGlareNode(node) {
   const params = node.params;
+  const type = String(params.type ?? "streaks");
+  const typeOptions = [
+    { value: "streaks", label: "Streaks" },
+    { value: "bloom", label: "Bloom" },
+    { value: "fog-glow", label: "Fog Glow" },
+  ];
+
+  // Common params first; per-type extras follow underneath so the inspector
+  // doesn't bury the most-tweaked sliders behind a pile of streak knobs.
+  const common = `
+    ${renderSelectField("Type", "type", type, typeOptions)}
+    ${renderRangeField("Threshold", "threshold", params.threshold, 0, 255, String(params.threshold))}
+    ${renderRangeField("Mix", "mix", params.mix, 0, 400, `${params.mix}%`)}
+    ${renderRangeField("Saturation", "saturation", params.saturation, 0, 400, `${(params.saturation / 100).toFixed(2)}x`)}
+  `;
+
+  let typeFields = "";
+  if (type === "streaks") {
+    typeFields = `
+      ${renderRangeField("Streaks", "streaks", params.streaks, 1, 16, String(params.streaks))}
+      ${renderRangeField("Angle", "angle", params.angle, 0, 180, `${params.angle}°`)}
+      ${renderRangeField("Reach", "iterations", params.iterations, 1, 8, `${Math.pow(2, params.iterations)}px`)}
+      ${renderRangeField("Fade", "fade", params.fade, 0, 99, `${params.fade}%`)}
+    `;
+  } else {
+    typeFields = renderRangeField("Size", "size", params.size, 1, 80, `${params.size}px`);
+  }
+
   return `
     <section class="node-panel-section">
-      ${renderRangeField("Threshold", "threshold", params.threshold, 0, 255, String(params.threshold))}
-      ${renderRangeField("Radius", "radius", params.radius, 0, 80, `${params.radius}px`)}
-      ${renderRangeField("Strength", "strength", params.strength, 0, 400, `${params.strength}%`)}
+      ${common}
+      ${typeFields}
     </section>
   `;
 }
@@ -1731,7 +1758,7 @@ function initGraphContextMenu() {
     <button data-add-node="pixelate">Add Pixelate</button>
     <button data-add-node="scale">Add Scale</button>
     <button data-add-node="dither">Add Dither</button>
-    <button data-add-node="glow">Add Glow</button>
+    <button data-add-node="glare">Add Glare</button>
     <button data-add-node="lens-distort">Add Lens Distortion</button>
     <button data-add-node="mix">Add Mix</button>
   `;
