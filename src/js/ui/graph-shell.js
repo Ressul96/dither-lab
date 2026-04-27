@@ -1163,6 +1163,14 @@ function renderNodeSpecifics(node) {
       return renderSourceNode();
     case "adjust":
       return renderAdjustNode(node);
+    case "posterize":
+      return renderPosterizeNode(node);
+    case "invert":
+      return renderInvertNode(node);
+    case "rgb-to-bw":
+      return renderRgbToBwNode(node);
+    case "tone-map":
+      return renderToneMapNode(node);
     case "blur":
       return renderBlurNode(node);
     case "dither":
@@ -1355,6 +1363,59 @@ function renderBlurNode(node) {
   return `
     <section class="node-panel-section">
       ${renderRangeField("Radius", "radius", params.radius, 0, 40, `${params.radius}px`)}
+    </section>
+  `;
+}
+
+function renderPosterizeNode(node) {
+  const params = node.params;
+  return `
+    <section class="node-panel-section">
+      ${renderRangeField("Steps", "steps", params.steps, 2, 64, `${params.steps}`)}
+    </section>
+  `;
+}
+
+function renderInvertNode(node) {
+  const params = node.params;
+  const channels = String(params.channels ?? "rgb").toLowerCase();
+  const options = [
+    { value: "rgb", label: "RGB" },
+    { value: "r", label: "Red only" },
+    { value: "g", label: "Green only" },
+    { value: "b", label: "Blue only" },
+    { value: "rg", label: "Red + Green" },
+    { value: "gb", label: "Green + Blue" },
+    { value: "rb", label: "Red + Blue" },
+  ];
+  return `
+    <section class="node-panel-section">
+      ${renderSelectField("Channels", "channels", channels, options)}
+    </section>
+  `;
+}
+
+function renderRgbToBwNode(node) {
+  const params = node.params;
+  const mode = String(params.mode ?? "bt709");
+  const options = [
+    { value: "bt709", label: "Bt.709 (HD)" },
+    { value: "bt601", label: "Bt.601 (SD)" },
+    { value: "average", label: "Average" },
+  ];
+  return `
+    <section class="node-panel-section">
+      ${renderSelectField("Coefficients", "mode", mode, options)}
+    </section>
+  `;
+}
+
+function renderToneMapNode(node) {
+  const params = node.params;
+  return `
+    <section class="node-panel-section">
+      ${renderRangeField("Intensity", "intensity", params.intensity, 10, 1000, `${(params.intensity / 100).toFixed(2)}x`)}
+      ${renderRangeField("Whitepoint", "whitepoint", params.whitepoint, 10, 1000, `${(params.whitepoint / 100).toFixed(2)}`)}
     </section>
   `;
 }
@@ -1628,6 +1689,10 @@ function initGraphContextMenu() {
   graphMenuEl.className = "context-menu floating-card hidden";
   graphMenuEl.innerHTML = `
     <button data-add-node="adjust">Add Adjust</button>
+    <button data-add-node="posterize">Add Posterize</button>
+    <button data-add-node="invert">Add Invert</button>
+    <button data-add-node="rgb-to-bw">Add RGB to BW</button>
+    <button data-add-node="tone-map">Add Tone Map</button>
     <button data-add-node="blur">Add Blur</button>
     <button data-add-node="dither">Add Dither</button>
     <button data-add-node="glow">Add Glow</button>

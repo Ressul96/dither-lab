@@ -105,6 +105,116 @@ export function applyGlowNode(input, params) {
   return output;
 }
 
+// Posterize — reduce smooth gradients to N discrete color levels per channel.
+// Even-distributed across [0, 255] so highlights still reach white.
+export function applyPosterizeNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const steps = clamp(Math.round(Number(params.steps ?? 8)), 2, 64);
+  const output = createBuffer(input.width, input.height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  ctx.drawImage(input, 0, 0);
+  const imageData = ctx.getImageData(0, 0, output.width, output.height);
+  const data = imageData.data;
+  const denom = steps - 1;
+  const lutScale = denom / 255;
+  const lutBack = 255 / denom;
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = Math.round(Math.round(data[i] * lutScale) * lutBack);
+    data[i + 1] = Math.round(Math.round(data[i + 1] * lutScale) * lutBack);
+    data[i + 2] = Math.round(Math.round(data[i + 2] * lutScale) * lutBack);
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+// Invert — color negative across selected channels (RGB by default).
+export function applyInvertNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const channels = String(params.channels ?? "rgb").toLowerCase();
+  const inv = {
+    r: channels.includes("r"),
+    g: channels.includes("g"),
+    b: channels.includes("b"),
+  };
+  const output = createBuffer(input.width, input.height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  ctx.drawImage(input, 0, 0);
+  const imageData = ctx.getImageData(0, 0, output.width, output.height);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    if (inv.r) data[i] = 255 - data[i];
+    if (inv.g) data[i + 1] = 255 - data[i + 1];
+    if (inv.b) data[i + 2] = 255 - data[i + 2];
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+// RGB → BW — collapse to luminance using the user-selected coefficients.
+// Bt.709 is the modern default; Bt.601 stays close to legacy NTSC source.
+export function applyRgbToBwNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const mode = String(params.mode ?? "bt709");
+  let cr;
+  let cg;
+  let cb;
+  switch (mode) {
+    case "bt601":
+      cr = 0.299;
+      cg = 0.587;
+      cb = 0.114;
+      break;
+    case "average":
+      cr = cg = cb = 1 / 3;
+      break;
+    case "bt709":
+    default:
+      cr = 0.2126;
+      cg = 0.7152;
+      cb = 0.0722;
+      break;
+  }
+  const output = createBuffer(input.width, input.height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  ctx.drawImage(input, 0, 0);
+  const imageData = ctx.getImageData(0, 0, output.width, output.height);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const luma = Math.round(cr * data[i] + cg * data[i + 1] + cb * data[i + 2]);
+    data[i] = data[i + 1] = data[i + 2] = luma;
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+// Tone Map — extended Reinhard with intensity (pre-exposure) + whitepoint
+// (target brightest value). Useful before dither so blown highlights have
+// somewhere to go instead of clipping to white.
+export function applyToneMapNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const intensity = clamp(Number(params.intensity ?? 100) / 100, 0.1, 10);
+  const whitepoint = clamp(Number(params.whitepoint ?? 100) / 100, 0.1, 10);
+  const wpSq = whitepoint * whitepoint;
+  const output = createBuffer(input.width, input.height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  ctx.drawImage(input, 0, 0);
+  const imageData = ctx.getImageData(0, 0, output.width, output.height);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = (data[i] / 255) * intensity;
+    const g = (data[i + 1] / 255) * intensity;
+    const b = (data[i + 2] / 255) * intensity;
+    const tr = (r * (1 + r / wpSq)) / (1 + r);
+    const tg = (g * (1 + g / wpSq)) / (1 + g);
+    const tb = (b * (1 + b / wpSq)) / (1 + b);
+    data[i] = Math.round(clamp01(tr) * 255);
+    data[i + 1] = Math.round(clamp01(tg) * 255);
+    data[i + 2] = Math.round(clamp01(tb) * 255);
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
 export function applyDistortNode(input, params) {
   if (!input?.width || !input?.height) return null;
   const amplitude = Math.max(0, Number(params.amplitude ?? 0));

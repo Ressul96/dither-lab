@@ -5,7 +5,11 @@ import {
   applyDistortNode,
   applyDitherNode,
   applyGlowNode,
+  applyInvertNode,
   applyMixNode,
+  applyPosterizeNode,
+  applyRgbToBwNode,
+  applyToneMapNode,
   releaseBuffer,
 } from "./image-ops.js";
 
@@ -228,6 +232,14 @@ function computeNodeOutput(node, graph, results) {
   switch (node.type) {
     case "adjust":
       return applyAdjustNode(resolveInputImage(node, "image", graph, results), node.params);
+    case "posterize":
+      return applyPosterizeNode(resolveInputImage(node, "image", graph, results), node.params);
+    case "invert":
+      return applyInvertNode(resolveInputImage(node, "image", graph, results), node.params);
+    case "rgb-to-bw":
+      return applyRgbToBwNode(resolveInputImage(node, "image", graph, results), node.params);
+    case "tone-map":
+      return applyToneMapNode(resolveInputImage(node, "image", graph, results), node.params);
     case "blur":
       return applyBlurNode(resolveInputImage(node, "image", graph, results), node.params);
     case "dither":
