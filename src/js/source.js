@@ -1,6 +1,6 @@
 import { getState, dispatch, subscribe } from "./state.js";
 import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
-import { evaluateGraphOutputs } from "./graph-runtime.js";
+import { clearGraphCache, evaluateGraphOutputs, isOutputCached } from "./graph-runtime.js";
 import { canUseNativeRender, evaluateNativeGraphOutputs } from "./native-render.js";
 import { acquireBuffer, releaseBuffer } from "./image-ops.js";
 
@@ -767,9 +767,15 @@ function renderCurrentFrame() {
   ensureFrameBuffers(v.videoWidth, v.videoHeight);
   drawSourceFrame(v);
 
+  // sourceVersion is the cache identity of the current source frame. It only
+  // changes when the painted contents change (new frame, new source), so the
+  // node memo cache can hit on paused-video param tweaks.
+  const sourceVersion = sourceFrameKey(v) ?? `live-${currentRenderVersion}`;
+
   const graph = ensureBootGraph();
   const graphOutputs = evaluateGraphOutputs(graph, {
     sourceImage: sourceCanvas,
+    sourceVersion,
   }) ?? { viewerOutput: null, ditherOutput: null };
   const graphOutput = graphOutputs.viewerOutput;
 
@@ -783,6 +789,9 @@ function renderCurrentFrame() {
 
 function recyclePreviewOutput(image) {
   if (!image || image === sourceCanvas) return;
+  // The graph cache may pin this buffer for reuse on the next eval; only
+  // recycle when nothing in the cache references it.
+  if (isOutputCached(image)) return;
   releaseBuffer(image);
 }
 
@@ -832,6 +841,10 @@ function clearFrameCache() {
   for (const canvas of frameCache.values()) releaseBuffer(canvas);
   frameCache.clear();
   frameCacheStamp += 1;
+  // Decoded frames are gone, so the per-node memoization that pinned the old
+  // intermediate canvases is also stale — drop it now instead of letting next
+  // eval discover the mismatch.
+  clearGraphCache();
 }
 
 function recomputeFrameCacheCap(width, height) {
