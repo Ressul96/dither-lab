@@ -87,3 +87,6 @@ Read only the docs relevant to the task instead of loading everything by default
 
 If the repository is still mostly empty, treat the docs in `docs/spec/` as the source of truth for
 what should be built.
+
+Continue work in the current branch/worktree by default. Do not create a new branch or worktree
+unless the user explicitly asks for one.
