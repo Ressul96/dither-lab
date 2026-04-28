@@ -328,6 +328,9 @@ button:disabled {
   gap: 2px;
 }
 .segmented button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 22px;
   padding: 0 10px;
   border-radius: var(--radius-xs);

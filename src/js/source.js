@@ -13,6 +13,7 @@ let frameCacheStamp = 0;
 const VIDEO_EXTENSIONS = ["mp4", "mov", "webm", "m4v", "mkv", "avi"];
 const PREVIEW_BG = "#0f0f12";
 const PLAYBACK_LOOP_EPSILON = 1 / 120;
+const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 
 let video;
 let canvas;
@@ -970,19 +971,14 @@ function presentPreview() {
   resizeCanvasElement(splitCanvas, width, height);
   clearCanvas(ctx, canvas);
 
-  const overlayActive = view.compare === "split" || view.compare === "side-by-side";
+  const compare = normalizeCompareMode(view.compare);
+  const overlayActive = compare === "split" || compare === "side-by-side";
 
-  switch (view.compare) {
-    case "original":
-      ctx.drawImage(sourceCanvas, 0, 0);
-      break;
+  switch (compare) {
     case "split":
     case "side-by-side":
       ctx.drawImage(processedCanvas, 0, 0);
       paintOverlaySource();
-      break;
-    case "dither-only":
-      ctx.drawImage(hasDitherOutput ? ditherCanvas : processedCanvas, 0, 0);
       break;
     case "processed":
     default:
@@ -1167,4 +1163,8 @@ function waitFor(target, eventName) {
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
+}
+
+function normalizeCompareMode(value) {
+  return COMPARE_MODES.has(value) ? value : "processed";
 }

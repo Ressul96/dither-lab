@@ -5,7 +5,6 @@ import {
   writeValuesMonochrome,
   readRGB,
   writeRGB,
-  preAdjustRGB,
   isMonochromePalette,
 } from "./core.js";
 import { nearestColorInPalette } from "../palettes.js";
@@ -194,13 +193,21 @@ function runKernelDiffusionRGB(imageData, params, palette, kernel) {
   const invert = Boolean(params.invert);
   const errorStrength = clamp((params.errorStrength ?? 100) / 100, 0, 1);
   const serpentine = params.serpentine !== false;
+  const shift = threshold - 128;
 
   const { r, g, b } = readRGB(data, width, height);
   for (let i = 0; i < r.length; i++) {
-    const adjusted = preAdjustRGB(r[i], g[i], b[i], threshold, invert);
-    r[i] = adjusted[0];
-    g[i] = adjusted[1];
-    b[i] = adjusted[2];
+    let nr = clamp(r[i] + shift, 0, 255);
+    let ng = clamp(g[i] + shift, 0, 255);
+    let nb = clamp(b[i] + shift, 0, 255);
+    if (invert) {
+      nr = 255 - nr;
+      ng = 255 - ng;
+      nb = 255 - nb;
+    }
+    r[i] = nr;
+    g[i] = ng;
+    b[i] = nb;
   }
 
   for (let y = 0; y < height; y++) {
@@ -272,10 +279,13 @@ function runRiemersmaBW(imageData, params) {
   const history = new Float32Array(HISTORY);
 
   const { size } = hilbertExtent(width, height);
+  const point = new Int32Array(2);
 
   const total = size * size;
   for (let d = 0; d < total; d++) {
-    const { x, y } = hilbertD2XY(size, d);
+    hilbertD2XY(size, d, point);
+    const x = point[0];
+    const y = point[1];
     if (x >= width || y >= height) continue;
     const index = y * width + x;
     let accumulated = 0;
@@ -301,13 +311,21 @@ function runRiemersmaRGB(imageData, params, palette) {
   const threshold = clamp(Math.round(params.threshold ?? 128), 0, 255);
   const invert = Boolean(params.invert);
   const errorStrength = clamp((params.errorStrength ?? 100) / 100, 0, 1);
+  const shift = threshold - 128;
 
   const { r, g, b } = readRGB(data, width, height);
   for (let i = 0; i < r.length; i++) {
-    const adjusted = preAdjustRGB(r[i], g[i], b[i], threshold, invert);
-    r[i] = adjusted[0];
-    g[i] = adjusted[1];
-    b[i] = adjusted[2];
+    let nr = clamp(r[i] + shift, 0, 255);
+    let ng = clamp(g[i] + shift, 0, 255);
+    let nb = clamp(b[i] + shift, 0, 255);
+    if (invert) {
+      nr = 255 - nr;
+      ng = 255 - ng;
+      nb = 255 - nb;
+    }
+    r[i] = nr;
+    g[i] = ng;
+    b[i] = nb;
   }
 
   const HISTORY = 16;
@@ -323,10 +341,13 @@ function runRiemersmaRGB(imageData, params, palette) {
   const historyB = new Float32Array(HISTORY);
 
   const { size } = hilbertExtent(width, height);
+  const point = new Int32Array(2);
 
   const total = size * size;
   for (let d = 0; d < total; d++) {
-    const { x, y } = hilbertD2XY(size, d);
+    hilbertD2XY(size, d, point);
+    const x = point[0];
+    const y = point[1];
     if (x >= width || y >= height) continue;
     const index = y * width + x;
 
@@ -378,7 +399,7 @@ function hilbertExtent(width, height) {
   return { size, order };
 }
 
-function hilbertD2XY(n, d) {
+function hilbertD2XY(n, d, out) {
   let rx;
   let ry;
   let t = d;
@@ -400,7 +421,8 @@ function hilbertD2XY(n, d) {
     y += s * ry;
     t = Math.floor(t / 4);
   }
-  return { x, y };
+  out[0] = x;
+  out[1] = y;
 }
 
 function makeKernelAlgorithm(id, name, kernelKey) {

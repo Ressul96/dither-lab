@@ -1,6 +1,8 @@
 import { getState, dispatch, subscribe } from "../state.js";
 import { openExport } from "../export.js";
-import { samplePixel } from "../source.js";
+import { formatTime, samplePixel } from "../source.js";
+
+const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 
 export function initStage() {
   const stage = document.getElementById("stage");
@@ -11,12 +13,13 @@ export function initStage() {
   const splitDivider = document.getElementById("splitDivider");
   const zoomToggle = document.getElementById("zoomToggle");
   const qualityToggle = document.getElementById("qualityToggle");
+  const previewOverlay = document.getElementById("previewStatusOverlay");
   if (!stage || !canvas || !stageCanvas || !splitOverlay || !splitDivider) return;
 
   const outputs = [canvas, splitCanvas].filter(Boolean);
 
   wireZoom(stage, outputs);
-  wirePan(canvas, outputs);
+  wirePan(stageCanvas, outputs);
   wirePixelInspector(canvas);
   wireSplitDivider(stageCanvas, splitDivider);
   wireContextMenu(stage);
@@ -33,7 +36,8 @@ export function initStage() {
       splitDivider,
       outputs,
       zoomToggle,
-      qualityToggle
+      qualityToggle,
+      previewOverlay
     );
 
   if (typeof ResizeObserver === "function") {
@@ -66,10 +70,11 @@ function wireZoom(stage, outputs) {
   );
 }
 
-function wirePan(canvas, outputs) {
+function wirePan(surface, outputs) {
   let dragging = false;
   let sx = 0, sy = 0, px = 0, py = 0;
-  canvas.addEventListener("pointerdown", (e) => {
+  surface.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".split-divider")) return;
     const { view } = getState();
     if (view.fit) return;
     dragging = true;
@@ -77,9 +82,9 @@ function wirePan(canvas, outputs) {
     sy = e.clientY;
     px = view.panX;
     py = view.panY;
-    canvas.setPointerCapture(e.pointerId);
+    surface.setPointerCapture(e.pointerId);
   });
-  canvas.addEventListener("pointermove", (e) => {
+  surface.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     dispatch("view", { panX: px + (e.clientX - sx), panY: py + (e.clientY - sy) });
     applyTransform(outputs);
@@ -87,10 +92,10 @@ function wirePan(canvas, outputs) {
   const end = (e) => {
     if (!dragging) return;
     dragging = false;
-    try { canvas.releasePointerCapture(e.pointerId); } catch {}
+    try { surface.releasePointerCapture(e.pointerId); } catch {}
   };
-  canvas.addEventListener("pointerup", end);
-  canvas.addEventListener("pointercancel", end);
+  surface.addEventListener("pointerup", end);
+  surface.addEventListener("pointercancel", end);
 }
 
 function wireSplitDivider(stageCanvas, splitDivider) {
@@ -219,19 +224,30 @@ function wireZoomShortcuts(outputs) {
 
 function wirePixelInspector(canvas) {
   const hud = document.getElementById("pixelInspector");
-  canvas.addEventListener("mousemove", (e) => {
+  const rows = hud ? Array.from(hud.querySelectorAll(".row .value")) : [];
+  let pendingPoint = null;
+  let pendingFrame = 0;
+
+  const flush = () => {
+    pendingFrame = 0;
     if (!getState().view.pixelInspector || !hud) return;
+    if (!pendingPoint) return;
     const rect = canvas.getBoundingClientRect();
-    const u = (e.clientX - rect.left) / rect.width;
-    const v = (e.clientY - rect.top) / rect.height;
+    const u = (pendingPoint.clientX - rect.left) / rect.width;
+    const v = (pendingPoint.clientY - rect.top) / rect.height;
     const sample = samplePixel(u, v);
     if (!sample) return;
-    const rows = hud.querySelectorAll(".row .value");
     if (rows.length >= 3) {
       rows[0].textContent = `${sample.x}, ${sample.y}`;
       rows[1].textContent = `rgb(${sample.source.join(", ")})`;
       rows[2].textContent = `rgb(${sample.processed.join(", ")})`;
     }
+  };
+
+  canvas.addEventListener("mousemove", (e) => {
+    if (!getState().view.pixelInspector || !hud) return;
+    pendingPoint = { clientX: e.clientX, clientY: e.clientY };
+    if (!pendingFrame) pendingFrame = requestAnimationFrame(flush);
   });
 }
 
@@ -242,13 +258,15 @@ export function togglePixelInspector() {
   if (hud) hud.classList.toggle("hidden", !next);
 }
 
-function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs, zoomToggle, qualityToggle) {
+function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs, zoomToggle, qualityToggle, previewOverlay) {
   applyTransform(outputs);
   syncZoomToggle(zoomToggle, canvas);
   syncQualityToggle(qualityToggle);
+  syncPreviewOverlay(previewOverlay, canvas);
 
   const { source, view } = getState();
-  const compare = source.loaded ? view.compare : "processed";
+  const compare = source.loaded ? normalizeCompareMode(view.compare) : "processed";
+  if (compare !== view.compare) dispatch("view", { compare });
   const overlayActive = source.loaded && (compare === "split" || compare === "side-by-side");
   const dividerActive = source.loaded && compare === "split";
 
@@ -277,6 +295,37 @@ function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, s
   splitDivider.style.top = "0";
   splitDivider.style.bottom = "0";
   splitDivider.style.height = "";
+}
+
+function syncPreviewOverlay(previewOverlay, canvas) {
+  if (!previewOverlay) return;
+  const { source, playback, view } = getState();
+  const set = (key, value) => {
+    const el = previewOverlay.querySelector(`[data-preview-status="${key}"]`);
+    if (el) el.textContent = value;
+  };
+
+  const resolution = source.loaded && source.videoWidth && source.videoHeight
+    ? `${source.videoWidth} x ${source.videoHeight}`
+    : "No source";
+  set("resolution", resolution);
+
+  const quality = (view.playbackQuality ?? "auto") === "full" ? "FX Full" : "FX Auto";
+  set("quality", quality);
+
+  let zoomLabel = "Fit";
+  if (view.fit && canvas?.width) {
+    const rect = canvas.getBoundingClientRect();
+    const effectiveScale = canvas.width > 0 ? rect.width / canvas.width : 1;
+    zoomLabel = `Fit ${Math.round(effectiveScale * 100)}%`;
+  } else {
+    zoomLabel = `${Math.round((view.zoom || 1) * 100)}%`;
+  }
+  set("zoom", zoomLabel);
+
+  const fps = Math.max(1, Math.round(Number(source.fps || source.sourceFps || 30)));
+  const frame = source.loaded ? Math.max(0, Math.round((playback.currentTime || 0) * fps)) : 0;
+  set("time", `${formatTime(playback.currentTime || 0)} · F${frame}`);
 }
 
 function syncQualityToggle(qualityToggle) {
@@ -390,4 +439,8 @@ function syncContextMenu(menu) {
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
+}
+
+function normalizeCompareMode(value) {
+  return COMPARE_MODES.has(value) ? value : "processed";
 }

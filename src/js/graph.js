@@ -3,6 +3,8 @@ import { getState, dispatch } from "./state.js";
 const NODE_SPACING_X = 252;
 const NODE_BASE_X = 88;
 const NODE_BASE_Y = 84;
+const NODE_WIDTH = 220;
+const NODE_INSERT_GAP_X = Math.round(NODE_WIDTH * 0.2);
 
 const NODE_DEFINITIONS = Object.freeze({
   source: {
@@ -10,15 +12,15 @@ const NODE_DEFINITIONS = Object.freeze({
     family: "Input",
     description: "Resolves the current frame from the active source provider.",
     inputs: [],
-    outputs: [{ name: "image", label: "Image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {},
   },
   adjust: {
     label: "Adjust",
     family: "Color",
     description: "Applies source-level corrections before downstream processing nodes.",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
       brightness: 0,
       contrast: 100,
@@ -31,56 +33,110 @@ const NODE_DEFINITIONS = Object.freeze({
     label: "Posterize",
     family: "Color",
     description: "Quantizes each channel into N discrete levels for hard tonal banding.",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: { steps: 8 },
   },
   invert: {
     label: "Invert",
     family: "Color",
     description: "Inverts the selected channels (RGB by default).",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: { channels: "rgb" },
   },
   "rgb-to-bw": {
     label: "RGB to BW",
     family: "Color",
     description: "Collapses the image to luminance — useful before 1-bit dither.",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: { mode: "bt709" },
   },
   "tone-map": {
     label: "Tone Map",
     family: "Color",
     description: "Compresses bright highlights via Reinhard so dither has headroom.",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: { intensity: 100, whitepoint: 100 },
+  },
+  hsv: {
+    label: "HSV",
+    family: "Color",
+    description: "Shifts hue, saturation, and value before downstream processing.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: { hue: 0, saturation: 100, value: 100 },
+  },
+  "rgb-curves": {
+    label: "RGB Curves",
+    family: "Color",
+    description: "Applies a simple three-point curve to master and RGB channels.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      activeChannel: "master",
+      masterLow: 0,
+      masterMid: 128,
+      masterHigh: 255,
+      redLow: 0,
+      redMid: 128,
+      redHigh: 255,
+      greenLow: 0,
+      greenMid: 128,
+      greenHigh: 255,
+      blueLow: 0,
+      blueMid: 128,
+      blueHigh: 255,
+    },
   },
   pixelate: {
     label: "Pixelate",
     family: "Process",
     description: "Collapses NxN blocks into single colors for chunky low-res looks.",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: { size: 8 },
   },
   scale: {
     label: "Scale",
     family: "Process",
     description: "Resizes the image. Pair with Pixelate for retro upscaled pixel art.",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: { x: 100, y: 100, filter: "linear" },
+  },
+  transform: {
+    label: "Transform",
+    family: "Process",
+    description: "Translates, rotates, and scales the image inside the original frame.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: { translateX: 0, translateY: 0, rotation: 0, scale: 100, filter: "linear" },
+  },
+  crop: {
+    label: "Crop",
+    family: "Process",
+    description: "Masks or fits a cropped source rectangle inside the original frame.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: { left: 0, right: 0, top: 0, bottom: 0, mode: "mask" },
+  },
+  flip: {
+    label: "Flip",
+    family: "Process",
+    description: "Flips the image horizontally, vertically, or both.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: { horizontal: true, vertical: false },
   },
   dither: {
     label: "Dither",
     family: "Process",
     description: "Converts the incoming image into a dithered monochrome result.",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
       algorithm: "floyd-steinberg",
       palette: "monochrome",
@@ -96,16 +152,16 @@ const NODE_DEFINITIONS = Object.freeze({
     label: "Blur",
     family: "Process",
     description: "Softens the image with a Gaussian-style blur.",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: { radius: 4 },
   },
   glare: {
     label: "Glare",
     family: "Effect",
     description: "Bloom, anamorphic streaks, or fog glow around bright pixels.",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
       type: "streaks",
       threshold: 200,
@@ -126,8 +182,8 @@ const NODE_DEFINITIONS = Object.freeze({
     label: "Lens Distortion",
     family: "Effect",
     description: "Radial barrel/pincushion or horizontal chromatic split, with off-axis center, fit, and vignette.",
-    inputs: [{ name: "image", label: "Image" }],
-    outputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
       type: "radial",
       distortion: 0,
@@ -143,17 +199,57 @@ const NODE_DEFINITIONS = Object.freeze({
     family: "Compose",
     description: "Blends the main chain with a branched image using composite modes.",
     inputs: [
-      { name: "image_a", label: "Image A" },
-      { name: "image_b", label: "Image B" },
+      { name: "image_a", label: "Image A", type: "image" },
+      { name: "image_b", label: "Image B", type: "image" },
     ],
-    outputs: [{ name: "image", label: "Image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: { factor: 50, mode: "normal" },
+  },
+  displace: {
+    label: "Displace",
+    family: "Effect",
+    description: "Offsets pixels with an optional map input or a procedural wave.",
+    inputs: [
+      { name: "image", label: "Image", type: "image" },
+      { name: "map", label: "Map", type: "image" },
+    ],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      mode: "wave",
+      xAmount: 16,
+      yAmount: 0,
+      strength: 100,
+      frequency: 4,
+      phase: 0,
+      filter: "linear",
+    },
+  },
+  value: {
+    label: "Value",
+    family: "Utility",
+    description: "Outputs a scalar value for future parameter wiring.",
+    chainable: false,
+    inputs: [],
+    outputs: [{ name: "value", label: "Value", type: "value" }],
+    defaultParams: { value: 0 },
+  },
+  math: {
+    label: "Math",
+    family: "Utility",
+    description: "Computes a scalar value from two numeric inputs.",
+    chainable: false,
+    inputs: [
+      { name: "a", label: "A", type: "value" },
+      { name: "b", label: "B", type: "value" },
+    ],
+    outputs: [{ name: "value", label: "Value", type: "value" }],
+    defaultParams: { operation: "add", a: 0, b: 1, clamp: false },
   },
   "viewer-output": {
     label: "Viewer Output",
     family: "Output",
     description: "Terminal graph node used by preview and export.",
-    inputs: [{ name: "image", label: "Image" }],
+    inputs: [{ name: "image", label: "Image", type: "image" }],
     outputs: [],
     defaultParams: { target: "stage", fps: 30 },
   },
@@ -166,14 +262,22 @@ const TYPE_ORDER = {
   invert: 3,
   "rgb-to-bw": 4,
   "tone-map": 5,
-  blur: 6,
-  pixelate: 7,
-  scale: 8,
-  dither: 9,
-  glare: 10,
-  "lens-distort": 11,
-  mix: 12,
-  "viewer-output": 13,
+  hsv: 6,
+  "rgb-curves": 7,
+  blur: 8,
+  pixelate: 9,
+  scale: 10,
+  transform: 11,
+  crop: 12,
+  flip: 13,
+  dither: 14,
+  glare: 15,
+  "lens-distort": 16,
+  displace: 17,
+  mix: 18,
+  value: 19,
+  math: 20,
+  "viewer-output": 21,
 };
 
 export function getNodeDefinition(type) {
@@ -245,6 +349,8 @@ export function setViewerOutputFps(fps) {
 }
 
 export function addLinearNode(type) {
+  const definition = getNodeDefinition(type);
+  if (!definition || definition.chainable === false) return null;
   if (type === "source" || type === "viewer-output") return null;
   if (type === "mix") return addMixNode();
   return insertNodeIntoChain(type);
@@ -268,7 +374,7 @@ export function addMixNode() {
 
 function insertNodeIntoChain(type, extraEdgeFactory = null) {
   const definition = getNodeDefinition(type);
-  if (!definition) return null;
+  if (!definition || definition.chainable === false) return null;
 
   const graph = ensureBootGraph();
   const chain = getMainChain(graph);
@@ -280,6 +386,11 @@ function insertNodeIntoChain(type, extraEdgeFactory = null) {
   const nodeId = nextNodeId(type, graph);
   const newNode = createNode(nodeId, type);
   const nextPrimarySocket = getPrimaryInputSocket(nextNode);
+  const inputSocket = getPrimaryInputSocket(newNode);
+  const outputSocket = getPrimaryOutputSocket(newNode);
+  if (!isImageSocket(newNode, "input", inputSocket) || !isImageSocket(newNode, "output", outputSocket)) {
+    return null;
+  }
 
   const nextEdges = graph.edges
     .filter(
@@ -293,16 +404,16 @@ function insertNodeIntoChain(type, extraEdgeFactory = null) {
     .map((edge) => ({ ...edge }));
 
   nextEdges.push({
-    id: createEdgeId(prevNode.id, "image", nodeId, newNode.inputs[0].name),
+    id: createEdgeId(prevNode.id, "image", nodeId, inputSocket),
     fromNode: prevNode.id,
     fromSocket: "image",
     toNode: nodeId,
-    toSocket: newNode.inputs[0].name,
+    toSocket: inputSocket,
   });
   nextEdges.push({
-    id: createEdgeId(nodeId, "image", nextNode.id, nextPrimarySocket),
+    id: createEdgeId(nodeId, outputSocket, nextNode.id, nextPrimarySocket),
     fromNode: nodeId,
-    fromSocket: "image",
+    fromSocket: outputSocket,
     toNode: nextNode.id,
     toSocket: nextPrimarySocket,
   });
@@ -345,7 +456,7 @@ export function createFreeNode(type, position) {
 
 export function insertNodeOnEdge(edgeId, type, options = {}) {
   const definition = getNodeDefinition(type);
-  if (!definition || type === "source" || type === "viewer-output") return null;
+  if (!definition || definition.chainable === false || type === "source" || type === "viewer-output") return null;
 
   const graph = ensureBootGraph();
   const edge = graph.edges.find((item) => item.id === edgeId);
@@ -356,13 +467,16 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
   if (!fromNode || !toNode) return null;
 
   const nodeId = nextNodeId(type, graph);
+  const hasExplicitPosition = Boolean(options.position);
   const newNode = createNode(nodeId, type, {
-    x: options.position?.x ?? (fromNode.x + toNode.x) / 2,
-    y: options.position?.y ?? (fromNode.y + toNode.y) / 2,
+    x: options.position?.x ?? midpoint(fromNode.x, toNode.x),
+    y: options.position?.y ?? midpoint(fromNode.y, toNode.y),
   });
   const inputSocket = getPrimaryInputSocket(newNode);
   const outputSocket = newNode.outputs?.[0]?.name;
   if (!inputSocket || !outputSocket) return null;
+  if (!socketsCompatible(fromNode, edge.fromSocket, newNode, inputSocket)) return null;
+  if (!socketsCompatible(newNode, outputSocket, toNode, edge.toSocket)) return null;
 
   const nextEdges = graph.edges
     .filter((item) => item.id !== edgeId)
@@ -398,12 +512,9 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
 
   const nextNodes = [...graph.nodes.map((node) => clone(node)), newNode];
   if (isPrimaryChainEdge(edge, graph)) {
-    const inserted = nextNodes.find((node) => node.id === nodeId);
-    if (inserted) {
-      inserted.x = toNode.x;
-      inserted.y = toNode.y;
-      shiftPrimaryChainFromNode(nextNodes, nextEdges, edge.toNode, NODE_SPACING_X);
-    }
+    spacePrimaryChainAroundNode(nextNodes, nextEdges, edge.fromNode, nodeId, edge.toNode, {
+      preserveInserted: hasExplicitPosition,
+    });
   }
   dispatch("graph", {
     nodes: nextNodes,
@@ -412,6 +523,88 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
   });
 
   return nodeId;
+}
+
+export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
+  if (!nodeId || !edgeId) return false;
+
+  const graph = ensureBootGraph();
+  const edge = graph.edges.find((item) => item.id === edgeId);
+  if (!edge || edge.fromNode === nodeId || edge.toNode === nodeId) return false;
+
+  const node = getNodeById(nodeId, graph);
+  const fromNode = getNodeById(edge.fromNode, graph);
+  const toNode = getNodeById(edge.toNode, graph);
+  if (!node || !fromNode || !toNode) return false;
+  if (node.type === "source" || node.type === "viewer-output") return false;
+
+  const definition = getNodeDefinition(node.type);
+  if (!definition || definition.chainable === false) return false;
+
+  const inputSocket = getPrimaryInputSocket(node);
+  const outputSocket = getPrimaryOutputSocket(node);
+  if (!inputSocket || !outputSocket) return false;
+  if (!socketsCompatible(fromNode, edge.fromSocket, node, inputSocket)) return false;
+  if (!socketsCompatible(node, outputSocket, toNode, edge.toSocket)) return false;
+
+  const nextNodes = graph.nodes.map((item) => clone(item));
+  const inserted = nextNodes.find((item) => item.id === nodeId);
+  if (!inserted) return false;
+  if (options.position) {
+    inserted.x = options.position.x;
+    inserted.y = options.position.y;
+  }
+
+  const nextEdges = graph.edges
+    .filter((item) => item.id !== edgeId)
+    .filter((item) => !(item.toNode === nodeId && item.toSocket === inputSocket))
+    .filter((item) => !(item.fromNode === nodeId && item.fromSocket === outputSocket))
+    .map((item) => ({ ...item }));
+
+  if (wouldCreateCycle(edge.fromNode, nodeId, nextEdges)) return false;
+  nextEdges.push({
+    id: createEdgeId(edge.fromNode, edge.fromSocket, nodeId, inputSocket),
+    fromNode: edge.fromNode,
+    fromSocket: edge.fromSocket,
+    toNode: nodeId,
+    toSocket: inputSocket,
+  });
+
+  if (wouldCreateCycle(nodeId, edge.toNode, nextEdges)) return false;
+  nextEdges.push({
+    id: createEdgeId(nodeId, outputSocket, edge.toNode, edge.toSocket),
+    fromNode: nodeId,
+    fromSocket: outputSocket,
+    toNode: edge.toNode,
+    toSocket: edge.toSocket,
+  });
+
+  if (node.type === "mix" && !nextEdges.some((item) => item.toNode === nodeId && item.toSocket === "image_b")) {
+    const source = graph.nodes.find((item) => item.type === "source");
+    if (source && socketsCompatible(source, "image", node, "image_b")) {
+      nextEdges.push({
+        id: createEdgeId(source.id, "image", nodeId, "image_b"),
+        fromNode: source.id,
+        fromSocket: "image",
+        toNode: nodeId,
+        toSocket: "image_b",
+      });
+    }
+  }
+
+  if (isPrimaryChainEdge(edge, graph)) {
+    spacePrimaryChainAroundNode(nextNodes, nextEdges, edge.fromNode, nodeId, edge.toNode, {
+      preserveInserted: true,
+    });
+  }
+
+  dispatch("graph", {
+    nodes: nextNodes,
+    edges: nextEdges,
+    selectedNodeId: nodeId,
+  });
+
+  return true;
 }
 
 export function mutateNodePosition(nodeId, x, y) {
@@ -438,6 +631,7 @@ export function addEdge(fromNode, fromSocket, toNode, toSocket) {
   const hasOutput = fromDef.outputs.some((socket) => socket.name === fromSocket);
   const hasInput = toDef.inputs.some((socket) => socket.name === toSocket);
   if (!hasOutput || !hasInput) return false;
+  if (!socketsCompatible(fromDef, fromSocket, toDef, toSocket)) return false;
 
   const duplicate = graph.edges.some(
     (edge) =>
@@ -546,6 +740,23 @@ export function updateNodeParams(nodeId, patch) {
   dispatch("graph", { nodes: nextNodes });
 }
 
+export function toggleNodeBypass(nodeId) {
+  const { graph } = getState();
+  let changed = false;
+  const nextNodes = graph.nodes.map((node) => {
+    if (node.id !== nodeId || node.type === "source" || node.type === "viewer-output") return node;
+    changed = true;
+    return {
+      ...node,
+      bypassed: !node.bypassed,
+    };
+  });
+
+  if (!changed) return false;
+  dispatch("graph", { nodes: nextNodes });
+  return true;
+}
+
 export function replacePaletteUsages(removingId, fallbackId) {
   if (!removingId || !fallbackId || removingId === fallbackId) return false;
 
@@ -582,6 +793,7 @@ export function serializeGraph(graph = getState().graph) {
       x: node.x,
       y: node.y,
       params: clone(node.params),
+      bypassed: Boolean(node.bypassed),
     })),
     edges: graph.edges.map((edge) => ({ ...edge })),
     selectedNodeId: graph.selectedNodeId,
@@ -640,6 +852,7 @@ function normalizeGraph(graph) {
         x: node.x,
         y: node.y,
         params: node.params,
+        bypassed: node.bypassed,
       });
     })
     .filter(Boolean);
@@ -690,6 +903,7 @@ function createNode(id, type, options = {}) {
       ...clone(definition.defaultParams),
       ...clone(options.params),
     },
+    bypassed: Boolean(options.bypassed),
   };
 }
 
@@ -762,6 +976,29 @@ function getPrimaryOutputSocket(node) {
   return node.outputs?.[0]?.name ?? null;
 }
 
+function getSocket(node, kind, socketName) {
+  const sockets = kind === "output" ? node?.outputs : node?.inputs;
+  return sockets?.find((socket) => socket.name === socketName) ?? null;
+}
+
+function socketType(socket) {
+  return socket?.type ?? "image";
+}
+
+function isImageSocket(node, kind, socketName) {
+  const socket = getSocket(node, kind, socketName);
+  return Boolean(socket) && socketType(socket) === "image";
+}
+
+function socketsCompatible(fromNode, fromSocket, toNode, toSocket) {
+  const from = getSocket(fromNode, "output", fromSocket);
+  const to = getSocket(toNode, "input", toSocket);
+  if (!from || !to) return false;
+  const fromType = socketType(from);
+  const toType = socketType(to);
+  return fromType === toType;
+}
+
 function layoutMainChain(nodes, edges) {
   const chain = getMainChain({ nodes, edges });
   const chainIds = new Set(chain.map((node) => node.id));
@@ -791,6 +1028,9 @@ function buildLinearEdges(nodes) {
     const fromNode = nodes[index];
     const toNode = nodes[index + 1];
     if (!fromNode.outputs[0] || !toNode.inputs[0]) continue;
+    if (!socketsCompatible(fromNode, fromNode.outputs[0].name, toNode, toNode.inputs[0].name)) {
+      continue;
+    }
 
     edges.push({
       id: createEdgeId(fromNode.id, fromNode.outputs[0].name, toNode.id, toNode.inputs[0].name),
@@ -821,6 +1061,7 @@ function sanitizeEdges(edges, nodes) {
     const hasOutput = fromNode.outputs.some((socket) => socket.name === fromSocket);
     const hasInput = toNode.inputs.some((socket) => socket.name === toSocket);
     if (!hasOutput || !hasInput) continue;
+    if (!socketsCompatible(fromNode, fromSocket, toNode, toSocket)) continue;
 
     const inputKey = `${toNode.id}:${toSocket}`;
     if (occupiedInputs.has(inputKey)) continue;
@@ -914,6 +1155,61 @@ function shiftPrimaryChainFromNode(nodes, edges, startNodeId, deltaX) {
 
     current = nextEdge ? nodeById.get(nextEdge.toNode) : null;
   }
+}
+
+function shiftPrimaryChainToNode(nodes, edges, startNodeId, deltaX) {
+  if (!startNodeId || !deltaX) return;
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const visited = new Set();
+  let current = nodeById.get(startNodeId);
+
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    current.x += deltaX;
+
+    const primaryInput = getPrimaryInputSocket(current);
+    if (!primaryInput) break;
+
+    const prevEdge = edges.find((edge) => {
+      const source = nodeById.get(edge.fromNode);
+      return (
+        edge.toNode === current.id &&
+        edge.toSocket === primaryInput &&
+        edge.fromSocket === getPrimaryOutputSocket(source)
+      );
+    });
+
+    current = prevEdge ? nodeById.get(prevEdge.fromNode) : null;
+  }
+}
+
+function spacePrimaryChainAroundNode(nodes, edges, leftNodeId, insertedNodeId, rightNodeId, options = {}) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const leftNode = nodeById.get(leftNodeId);
+  const insertedNode = nodeById.get(insertedNodeId);
+  const rightNode = nodeById.get(rightNodeId);
+  if (!leftNode || !insertedNode || !rightNode) return;
+
+  if (!options.preserveInserted) {
+    insertedNode.x = midpoint(leftNode.x, rightNode.x);
+    insertedNode.y = midpoint(leftNode.y, rightNode.y);
+  }
+
+  const desiredLeftX = insertedNode.x - NODE_WIDTH - NODE_INSERT_GAP_X;
+  const leftOverlap = leftNode.x - desiredLeftX;
+  if (leftOverlap > 0) {
+    shiftPrimaryChainToNode(nodes, edges, leftNode.id, -leftOverlap);
+  }
+
+  const desiredRightX = insertedNode.x + NODE_WIDTH + NODE_INSERT_GAP_X;
+  const rightOverlap = desiredRightX - rightNode.x;
+  if (rightOverlap > 0) {
+    shiftPrimaryChainFromNode(nodes, edges, rightNode.id, rightOverlap);
+  }
+}
+
+function midpoint(a, b) {
+  return (Number(a) + Number(b)) / 2;
 }
 
 function clone(value) {

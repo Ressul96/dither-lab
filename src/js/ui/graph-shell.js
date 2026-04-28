@@ -6,11 +6,13 @@ import {
   getNodeById,
   getNodeDefinition,
   getSelectedNode,
+  insertExistingNodeOnEdge,
   insertNodeOnEdge,
   mutateNodePosition,
   removeNode,
   replacePaletteUsages,
   selectNode,
+  toggleNodeBypass,
   updateNodeParams,
 } from "../graph.js";
 import { getAlgorithmOptions } from "../dither/index.js";
@@ -54,6 +56,7 @@ let nodesEl;
 let edgesEl;
 let editorEl;
 let inspectorEl;
+let inspectorTitleEl;
 let stageEl;
 let resizeObserver;
 let renderedInspectorNodeId = null;
@@ -75,6 +78,7 @@ export function initGraphShell() {
   edgesEl = document.getElementById("graphEdges");
   editorEl = document.getElementById("nodeEditor");
   inspectorEl = document.getElementById("nodeInspector");
+  inspectorTitleEl = document.getElementById("nodeInspectorTitle");
   stageEl = document.getElementById("stage");
 
   if (!nodesEl || !edgesEl || !editorEl || !inspectorEl) return;
@@ -164,9 +168,10 @@ function initPaletteDragAndDrop() {
     if (!type) return;
     e.preventDefault();
     if (edge?.edgeId) {
-      insertNodeOnEdge(edge.edgeId, type, {
-        position: clientToWorld(e.clientX, e.clientY),
+      const inserted = insertNodeOnEdge(edge.edgeId, type, {
+        position: nodePositionFromPoint(clientToWorld(e.clientX, e.clientY)),
       });
+      if (!inserted) createNodeFromPalette(type, clientToWorld(e.clientX, e.clientY));
       return;
     }
     createNodeFromPalette(type, clientToWorld(e.clientX, e.clientY));
@@ -256,9 +261,10 @@ function startPalettePointerDrag(event, item) {
       const edge = findInsertTargetAt(ev.clientX, ev.clientY);
       clearInsertHighlight();
       if (edge?.edgeId) {
-        insertNodeOnEdge(edge.edgeId, type, {
-          position: clientToWorld(ev.clientX, ev.clientY),
+        const inserted = insertNodeOnEdge(edge.edgeId, type, {
+          position: nodePositionFromPoint(clientToWorld(ev.clientX, ev.clientY)),
         });
+        if (!inserted) createNodeFromPalette(type, clientToWorld(ev.clientX, ev.clientY));
       } else {
         createNodeFromPalette(type, clientToWorld(ev.clientX, ev.clientY));
       }
@@ -400,6 +406,7 @@ function startEditorPan(e) {
 
 function onGraphPointerDown(e) {
   if (e.button !== 0) return;
+  if (e.target.closest("[data-node-action]")) return;
 
   const socket = e.target.closest(".graph-socket-hit");
   if (socket) {
@@ -484,10 +491,12 @@ function startNodeDrag(e, nodeEl) {
     }
     liveEl.style.left = `${toSceneX(nextX)}px`;
     liveEl.style.top = `${toSceneY(nextY)}px`;
+    const edge = findInsertTargetForNodeAt(nodeId, ev.clientX, ev.clientY);
+    setInsertHighlight(edge?.edgeId ?? "");
     scheduleEdgeRender();
   };
 
-  const onUp = () => {
+  const onUp = (ev) => {
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
     document.removeEventListener("pointercancel", onUp);
@@ -498,8 +507,15 @@ function startNodeDrag(e, nodeEl) {
     } catch (_) {}
     document.body.classList.remove("dragging-node");
     if (!moved) {
+      clearInsertHighlight();
       selectNode(nodeId);
     } else {
+      const edge = findInsertTargetForNodeAt(nodeId, ev.clientX, ev.clientY);
+      clearInsertHighlight();
+      if (edge?.edgeId && insertExistingNodeOnEdge(nodeId, edge.edgeId)) {
+        return;
+      }
+
       const liveSelected = nodesEl.querySelector(`[data-node-id="${cssEscape(nodeId)}"]`);
       liveSelected?.classList.add("selected");
       const previouslySelected = getState().graph.selectedNodeId;
@@ -687,6 +703,18 @@ function findInsertTargetAt(clientX, clientY) {
   );
 }
 
+function findInsertTargetForNodeAt(nodeId, clientX, clientY) {
+  const target = findInsertTargetAt(clientX, clientY);
+  if (!target?.edgeId || edgeTouchesNode(target.edgeId, nodeId)) return null;
+  return target;
+}
+
+function edgeTouchesNode(edgeId, nodeId) {
+  const { graph } = getState();
+  const edge = graph.edges.find((item) => item.id === edgeId);
+  return Boolean(edge && (edge.fromNode === nodeId || edge.toNode === nodeId));
+}
+
 function getHighlightedInsertEdge() {
   if (!insertHighlightEdgeId) return null;
   const el = edgesEl.querySelector(`[data-edge-id="${insertHighlightEdgeId}"]`);
@@ -754,6 +782,18 @@ function clearInsertHighlight() {
 }
 
 function onNodeClick(event) {
+  const action = event.target.closest("[data-node-action]");
+  if (action) {
+    event.preventDefault();
+    event.stopPropagation();
+    const node = action.closest("[data-node-id]");
+    if (!node) return;
+    if (action.dataset.nodeAction === "toggle-bypass") {
+      toggleNodeBypass(node.dataset.nodeId);
+    }
+    return;
+  }
+
   const node = event.target.closest("[data-node-id]");
   if (!node) return;
   selectNode(node.dataset.nodeId);
@@ -1088,24 +1128,36 @@ function renderEdges() {
 function renderNode(node, selectedNodeId) {
   const definition = getNodeDefinition(node.type);
   const selected = node.id === selectedNodeId ? " selected" : "";
+  const bypassed = node.bypassed ? " is-bypassed" : "";
+  const family = familySlug(definition?.family);
+  const canBypass = node.type !== "source" && node.type !== "viewer-output";
 
   return `
-    <button
-      class="graph-node${selected}"
-      type="button"
+    <div
+      class="graph-node graph-node--${family}${selected}${bypassed}"
+      role="button"
+      tabindex="0"
       draggable="false"
       data-node-id="${escapeHtml(node.id)}"
+      data-node-family="${escapeHtml(family)}"
       style="left:${toSceneX(node.x)}px;top:${toSceneY(node.y)}px"
       title="${escapeHtml(node.id)}"
     >
       <div class="graph-node-head">
         <span class="graph-node-title">${escapeHtml(node.label)}</span>
-        <span class="graph-node-family">${escapeHtml(definition?.family ?? "Node")}</span>
+        <span class="graph-node-head-actions">
+          ${
+            canBypass
+              ? `<button class="graph-node-action" type="button" data-node-action="toggle-bypass" title="${node.bypassed ? "Enable node" : "Bypass node"}" aria-label="${node.bypassed ? "Enable node" : "Bypass node"}">${node.bypassed ? "○" : "●"}</button>`
+              : ""
+          }
+          <span class="graph-node-family">${escapeHtml(definition?.family ?? "Node")}</span>
+        </span>
       </div>
       <div class="graph-node-rows">
         ${renderSocketRows(node)}
       </div>
-    </button>
+    </div>
   `;
 }
 
@@ -1134,6 +1186,7 @@ function renderSocket(socket, kind, nodeId) {
       data-socket-node="${escapeHtml(nodeId)}"
       data-socket-name="${escapeHtml(socket.name)}"
       data-socket-kind="${kind}"
+      data-socket-type="${escapeHtml(socket.type ?? "image")}"
     ><span class="graph-socket-dot"></span></span>
   `;
   const label = `<span class="graph-socket-label">${escapeHtml(socket.label)}</span>`;
@@ -1143,6 +1196,10 @@ function renderSocket(socket, kind, nodeId) {
       ${kind === "input" ? `${hit}${label}` : `${label}${hit}`}
     </span>
   `;
+}
+
+function familySlug(value) {
+  return String(value ?? "node").toLowerCase().replace(/[^a-z0-9]+/g, "-") || "node";
 }
 
 function renderEdge(edge, graph) {
@@ -1171,21 +1228,21 @@ function renderInspector() {
   renderedInspectorNodeId = node?.id ?? null;
 
   if (!node) {
+    syncInspectorTitle(null);
     inspectorEl.innerHTML = renderEmptyInspector();
     return;
   }
 
-  const definition = getNodeDefinition(node.type);
+  syncInspectorTitle(node);
 
   inspectorEl.innerHTML = `
-    <section class="node-panel-section">
-      <p class="eyebrow">Selected Node</p>
-      <h3>${escapeHtml(node.label)}</h3>
-      <p class="hint">${escapeHtml(definition?.family ?? "Node")}</p>
-    </section>
-
     ${renderNodeSpecifics(node)}
   `;
+}
+
+function syncInspectorTitle(node) {
+  if (!inspectorTitleEl) return;
+  inspectorTitleEl.textContent = node?.label ?? "No node selected";
 }
 
 function renderNodeSpecifics(node) {
@@ -1202,20 +1259,36 @@ function renderNodeSpecifics(node) {
       return renderRgbToBwNode(node);
     case "tone-map":
       return renderToneMapNode(node);
+    case "hsv":
+      return renderHsvNode(node);
+    case "rgb-curves":
+      return renderRgbCurvesNode(node);
     case "blur":
       return renderBlurNode(node);
     case "pixelate":
       return renderPixelateNode(node);
     case "scale":
       return renderScaleNode(node);
+    case "transform":
+      return renderTransformNode(node);
+    case "crop":
+      return renderCropNode(node);
+    case "flip":
+      return renderFlipNode(node);
     case "dither":
       return renderDitherNode(node);
     case "glare":
       return renderGlareNode(node);
     case "lens-distort":
       return renderLensDistortNode(node);
+    case "displace":
+      return renderDisplaceNode(node);
     case "mix":
       return renderMixNode(node);
+    case "value":
+      return renderValueNode(node);
+    case "math":
+      return renderMathNode(node);
     case "viewer-output":
       return renderViewerOutputNode(node);
     default:
@@ -1455,6 +1528,38 @@ function renderToneMapNode(node) {
   `;
 }
 
+function renderHsvNode(node) {
+  const params = node.params;
+  return `
+    <section class="node-panel-section">
+      ${renderRangeField("Hue", "hue", params.hue, -180, 180, `${params.hue}°`)}
+      ${renderRangeField("Saturation", "saturation", params.saturation, 0, 400, `${params.saturation}%`)}
+      ${renderRangeField("Value", "value", params.value, 0, 400, `${params.value}%`)}
+    </section>
+  `;
+}
+
+function renderRgbCurvesNode(node) {
+  const params = node.params;
+  const active = String(params.activeChannel ?? "master");
+  const prefix = active === "red" || active === "green" || active === "blue" ? active : "master";
+  const label = prefix.charAt(0).toUpperCase() + prefix.slice(1);
+  return `
+    <section class="node-panel-section">
+      ${renderSelectField("Channel", "activeChannel", prefix, [
+        ["master", "Master"],
+        ["red", "Red"],
+        ["green", "Green"],
+        ["blue", "Blue"],
+      ])}
+      ${renderRangeField(`${label} Black`, `${prefix}Low`, params[`${prefix}Low`], 0, 255, String(params[`${prefix}Low`]))}
+      ${renderRangeField(`${label} Mid`, `${prefix}Mid`, params[`${prefix}Mid`], 0, 255, String(params[`${prefix}Mid`]))}
+      ${renderRangeField(`${label} White`, `${prefix}High`, params[`${prefix}High`], 0, 255, String(params[`${prefix}High`]))}
+      <p class="hint">Three-point piecewise curve: black, mid, and white output values.</p>
+    </section>
+  `;
+}
+
 function renderPixelateNode(node) {
   const params = node.params;
   return `
@@ -1475,6 +1580,50 @@ function renderScaleNode(node) {
         ["linear", "Linear (smooth)"],
         ["nearest", "Nearest (pixelated)"],
       ])}
+    </section>
+  `;
+}
+
+function renderTransformNode(node) {
+  const params = node.params;
+  const filter = params.filter ?? "linear";
+  return `
+    <section class="node-panel-section">
+      ${renderRangeField("Translate X", "translateX", params.translateX, -100, 100, `${params.translateX}%`)}
+      ${renderRangeField("Translate Y", "translateY", params.translateY, -100, 100, `${params.translateY}%`)}
+      ${renderRangeField("Rotation", "rotation", params.rotation, -180, 180, `${params.rotation}°`)}
+      ${renderRangeField("Scale", "scale", params.scale, 1, 400, `${params.scale}%`)}
+      ${renderSelectField("Filter", "filter", filter, [
+        ["linear", "Linear (smooth)"],
+        ["nearest", "Nearest (pixelated)"],
+      ])}
+    </section>
+  `;
+}
+
+function renderCropNode(node) {
+  const params = node.params;
+  const mode = String(params.mode ?? "mask");
+  return `
+    <section class="node-panel-section">
+      ${renderSelectField("Mode", "mode", mode, [
+        ["mask", "Mask outside crop"],
+        ["fit", "Fit crop to frame"],
+      ])}
+      ${renderRangeField("Left", "left", params.left, 0, 95, `${params.left}%`)}
+      ${renderRangeField("Right", "right", params.right, 0, 95, `${params.right}%`)}
+      ${renderRangeField("Top", "top", params.top, 0, 95, `${params.top}%`)}
+      ${renderRangeField("Bottom", "bottom", params.bottom, 0, 95, `${params.bottom}%`)}
+    </section>
+  `;
+}
+
+function renderFlipNode(node) {
+  const params = node.params;
+  return `
+    <section class="node-panel-section">
+      ${renderCheckboxField("Horizontal", "horizontal", params.horizontal)}
+      ${renderCheckboxField("Vertical", "vertical", params.vertical)}
     </section>
   `;
 }
@@ -1566,6 +1715,34 @@ function renderLensDistortNode(node) {
   `;
 }
 
+function renderDisplaceNode(node) {
+  const params = node.params;
+  const mode = String(params.mode ?? "wave");
+  const filter = params.filter ?? "linear";
+  const waveFields = mode === "wave"
+    ? `
+      ${renderRangeField("Frequency", "frequency", params.frequency, 1, 32, `${params.frequency}x`)}
+      ${renderRangeField("Phase", "phase", params.phase, 0, 360, `${params.phase}°`)}
+    `
+    : `<p class="hint">Connect an image to the Map input. Red offsets X, green offsets Y.</p>`;
+  return `
+    <section class="node-panel-section">
+      ${renderSelectField("Mode", "mode", mode, [
+        ["wave", "Wave"],
+        ["map", "Map input"],
+      ])}
+      ${renderRangeField("X Amount", "xAmount", params.xAmount, -200, 200, `${params.xAmount}px`)}
+      ${renderRangeField("Y Amount", "yAmount", params.yAmount, -200, 200, `${params.yAmount}px`)}
+      ${renderRangeField("Strength", "strength", params.strength, 0, 400, `${params.strength}%`)}
+      ${waveFields}
+      ${renderSelectField("Filter", "filter", filter, [
+        ["linear", "Linear"],
+        ["nearest", "Nearest"],
+      ])}
+    </section>
+  `;
+}
+
 function renderMixNode(node) {
   const params = node.params;
 
@@ -1580,6 +1757,38 @@ function renderMixNode(node) {
         ["difference", "Difference"],
       ])}
       ${renderRangeField("Factor", "factor", params.factor, 0, 100, `${params.factor}%`)}
+    </section>
+  `;
+}
+
+function renderValueNode(node) {
+  const params = node.params;
+  return `
+    <section class="node-panel-section">
+      ${renderRangeField("Value", "value", params.value, -1000, 1000, String(params.value))}
+      <p class="hint">Utility output for future parameter wiring.</p>
+    </section>
+  `;
+}
+
+function renderMathNode(node) {
+  const params = node.params;
+  return `
+    <section class="node-panel-section">
+      ${renderSelectField("Operation", "operation", params.operation, [
+        ["add", "Add"],
+        ["subtract", "Subtract"],
+        ["multiply", "Multiply"],
+        ["divide", "Divide"],
+        ["power", "Power"],
+        ["min", "Minimum"],
+        ["max", "Maximum"],
+        ["modulo", "Modulo"],
+      ])}
+      ${renderRangeField("A", "a", params.a, -1000, 1000, String(params.a))}
+      ${renderRangeField("B", "b", params.b, -1000, 1000, String(params.b))}
+      ${renderCheckboxField("Clamp 0..1", "clamp", params.clamp)}
+      <p class="hint">Math nodes compute scalar values; parameter wiring comes next.</p>
     </section>
   `;
 }
@@ -1735,6 +1944,7 @@ function updateInlineReadout(control) {
   if (!readout) return;
 
   const value = readControlValue(control);
+  const node = getSelectedNode();
   switch (control.dataset.nodeParam) {
     case "brightness":
       readout.textContent = formatSignedValue(value);
@@ -1745,10 +1955,24 @@ function updateInlineReadout(control) {
     case "errorStrength":
     case "strength":
     case "factor":
+    case "translateX":
+    case "translateY":
+    case "left":
+    case "right":
+    case "top":
+    case "bottom":
       readout.textContent = `${value}%`;
+      break;
+    case "value":
+      readout.textContent = node?.type === "hsv" ? `${value}%` : String(value);
       break;
     case "gamma":
       readout.textContent = (value / 100).toFixed(2);
+      break;
+    case "hue":
+    case "rotation":
+    case "phase":
+      readout.textContent = `${value}°`;
       break;
     case "exposure":
       readout.textContent = formatSignedStops(value);
@@ -1756,13 +1980,12 @@ function updateInlineReadout(control) {
     case "blurRadius":
     case "radius":
     case "amplitude":
+    case "xAmount":
+    case "yAmount":
       readout.textContent = `${value}px`;
       break;
     case "frequency":
       readout.textContent = `${value}x`;
-      break;
-    case "phase":
-      readout.textContent = `${value}°`;
       break;
     case "viewer-fps":
       readout.textContent = formatFpsReadout(value, getState().source.sourceFps);
@@ -1817,8 +2040,9 @@ function getViewportCenterWorld() {
 }
 
 function insertPaletteNodeAtDefault(type) {
+  const definition = getNodeDefinition(type);
   const viewerEdgeId = getViewerInputEdgeId();
-  if (viewerEdgeId) {
+  if (definition?.chainable !== false && viewerEdgeId) {
     return insertNodeOnEdge(viewerEdgeId, type);
   }
   return createNodeFromPalette(type, getViewportCenterWorld());
@@ -1826,10 +2050,14 @@ function insertPaletteNodeAtDefault(type) {
 
 function createNodeFromPalette(type, point) {
   if (!type || !point) return null;
-  return createFreeNode(type, {
+  return createFreeNode(type, nodePositionFromPoint(point));
+}
+
+function nodePositionFromPoint(point) {
+  return {
     x: point.x - NODE_WIDTH / 2,
-    y: point.y - 24,
-  });
+    y: point.y - NODE_HEIGHT / 2,
+  };
 }
 
 function getViewerInputEdgeId() {
@@ -1851,13 +2079,21 @@ function initGraphContextMenu() {
     <button data-add-node="invert">Add Invert</button>
     <button data-add-node="rgb-to-bw">Add RGB to BW</button>
     <button data-add-node="tone-map">Add Tone Map</button>
+    <button data-add-node="hsv">Add HSV</button>
+    <button data-add-node="rgb-curves">Add RGB Curves</button>
     <button data-add-node="blur">Add Blur</button>
     <button data-add-node="pixelate">Add Pixelate</button>
     <button data-add-node="scale">Add Scale</button>
+    <button data-add-node="transform">Add Transform</button>
+    <button data-add-node="crop">Add Crop</button>
+    <button data-add-node="flip">Add Flip</button>
     <button data-add-node="dither">Add Dither</button>
     <button data-add-node="glare">Add Glare</button>
     <button data-add-node="lens-distort">Add Lens Distortion</button>
+    <button data-add-node="displace">Add Displace</button>
     <button data-add-node="mix">Add Mix</button>
+    <button data-add-node="value">Add Value</button>
+    <button data-add-node="math">Add Math</button>
   `;
 
   graphMenuEl.addEventListener("click", (event) => {
@@ -1866,9 +2102,10 @@ function initGraphContextMenu() {
 
     const type = button.dataset.addNode;
     if (graphMenuState?.edgeId) {
-      insertNodeOnEdge(graphMenuState.edgeId, type, {
-        position: graphMenuState.point,
+      const inserted = insertNodeOnEdge(graphMenuState.edgeId, type, {
+        position: nodePositionFromPoint(graphMenuState.point),
       });
+      if (!inserted) createNodeFromPalette(type, graphMenuState.point);
     } else {
       createNodeFromPalette(type, graphMenuState?.point ?? getViewportCenterWorld());
     }

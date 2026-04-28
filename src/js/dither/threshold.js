@@ -4,7 +4,6 @@ import {
   quantizeBW,
   writeMonochrome,
   writePixel,
-  preAdjustRGB,
   isMonochromePalette,
 } from "./core.js";
 import { nearestColorInPalette } from "../palettes.js";
@@ -43,18 +42,20 @@ function runThresholdRGB(imageData, params, palette) {
   const data = imageData.data;
   const threshold = clamp(Math.round(params.threshold ?? 128), 0, 255);
   const invert = Boolean(params.invert);
+  const shift = threshold - 128;
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const offset = (y * width + x) * 4;
-      const adjusted = preAdjustRGB(
-        data[offset],
-        data[offset + 1],
-        data[offset + 2],
-        threshold,
-        invert
-      );
-      const matched = nearestColorInPalette(adjusted[0], adjusted[1], adjusted[2], palette);
+      let r = clamp(data[offset] + shift, 0, 255);
+      let g = clamp(data[offset + 1] + shift, 0, 255);
+      let b = clamp(data[offset + 2] + shift, 0, 255);
+      if (invert) {
+        r = 255 - r;
+        g = 255 - g;
+        b = 255 - b;
+      }
+      const matched = nearestColorInPalette(r, g, b, palette);
       writePixel(data, offset, matched[0], matched[1], matched[2]);
     }
   }

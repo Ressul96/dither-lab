@@ -9,6 +9,8 @@ import { getPaletteExtremes } from "../palettes.js";
 
 const LEVELS = 8;
 const SPACING = [1, 2, 3, 4, 5, 7, 12, Number.POSITIVE_INFINITY];
+const DOT_TILE_SIZE = 8;
+const DOT_MASKS = buildDotMasks(DOT_TILE_SIZE);
 
 function levelFromLuma(luma, threshold) {
   const shifted = clamp(luma - (threshold - 128), 0, 255);
@@ -41,6 +43,27 @@ function writePatternPixel(data, offset, isDark, palette, fg, bg, invert) {
   }
   const color = isDark ? fg : bg;
   writePixel(data, offset, color[0], color[1], color[2]);
+}
+
+function buildDotMasks(tileSize) {
+  const masks = new Uint8Array(LEVELS * tileSize * tileSize);
+  const tileCenter = tileSize / 2;
+  const maxRadius = tileCenter * Math.SQRT2;
+
+  for (let level = 0; level < LEVELS; level++) {
+    const radius = maxRadius * (1 - level / LEVELS);
+    const radiusSq = radius * radius;
+    for (let ty = 0; ty < tileSize; ty++) {
+      for (let tx = 0; tx < tileSize; tx++) {
+        const dx = tx - tileCenter + 0.5;
+        const dy = ty - tileCenter + 0.5;
+        const isDark = level <= 0 || (level < LEVELS - 1 && dx * dx + dy * dy <= radiusSq);
+        masks[(level * tileSize + ty) * tileSize + tx] = isDark ? 1 : 0;
+      }
+    }
+  }
+
+  return masks;
 }
 
 function runHorizontalLines(imageData, params, palette) {
@@ -126,30 +149,14 @@ function runDotPattern(imageData, params, palette) {
   const invert = Boolean(params.invert);
   const { fg, bg } = resolveDarkLight(invert, palette);
 
-  const tileSize = 8;
-  const tileCenter = tileSize / 2;
-  const maxRadius = tileCenter * Math.SQRT2;
-
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const offset = (y * width + x) * 4;
       const luma = luminance8(data[offset], data[offset + 1], data[offset + 2]);
       const level = levelFromLuma(luma, threshold);
-
-      let isDark;
-      if (level >= LEVELS - 1) {
-        isDark = false;
-      } else if (level <= 0) {
-        isDark = true;
-      } else {
-        const tx = x % tileSize;
-        const ty = y % tileSize;
-        const dx = tx - tileCenter + 0.5;
-        const dy = ty - tileCenter + 0.5;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const radius = maxRadius * (1 - level / LEVELS);
-        isDark = dist <= radius;
-      }
+      const tx = x % DOT_TILE_SIZE;
+      const ty = y % DOT_TILE_SIZE;
+      const isDark = DOT_MASKS[(level * DOT_TILE_SIZE + ty) * DOT_TILE_SIZE + tx] === 1;
 
       writePatternPixel(data, offset, isDark, palette, fg, bg, invert);
     }

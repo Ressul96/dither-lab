@@ -70,19 +70,6 @@ export function writePixel(data, offset, r, g, b) {
   // Alpha preserved: caller already has source alpha at offset+3.
 }
 
-export function preAdjustRGB(r, g, b, threshold, invert) {
-  const shift = threshold - 128;
-  let nr = clamp(r + shift, 0, 255);
-  let ng = clamp(g + shift, 0, 255);
-  let nb = clamp(b + shift, 0, 255);
-  if (invert) {
-    nr = 255 - nr;
-    ng = 255 - ng;
-    nb = 255 - nb;
-  }
-  return [nr, ng, nb];
-}
-
 export function isMonochromePalette(palette) {
   return !palette || palette.id === "monochrome";
 }
