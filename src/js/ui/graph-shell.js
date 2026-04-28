@@ -9,9 +9,11 @@ import {
   insertExistingNodeOnEdge,
   insertNodeOnEdge,
   mutateNodePosition,
+  removeEdgesById,
   removeNode,
   replacePaletteUsages,
   selectNode,
+  toggleParamExposed,
   toggleNodeBypass,
   updateNodeParams,
 } from "../graph.js";
@@ -88,6 +90,8 @@ export function initGraphShell() {
   inspectorEl.addEventListener("input", onInspectorInput);
   inspectorEl.addEventListener("change", onInspectorChange);
   inspectorEl.addEventListener("click", onInspectorClick);
+  inspectorEl.addEventListener("pointerdown", onInspectorPointerDown);
+  inspectorEl.addEventListener("contextmenu", onInspectorContextMenu);
   subscribePalettes(onPaletteRegistryChange);
   initPaletteDragAndDrop();
   initViewportInteractions();
@@ -353,8 +357,105 @@ function initViewportInteractions() {
   editorEl.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
     if (e.target.closest("[data-node-id]") || e.target.closest(".graph-socket-hit")) return;
+    if (e.metaKey || e.ctrlKey) {
+      startEdgeCut(e);
+      return;
+    }
     startEditorPan(e);
   });
+}
+
+function startEdgeCut(e) {
+  e.preventDefault();
+  const points = [{
+    scene: clientToScene(e.clientX, e.clientY),
+    client: { x: e.clientX, y: e.clientY },
+  }];
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("class", "graph-cut-path");
+  edgesEl.appendChild(path);
+
+  const updatePath = () => {
+    const d = points
+      .map((point, index) => `${index === 0 ? "M" : "L"} ${point.scene.x} ${point.scene.y}`)
+      .join(" ");
+    path.setAttribute("d", d);
+  };
+  updatePath();
+
+  document.body.classList.add("cutting-edges");
+  try {
+    editorEl.setPointerCapture(e.pointerId);
+  } catch {}
+
+  const onMove = (ev) => {
+    const last = points[points.length - 1].client;
+    if (Math.hypot(ev.clientX - last.x, ev.clientY - last.y) < 4) return;
+    points.push({
+      scene: clientToScene(ev.clientX, ev.clientY),
+      client: { x: ev.clientX, y: ev.clientY },
+    });
+    updatePath();
+  };
+
+  const onUp = () => {
+    editorEl.removeEventListener("pointermove", onMove);
+    editorEl.removeEventListener("pointerup", onUp);
+    editorEl.removeEventListener("pointercancel", onUp);
+    document.body.classList.remove("cutting-edges");
+    try {
+      editorEl.releasePointerCapture(e.pointerId);
+    } catch {}
+
+    const cuts = findEdgesIntersectingStroke(points.map((point) => point.client));
+    path.remove();
+    if (cuts.length > 0) removeEdgesById(cuts);
+  };
+
+  editorEl.addEventListener("pointermove", onMove);
+  editorEl.addEventListener("pointerup", onUp);
+  editorEl.addEventListener("pointercancel", onUp);
+}
+
+function findEdgesIntersectingStroke(strokeClientPoints) {
+  if (!strokeClientPoints || strokeClientPoints.length < 2) return [];
+  const cut = [];
+  for (const path of edgesEl.querySelectorAll(".graph-edge[data-edge-id]")) {
+    if (edgeCrossesStroke(path, strokeClientPoints)) {
+      cut.push(path.dataset.edgeId);
+    }
+  }
+  return cut;
+}
+
+function edgeCrossesStroke(path, strokeClientPoints) {
+  const total = path.getTotalLength?.() ?? 0;
+  if (!Number.isFinite(total) || total <= 0) return false;
+  const matrix = path.getScreenCTM?.() ?? null;
+  const sampleCount = Math.max(16, Math.min(96, Math.round(total / 6)));
+  const edgePoints = [];
+  for (let i = 0; i <= sampleCount; i++) {
+    const point = path.getPointAtLength((total * i) / sampleCount);
+    edgePoints.push(toScreenPoint(point, matrix));
+  }
+
+  for (let i = 0; i < edgePoints.length - 1; i++) {
+    for (let j = 0; j < strokeClientPoints.length - 1; j++) {
+      if (segmentsIntersect(edgePoints[i], edgePoints[i + 1], strokeClientPoints[j], strokeClientPoints[j + 1])) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function segmentsIntersect(a, b, c, d) {
+  const denom = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+  if (denom === 0) return false;
+  const t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / denom;
+  const u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / denom;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
 }
 
 function zoomGraphAtPointer(e) {
@@ -848,6 +949,21 @@ function onInspectorChange(event) {
 }
 
 function onInspectorClick(event) {
+  const socketToggle = event.target.closest("[data-param-socket-toggle]");
+  if (socketToggle) {
+    event.preventDefault();
+    const node = getSelectedNode();
+    if (!node) return;
+    toggleParamExposed(node.id, socketToggle.dataset.paramSocketToggle);
+    return;
+  }
+
+  const curveAction = event.target.closest("[data-curve-action]");
+  if (curveAction) {
+    handleCurveClick(curveAction);
+    return;
+  }
+
   const paletteControl = event.target.closest("[data-palette-action]");
   if (!paletteControl) return;
   if (paletteControl.tagName === "INPUT") return;
@@ -1131,6 +1247,7 @@ function renderNode(node, selectedNodeId) {
   const bypassed = node.bypassed ? " is-bypassed" : "";
   const family = familySlug(definition?.family);
   const canBypass = node.type !== "source" && node.type !== "viewer-output";
+  const bypassIcon = node.bypassed ? eyeClosedSvg() : eyeOpenSvg();
 
   return `
     <div
@@ -1148,7 +1265,7 @@ function renderNode(node, selectedNodeId) {
         <span class="graph-node-head-actions">
           ${
             canBypass
-              ? `<button class="graph-node-action" type="button" data-node-action="toggle-bypass" title="${node.bypassed ? "Enable node" : "Bypass node"}" aria-label="${node.bypassed ? "Enable node" : "Bypass node"}">${node.bypassed ? "○" : "●"}</button>`
+              ? `<button class="graph-node-action graph-node-action--visibility" type="button" data-node-action="toggle-bypass" title="${node.bypassed ? "Enable node" : "Bypass node"}" aria-label="${node.bypassed ? "Enable node" : "Bypass node"}">${bypassIcon}</button>`
               : ""
           }
           <span class="graph-node-family">${escapeHtml(definition?.family ?? "Node")}</span>
@@ -1156,9 +1273,25 @@ function renderNode(node, selectedNodeId) {
       </div>
       <div class="graph-node-rows">
         ${renderSocketRows(node)}
+        ${renderExposedParamRows(node)}
       </div>
     </div>
   `;
+}
+
+function eyeOpenSvg() {
+  return `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
+      d="M1.5 8C3 4.6 5.4 3 8 3s5 1.6 6.5 5C13 11.4 10.6 13 8 13S3 11.4 1.5 8Z"/>
+    <circle cx="8" cy="8" r="2.1" fill="currentColor"/>
+  </svg>`;
+}
+
+function eyeClosedSvg() {
+  return `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
+      d="M1.5 5.5C3.4 8 5.4 9.5 8 9.5s4.6-1.5 6.5-4M3 9.5l-1 1.7M13 9.5l1 1.7M6.4 10.4l-.5 2M9.6 10.4l.5 2"/>
+  </svg>`;
 }
 
 function renderSocketRows(node) {
@@ -1173,6 +1306,26 @@ function renderSocketRows(node) {
       </div>
     </div>
   `).join("");
+}
+
+function renderExposedParamRows(node) {
+  const exposed = Array.isArray(node.exposedParams) ? node.exposedParams : [];
+  if (exposed.length === 0) return "";
+  return exposed
+    .map((paramKey) => {
+      const socket = { name: `param:${paramKey}`, label: paramKey, type: "value" };
+      return `
+        <div class="graph-node-row graph-node-row--param">
+          <div class="graph-node-col graph-node-col--input">
+            ${renderSocket(socket, "input", node.id)}
+          </div>
+          <div class="graph-node-col graph-node-col--output">
+            <span class="graph-socket-placeholder"></span>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
 }
 
 function renderSocket(socket, kind, nodeId) {
@@ -1543,21 +1696,236 @@ function renderRgbCurvesNode(node) {
   const params = node.params;
   const active = String(params.activeChannel ?? "master");
   const prefix = active === "red" || active === "green" || active === "blue" ? active : "master";
-  const label = prefix.charAt(0).toUpperCase() + prefix.slice(1);
+  const points = readCurvePoints(node, prefix);
   return `
-    <section class="node-panel-section">
+    <section class="node-panel-section curves-panel">
       ${renderSelectField("Channel", "activeChannel", prefix, [
         ["master", "Master"],
         ["red", "Red"],
         ["green", "Green"],
         ["blue", "Blue"],
       ])}
-      ${renderRangeField(`${label} Black`, `${prefix}Low`, params[`${prefix}Low`], 0, 255, String(params[`${prefix}Low`]))}
-      ${renderRangeField(`${label} Mid`, `${prefix}Mid`, params[`${prefix}Mid`], 0, 255, String(params[`${prefix}Mid`]))}
-      ${renderRangeField(`${label} White`, `${prefix}High`, params[`${prefix}High`], 0, 255, String(params[`${prefix}High`]))}
-      <p class="hint">Three-point piecewise curve: black, mid, and white output values.</p>
+      <div class="curves-editor">
+        ${renderCurveCanvas(points, prefix)}
+      </div>
+      <div class="curves-actions">
+        <button type="button" data-curve-action="reset">Reset Curve</button>
+      </div>
+      <p class="hint">Click curve to add a point. Drag points to remap tones. Right-click a point to delete.</p>
     </section>
   `;
+}
+
+function readCurvePoints(node, channel) {
+  const key = `points_${channel}`;
+  const raw = node?.params?.[key];
+  if (Array.isArray(raw) && raw.length >= 2) return raw;
+  const low = Number(node?.params?.[`${channel}Low`] ?? 0);
+  const mid = Number(node?.params?.[`${channel}Mid`] ?? 128);
+  const high = Number(node?.params?.[`${channel}High`] ?? 255);
+  return [
+    { x: 0, y: clamp(Math.round(low), 0, 255) },
+    { x: 128, y: clamp(Math.round(mid), 0, 255) },
+    { x: 255, y: clamp(Math.round(high), 0, 255) },
+  ];
+}
+
+function renderCurveCanvas(points, channel) {
+  const size = 240;
+  const stroke = curveStrokeColor(channel);
+  const polyline = buildCurvePolyline(points, size);
+  const handles = points
+    .map(
+      (point, index) => `
+        <circle
+          class="curve-handle"
+          data-curve-handle="${index}"
+          cx="${(Number(point.x) / 255) * size}"
+          cy="${size - (Number(point.y) / 255) * size}"
+          r="6"
+        />
+      `
+    )
+    .join("");
+  return `
+    <svg class="curves-svg" viewBox="0 0 ${size} ${size}" data-curve-svg preserveAspectRatio="none">
+      <defs>
+        <pattern id="curveGrid-${escapeHtml(channel)}" width="${size / 4}" height="${size / 4}" patternUnits="userSpaceOnUse">
+          <path d="M ${size / 4} 0 L 0 0 0 ${size / 4}" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+        </pattern>
+      </defs>
+      <rect width="${size}" height="${size}" fill="rgba(0,0,0,0.34)"/>
+      <rect width="${size}" height="${size}" fill="url(#curveGrid-${escapeHtml(channel)})"/>
+      <line x1="0" y1="${size}" x2="${size}" y2="0" stroke="rgba(255,255,255,0.1)" stroke-dasharray="3 4"/>
+      <polyline points="${polyline}" fill="none" stroke="${stroke}" stroke-width="1.7" stroke-linejoin="round"/>
+      ${handles}
+    </svg>
+  `;
+}
+
+function curveStrokeColor(channel) {
+  switch (channel) {
+    case "red":
+      return "#ff5b5b";
+    case "green":
+      return "#69d27a";
+    case "blue":
+      return "#6aa6ff";
+    case "master":
+    default:
+      return "#e5e7eb";
+  }
+}
+
+function buildCurvePolyline(rawPoints, size) {
+  const lut = buildCurveLutLocal(rawPoints);
+  const out = [];
+  for (let x = 0; x <= 255; x += 4) {
+    const y = lut[x];
+    out.push(`${(x / 255) * size},${size - (y / 255) * size}`);
+  }
+  out.push(`${size},${size - (lut[255] / 255) * size}`);
+  return out.join(" ");
+}
+
+function buildCurveLutLocal(rawPoints) {
+  const points = normalizeCurvePoints(rawPoints);
+  const lut = new Array(256);
+  if (points.length < 2) {
+    for (let i = 0; i < 256; i++) lut[i] = i;
+    return lut;
+  }
+
+  for (let x = 0; x < 256; x++) {
+    if (x <= points[0].x) {
+      lut[x] = points[0].y;
+      continue;
+    }
+    if (x >= points[points.length - 1].x) {
+      lut[x] = points[points.length - 1].y;
+      continue;
+    }
+    let index = 0;
+    while (index < points.length - 1 && x > points[index + 1].x) index++;
+    const a = points[index];
+    const b = points[index + 1];
+    const t = (x - a.x) / Math.max(1, b.x - a.x);
+    const smooth = t * t * (3 - 2 * t);
+    lut[x] = clamp(Math.round(a.y + (b.y - a.y) * smooth), 0, 255);
+  }
+  return lut;
+}
+
+function normalizeCurvePoints(rawPoints) {
+  return (Array.isArray(rawPoints) ? rawPoints : [])
+    .map((point) => ({
+      x: clamp(Math.round(Number(point?.x)), 0, 255),
+      y: clamp(Math.round(Number(point?.y)), 0, 255),
+    }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x);
+}
+
+function handleCurveClick(_action) {
+  const node = getSelectedNode();
+  if (!node || node.type !== "rgb-curves") return;
+  const channel = normalizeCurveChannel(node.params?.activeChannel);
+  updateNodeParams(node.id, {
+    [`points_${channel}`]: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+  });
+  renderInspector();
+}
+
+function onInspectorPointerDown(event) {
+  const svg = event.target.closest("[data-curve-svg]");
+  if (!svg) return;
+  const node = getSelectedNode();
+  if (!node || node.type !== "rgb-curves") return;
+  event.preventDefault();
+
+  const handle = event.target.closest("[data-curve-handle]");
+  const channel = normalizeCurveChannel(node.params?.activeChannel);
+  const key = `points_${channel}`;
+  const rect = svg.getBoundingClientRect();
+  const toCurve = (clientX, clientY) => {
+    const u = clamp((clientX - rect.left) / rect.width, 0, 1);
+    const v = clamp((clientY - rect.top) / rect.height, 0, 1);
+    return {
+      x: clamp(Math.round(u * 255), 0, 255),
+      y: clamp(Math.round((1 - v) * 255), 0, 255),
+    };
+  };
+
+  let points = normalizeCurvePoints(readCurvePoints(node, channel));
+  let activeIndex;
+  if (handle) {
+    activeIndex = Number(handle.dataset.curveHandle);
+  } else {
+    const cursor = toCurve(event.clientX, event.clientY);
+    points.push(cursor);
+    points.sort((a, b) => a.x - b.x);
+    updateNodeParams(node.id, { [key]: points });
+    renderInspector();
+    return;
+  }
+
+  inspectorEditing = true;
+  try {
+    svg.setPointerCapture(event.pointerId);
+  } catch {}
+
+  const onMove = (ev) => {
+    const selected = getSelectedNode() ?? node;
+    const updated = normalizeCurvePoints(readCurvePoints(selected, channel));
+    if (activeIndex < 0 || activeIndex >= updated.length) return;
+
+    const next = toCurve(ev.clientX, ev.clientY);
+    const isFirst = activeIndex === 0;
+    const isLast = activeIndex === updated.length - 1;
+    if (isFirst) next.x = 0;
+    if (isLast) next.x = 255;
+    if (!isFirst && !isLast) {
+      next.x = clamp(next.x, updated[activeIndex - 1].x + 1, updated[activeIndex + 1].x - 1);
+    }
+    updated[activeIndex] = next;
+    updateNodeParams(node.id, { [key]: updated });
+    renderInspector();
+  };
+
+  const onUp = () => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.removeEventListener("pointercancel", onUp);
+    inspectorEditing = false;
+    try {
+      svg.releasePointerCapture(event.pointerId);
+    } catch {}
+  };
+
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("pointercancel", onUp);
+}
+
+function onInspectorContextMenu(event) {
+  const handle = event.target.closest("[data-curve-handle]");
+  if (!handle) return;
+  const node = getSelectedNode();
+  if (!node || node.type !== "rgb-curves") return;
+  event.preventDefault();
+
+  const channel = normalizeCurveChannel(node.params?.activeChannel);
+  const key = `points_${channel}`;
+  const points = normalizeCurvePoints(readCurvePoints(node, channel));
+  const index = Number(handle.dataset.curveHandle);
+  if (!Number.isFinite(index) || index <= 0 || index >= points.length - 1) return;
+  points.splice(index, 1);
+  updateNodeParams(node.id, { [key]: points });
+  renderInspector();
+}
+
+function normalizeCurveChannel(value) {
+  return ["master", "red", "green", "blue"].includes(value) ? value : "master";
 }
 
 function renderPixelateNode(node) {
@@ -1821,18 +2189,18 @@ function renderEmptyInspector() {
   `;
 }
 
-// `readout` is the formatted hint (e.g. "100% barrel"); it stays on the
-// label as a unit suffix while the editable number input takes the right
-// edge of the row, paired with the slider on the same line.
-function renderRangeField(label, key, value, min, max, readout) {
+function renderRangeField(label, key, value, min, max, _readout) {
   const safeKey = escapeHtml(key);
   const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
-  const suffix = readout && readout !== String(numericValue)
-    ? `<span class="field-suffix" data-param-readout="${safeKey}">${escapeHtml(readout)}</span>`
-    : `<span class="field-suffix" data-param-readout="${safeKey}"></span>`;
   return `
     <div class="field range-field">
-      <label>${escapeHtml(label)}${suffix}</label>
+      <label>
+        <span class="field-label-row">
+          ${renderParamSocketDot(safeKey)}
+          <span class="field-label-text">${escapeHtml(label)}</span>
+        </span>
+        <span class="field-suffix" data-param-readout="${safeKey}"></span>
+      </label>
       <div class="range-row">
         <input
           type="range"
@@ -1854,6 +2222,19 @@ function renderRangeField(label, key, value, min, max, readout) {
       </div>
     </div>
   `;
+}
+
+function renderParamSocketDot(safeKey) {
+  const node = getSelectedNode();
+  if (!node || node.type === "source" || node.type === "viewer-output") return "";
+  const exposed = Array.isArray(node.exposedParams) && node.exposedParams.includes(safeKey);
+  return `<button
+    type="button"
+    class="param-socket-toggle${exposed ? " is-exposed" : ""}"
+    data-param-socket-toggle="${safeKey}"
+    aria-label="${exposed ? "Hide parameter socket" : "Expose parameter socket"}"
+    title="${exposed ? "Remove input socket" : "Expose as input socket"}"
+  ></button>`;
 }
 
 function renderSelectField(label, key, value, options) {
@@ -1937,66 +2318,21 @@ function syncSiblingControls(control) {
   }
 }
 
-function updateInlineReadout(control) {
-  const readout = inspectorEl.querySelector(
-    `[data-param-readout="${control.dataset.nodeParam}"]`
-  );
-  if (!readout) return;
-
-  const value = readControlValue(control);
-  const node = getSelectedNode();
-  switch (control.dataset.nodeParam) {
-    case "brightness":
-      readout.textContent = formatSignedValue(value);
-      break;
-    case "contrast":
-    case "saturation":
-    case "scale":
-    case "errorStrength":
-    case "strength":
-    case "factor":
-    case "translateX":
-    case "translateY":
-    case "left":
-    case "right":
-    case "top":
-    case "bottom":
-      readout.textContent = `${value}%`;
-      break;
-    case "value":
-      readout.textContent = node?.type === "hsv" ? `${value}%` : String(value);
-      break;
-    case "gamma":
-      readout.textContent = (value / 100).toFixed(2);
-      break;
-    case "hue":
-    case "rotation":
-    case "phase":
-      readout.textContent = `${value}°`;
-      break;
-    case "exposure":
-      readout.textContent = formatSignedStops(value);
-      break;
-    case "blurRadius":
-    case "radius":
-    case "amplitude":
-    case "xAmount":
-    case "yAmount":
-      readout.textContent = `${value}px`;
-      break;
-    case "frequency":
-      readout.textContent = `${value}x`;
-      break;
-    case "viewer-fps":
-      readout.textContent = formatFpsReadout(value, getState().source.sourceFps);
-      break;
-    default:
-      readout.textContent = String(value);
-      break;
-  }
-}
+function updateInlineReadout(_control) {}
 
 function getSocketPoint(node, kind, socketName) {
+  if (kind === "input" && typeof socketName === "string" && socketName.startsWith("param:")) {
+    const baseRowCount = Math.max(node.inputs.length, node.outputs.length, 1);
+    const exposed = Array.isArray(node.exposedParams) ? node.exposedParams : [];
+    const paramKey = socketName.slice("param:".length);
+    const paramIndex = exposed.indexOf(paramKey);
+    const rowIndex = baseRowCount + Math.max(0, paramIndex);
+    return {
+      x: toSceneX(node.x + 14),
+      y: toSceneY(node.y + SOCKET_Y + rowIndex * SOCKET_STEP),
+    };
+  }
+
   const sockets = kind === "output" ? node.outputs : node.inputs;
   const index = Math.max(0, sockets.findIndex((socket) => socket.name === socketName));
 

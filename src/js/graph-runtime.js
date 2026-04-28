@@ -97,24 +97,29 @@ export function evaluateGraphOutputs(graph, context) {
       continue;
     }
 
+    const effectiveParams = applyParamEdges(node, index, results);
     const inputSockets = inputSocketsFor(node);
     const inputVersions = inputSockets.map((socket) =>
       inputVersionKey(node, index, versions, socket)
     );
-    const paramsHash = `${hashParams(node.params)}bypass=${node.bypassed ? 1 : 0};`;
+    const paramVersions = paramSocketsFor(node).map((socket) =>
+      inputVersionKey(node, index, versions, socket)
+    );
+    const paramsHash = `${hashParams(effectiveParams)}bypass=${node.bypassed ? 1 : 0};`;
     const cached = nodeCache.get(node.id);
     if (
       cached &&
       cached.type === node.type &&
       cached.paramsHash === paramsHash &&
-      arraysEqual(cached.inputVersions, inputVersions)
+      arraysEqual(cached.inputVersions, inputVersions) &&
+      arraysEqual(cached.paramVersions ?? [], paramVersions)
     ) {
       results.set(node.id, cached.output);
       versions.set(node.id, cached.version);
       continue;
     }
 
-    const output = computeNodeOutput(node, index, results);
+    const output = computeNodeOutput({ ...node, params: effectiveParams }, index, results);
     if (output !== null && output !== undefined) {
       // A node may pass its input through unchanged (blur radius=0, lens-
       // distort with no effect, etc.). Caching that buffer would mean the
@@ -141,6 +146,7 @@ export function evaluateGraphOutputs(graph, context) {
           type: node.type,
           paramsHash,
           inputVersions,
+          paramVersions,
           output,
           version,
         });
@@ -220,6 +226,11 @@ function inputSocketsFor(node) {
     default:
       return ["image"];
   }
+}
+
+function paramSocketsFor(node) {
+  if (!Array.isArray(node.exposedParams) || node.exposedParams.length === 0) return [];
+  return node.exposedParams.map((paramKey) => `param:${paramKey}`);
 }
 
 function createRuntimeIndex(graph) {
@@ -387,6 +398,25 @@ function resolveInputValue(node, socketName, index, results, fallback = 0) {
   if (!edge) return Number(fallback) || 0;
   const value = results.get(edge.fromNode);
   return Number.isFinite(Number(value)) ? Number(value) : Number(fallback) || 0;
+}
+
+function applyParamEdges(node, index, results) {
+  if (!Array.isArray(node.exposedParams) || node.exposedParams.length === 0) {
+    return node.params;
+  }
+
+  let merged = null;
+  for (const paramKey of node.exposedParams) {
+    const edge = index.inputEdgesBySocket.get(inputSocketKey(node.id, `param:${paramKey}`));
+    if (!edge) continue;
+    const value = results.get(edge.fromNode);
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) continue;
+    if (!merged) merged = { ...node.params };
+    merged[paramKey] = numeric;
+  }
+
+  return merged ?? node.params;
 }
 
 function applyMathNode(a, b, params) {

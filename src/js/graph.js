@@ -89,6 +89,10 @@ const NODE_DEFINITIONS = Object.freeze({
       blueLow: 0,
       blueMid: 128,
       blueHigh: 255,
+      points_master: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+      points_red: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+      points_green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+      points_blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
     },
   },
   pixelate: {
@@ -629,7 +633,7 @@ export function addEdge(fromNode, fromSocket, toNode, toSocket) {
   if (!fromDef || !toDef) return false;
 
   const hasOutput = fromDef.outputs.some((socket) => socket.name === fromSocket);
-  const hasInput = toDef.inputs.some((socket) => socket.name === toSocket);
+  const hasInput = hasInputSocket(toDef, toSocket);
   if (!hasOutput || !hasInput) return false;
   if (!socketsCompatible(fromDef, fromSocket, toDef, toSocket)) return false;
 
@@ -757,6 +761,58 @@ export function toggleNodeBypass(nodeId) {
   return true;
 }
 
+export function setParamExposed(nodeId, paramKey, exposed) {
+  if (!nodeId || !paramKey) return false;
+  const { graph } = getState();
+  let changed = false;
+  let removedSocket = false;
+
+  const nextNodes = graph.nodes.map((node) => {
+    if (node.id !== nodeId) return node;
+    const list = Array.isArray(node.exposedParams) ? [...node.exposedParams] : [];
+    const has = list.includes(paramKey);
+    if (exposed && !has) {
+      list.push(paramKey);
+      changed = true;
+    } else if (!exposed && has) {
+      list.splice(list.indexOf(paramKey), 1);
+      changed = true;
+      removedSocket = true;
+    } else {
+      return node;
+    }
+    return { ...node, exposedParams: list };
+  });
+
+  if (!changed) return false;
+
+  const nextEdges = removedSocket
+    ? graph.edges.filter(
+        (edge) => !(edge.toNode === nodeId && edge.toSocket === paramSocketName(paramKey))
+      )
+    : graph.edges;
+
+  dispatch("graph", { nodes: nextNodes, edges: nextEdges });
+  return true;
+}
+
+export function toggleParamExposed(nodeId, paramKey) {
+  const node = getNodeById(nodeId);
+  if (!node) return false;
+  const exposed = Array.isArray(node.exposedParams) && node.exposedParams.includes(paramKey);
+  return setParamExposed(nodeId, paramKey, !exposed);
+}
+
+export function removeEdgesById(edgeIds) {
+  if (!Array.isArray(edgeIds) || edgeIds.length === 0) return false;
+  const ids = new Set(edgeIds);
+  const { graph } = getState();
+  const nextEdges = graph.edges.filter((edge) => !ids.has(edge.id));
+  if (nextEdges.length === graph.edges.length) return false;
+  dispatch("graph", { edges: nextEdges });
+  return true;
+}
+
 export function replacePaletteUsages(removingId, fallbackId) {
   if (!removingId || !fallbackId || removingId === fallbackId) return false;
 
@@ -793,6 +849,7 @@ export function serializeGraph(graph = getState().graph) {
       x: node.x,
       y: node.y,
       params: clone(node.params),
+      exposedParams: Array.isArray(node.exposedParams) ? [...node.exposedParams] : [],
       bypassed: Boolean(node.bypassed),
     })),
     edges: graph.edges.map((edge) => ({ ...edge })),
@@ -852,6 +909,7 @@ function normalizeGraph(graph) {
         x: node.x,
         y: node.y,
         params: node.params,
+        exposedParams: node.exposedParams,
         bypassed: node.bypassed,
       });
     })
@@ -903,6 +961,7 @@ function createNode(id, type, options = {}) {
       ...clone(definition.defaultParams),
       ...clone(options.params),
     },
+    exposedParams: Array.isArray(options.exposedParams) ? [...options.exposedParams] : [],
     bypassed: Boolean(options.bypassed),
   };
 }
@@ -977,8 +1036,32 @@ function getPrimaryOutputSocket(node) {
 }
 
 function getSocket(node, kind, socketName) {
+  if (kind === "input" && isParamSocketName(socketName)) {
+    return hasParamSocket(node, socketName)
+      ? { name: socketName, label: socketName.slice("param:".length), type: "value" }
+      : null;
+  }
   const sockets = kind === "output" ? node?.outputs : node?.inputs;
   return sockets?.find((socket) => socket.name === socketName) ?? null;
+}
+
+function hasInputSocket(node, socketName) {
+  if (isParamSocketName(socketName)) return hasParamSocket(node, socketName);
+  return node.inputs.some((socket) => socket.name === socketName);
+}
+
+function isParamSocketName(socketName) {
+  return typeof socketName === "string" && socketName.startsWith("param:");
+}
+
+function hasParamSocket(node, socketName) {
+  if (!node || !isParamSocketName(socketName)) return false;
+  const paramKey = socketName.slice("param:".length);
+  return Array.isArray(node.exposedParams) && node.exposedParams.includes(paramKey);
+}
+
+function paramSocketName(paramKey) {
+  return `param:${paramKey}`;
 }
 
 function socketType(socket) {
@@ -1059,7 +1142,7 @@ function sanitizeEdges(edges, nodes) {
     const fromSocket = edge.fromSocket;
     const toSocket = edge.toSocket;
     const hasOutput = fromNode.outputs.some((socket) => socket.name === fromSocket);
-    const hasInput = toNode.inputs.some((socket) => socket.name === toSocket);
+    const hasInput = hasInputSocket(toNode, toSocket);
     if (!hasOutput || !hasInput) continue;
     if (!socketsCompatible(fromNode, fromSocket, toNode, toSocket)) continue;
 

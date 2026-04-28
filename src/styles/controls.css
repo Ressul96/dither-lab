@@ -63,6 +63,38 @@
   color: var(--text-secondary);
   font-weight: 500;
 }
+
+.field-label-row {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.field-label-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.param-socket-toggle {
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  flex: 0 0 9px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.07);
+  cursor: pointer;
+}
+
+.param-socket-toggle:hover,
+.param-socket-toggle.is-exposed {
+  border-color: rgba(131, 196, 255, 0.85);
+  background: rgba(131, 196, 255, 0.7);
+  box-shadow: 0 0 0 3px rgba(131, 196, 255, 0.13);
+}
 .field .num {
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);

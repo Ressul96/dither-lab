@@ -15,9 +15,9 @@ let nativeRenderWarningShown = false;
 
 export function canUseNativeRender(graph) {
   if (!window.__TAURI__?.core?.invoke) return false;
-  const scoped = viewerUpstreamGraph(pruneHiddenGraph(graph));
+  const scoped = pruneHiddenGraph(graph);
   if (!scoped?.nodes?.length) return false;
-  if (scoped.nodes.some((node) => node.bypassed)) return false;
+  if (scoped.edges?.some((edge) => String(edge.toSocket ?? "").startsWith("param:"))) return false;
   if (!scoped.nodes.every((node) => NATIVE_SUPPORTED_TYPES.has(node.type))) return false;
   return scoped.nodes.some((node) => !PASS_THROUGH_TYPES.has(node.type));
 }
@@ -26,7 +26,7 @@ export async function evaluateNativeGraphOutputs(graph, sourceCanvas) {
   if (!canUseNativeRender(graph) || !sourceCanvas?.width || !sourceCanvas?.height) return null;
   if (nativeRenderAvailable === false) return null;
 
-  const scoped = viewerUpstreamGraph(pruneHiddenGraph(graph));
+  const scoped = pruneHiddenGraph(graph);
   const context = sourceCanvas.getContext("2d", { alpha: false, willReadFrequently: true });
   if (!context) return null;
 
@@ -70,32 +70,6 @@ export async function evaluateNativeGraphOutputs(graph, sourceCanvas) {
     }
     return null;
   }
-}
-
-function viewerUpstreamGraph(graph) {
-  if (!graph?.nodes?.length) return graph ?? { nodes: [], edges: [] };
-  const viewer = graph.nodes.find((node) => node.type === "viewer-output");
-  if (!viewer) return { nodes: [], edges: [] };
-
-  const nodeIds = new Set();
-  const queue = [viewer.id];
-  let cursor = 0;
-  while (cursor < queue.length) {
-    const nodeId = queue[cursor++];
-    if (!nodeId || nodeIds.has(nodeId)) continue;
-    nodeIds.add(nodeId);
-    for (const edge of graph.edges ?? []) {
-      if (edge.toNode === nodeId) queue.push(edge.fromNode);
-    }
-  }
-
-  return {
-    ...graph,
-    nodes: graph.nodes.filter((node) => nodeIds.has(node.id)),
-    edges: (graph.edges ?? []).filter(
-      (edge) => nodeIds.has(edge.fromNode) && nodeIds.has(edge.toNode)
-    ),
-  };
 }
 
 function frameToCanvas(frame) {

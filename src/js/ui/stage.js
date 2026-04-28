@@ -1,6 +1,6 @@
 import { getState, dispatch, subscribe } from "../state.js";
 import { openExport } from "../export.js";
-import { formatTime, samplePixel } from "../source.js";
+import { clearSource, formatTime, openSource, samplePixel } from "../source.js";
 
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 
@@ -23,6 +23,7 @@ export function initStage() {
   wirePixelInspector(canvas);
   wireSplitDivider(stageCanvas, splitDivider);
   wireContextMenu(stage);
+  wireEmptyImport(stageCanvas);
   wireZoomToggle(zoomToggle, outputs);
   wireZoomShortcuts(outputs);
   wireQualityToggle(qualityToggle);
@@ -52,6 +53,15 @@ export function initStage() {
   // Playback transitions also flip the badge between "1:1 export-accurate"
   // and "playback · half-res", so re-sync when video starts/stops.
   subscribe("playback", sync);
+}
+
+function wireEmptyImport(stageCanvas) {
+  stageCanvas.addEventListener("dblclick", async (event) => {
+    if (getState().source.loaded) return;
+    if (event.target.closest("button, input, select, textarea, a")) return;
+    event.preventDefault();
+    await openSource();
+  });
 }
 
 function wireZoom(stage, outputs) {
@@ -408,6 +418,7 @@ function buildContextMenu() {
   menu.className = "context-menu floating-card hidden";
   menu.innerHTML = `
     <button data-mitem="export-frame">Export Current Frame…</button>
+    <button data-mitem="remove-source">Remove Video</button>
     <button data-mitem="reset-zoom">Reset Zoom</button>
     <button data-mitem="toggle-inspector">Toggle Pixel Inspector</button>
   `;
@@ -417,6 +428,9 @@ function buildContextMenu() {
     switch (btn.dataset.mitem) {
       case "export-frame":
         await openExport();
+        break;
+      case "remove-source":
+        clearSource();
         break;
       case "reset-zoom":
         resetZoom();
@@ -434,6 +448,10 @@ function syncContextMenu(menu) {
   const exportFrameButton = menu.querySelector('[data-mitem="export-frame"]');
   if (exportFrameButton) {
     exportFrameButton.disabled = !getState().source.loaded;
+  }
+  const removeSourceButton = menu.querySelector('[data-mitem="remove-source"]');
+  if (removeSourceButton) {
+    removeSourceButton.disabled = !getState().source.loaded;
   }
 }
 
