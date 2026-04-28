@@ -284,8 +284,130 @@ const TYPE_ORDER = {
   "viewer-output": 21,
 };
 
+const NODE_PARAM_BOUNDS = Object.freeze({
+  adjust: {
+    brightness: { min: -100, max: 100 },
+    contrast: { min: 0, max: 200 },
+    saturation: { min: 0, max: 200 },
+    gamma: { min: 10, max: 400 },
+    exposure: { min: -400, max: 400 },
+  },
+  posterize: { steps: { min: 2, max: 64 } },
+  "rgb-to-bw": {},
+  "tone-map": {
+    intensity: { min: 10, max: 1000 },
+    whitepoint: { min: 10, max: 1000 },
+  },
+  hsv: {
+    hue: { min: -180, max: 180 },
+    saturation: { min: 0, max: 400 },
+    value: { min: 0, max: 400 },
+  },
+  "rgb-curves": {
+    masterLow: { min: 0, max: 255 },
+    masterMid: { min: 0, max: 255 },
+    masterHigh: { min: 0, max: 255 },
+    redLow: { min: 0, max: 255 },
+    redMid: { min: 0, max: 255 },
+    redHigh: { min: 0, max: 255 },
+    greenLow: { min: 0, max: 255 },
+    greenMid: { min: 0, max: 255 },
+    greenHigh: { min: 0, max: 255 },
+    blueLow: { min: 0, max: 255 },
+    blueMid: { min: 0, max: 255 },
+    blueHigh: { min: 0, max: 255 },
+  },
+  pixelate: { size: { min: 1, max: 64 } },
+  scale: {
+    x: { min: 10, max: 400 },
+    y: { min: 10, max: 400 },
+  },
+  transform: {
+    translateX: { min: -100, max: 100 },
+    translateY: { min: -100, max: 100 },
+    rotation: { min: -180, max: 180 },
+    scale: { min: 1, max: 400 },
+  },
+  crop: {
+    left: { min: 0, max: 95 },
+    right: { min: 0, max: 95 },
+    top: { min: 0, max: 95 },
+    bottom: { min: 0, max: 95 },
+  },
+  dither: {
+    threshold: { min: 0, max: 255 },
+    scale: { min: 10, max: 100 },
+    blurRadius: { min: 0, max: 20 },
+    errorStrength: { min: 0, max: 100 },
+  },
+  blur: { radius: { min: 0, max: 40 } },
+  glare: {
+    threshold: { min: 0, max: 255 },
+    mix: { min: 0, max: 400 },
+    saturation: { min: 0, max: 400 },
+    streaks: { min: 1, max: 16 },
+    angle: { min: 0, max: 180 },
+    iterations: { min: 1, max: 8 },
+    fade: { min: 0, max: 99 },
+    size: { min: 1, max: 80 },
+    quality: { min: 1, max: 4 },
+    tintAmount: { min: 0, max: 100 },
+    tintHue: { min: 0, max: 360 },
+  },
+  "lens-distort": {
+    distortion: { min: -100, max: 100 },
+    dispersion: { min: 0, max: 100 },
+    centerX: { min: 0, max: 100 },
+    centerY: { min: 0, max: 100 },
+    vignette: { min: 0, max: 100 },
+  },
+  displace: {
+    xAmount: { min: -200, max: 200 },
+    yAmount: { min: -200, max: 200 },
+    strength: { min: 0, max: 400 },
+    frequency: { min: 1, max: 32 },
+    phase: { min: 0, max: 360 },
+  },
+  mix: { factor: { min: 0, max: 100 } },
+  math: {
+    a: { min: -1000, max: 1000 },
+    b: { min: -1000, max: 1000 },
+  },
+  "viewer-output": { "viewer-fps": { min: 1, max: 120 } },
+});
+
 export function getNodeDefinition(type) {
   return NODE_DEFINITIONS[type] ?? null;
+}
+
+export function getNodeParamBounds(nodeOrType, paramKey) {
+  const type = typeof nodeOrType === "string" ? nodeOrType : nodeOrType?.type;
+  const configured =
+    typeof nodeOrType === "object" ? normalizeBounds(nodeOrType?.exposedParamConfig?.[paramKey]) : null;
+  if (configured) return configured;
+  return normalizeBounds(NODE_PARAM_BOUNDS[type]?.[paramKey]);
+}
+
+export function getValueNodeOutputBounds(nodeId, graph = getState().graph) {
+  if (!nodeId) return null;
+  let min = -Infinity;
+  let max = Infinity;
+  let found = false;
+
+  for (const edge of graph.edges ?? []) {
+    if (edge.fromNode !== nodeId || !isParamSocketName(edge.toSocket)) continue;
+    const target = getNodeById(edge.toNode, graph);
+    if (!target) continue;
+    const bounds = getNodeParamBounds(target, edge.toSocket.slice("param:".length));
+    if (!bounds) continue;
+    if (Number.isFinite(bounds.min)) min = Math.max(min, bounds.min);
+    if (Number.isFinite(bounds.max)) max = Math.min(max, bounds.max);
+    found = true;
+  }
+
+  if (!found) return null;
+  if (min > max) return { min: max, max };
+  return { min, max };
 }
 
 export function createBootGraph() {
@@ -660,7 +782,12 @@ export function addEdge(fromNode, fromSocket, toNode, toSocket) {
     toSocket,
   });
 
-  dispatch("graph", { edges: nextEdges });
+  const nextNodes =
+    fromDef.type === "value" && isParamSocketName(toSocket)
+      ? clampValueNodeForEdges(graph.nodes, nextEdges, fromNode)
+      : graph.nodes;
+
+  dispatch("graph", nextNodes === graph.nodes ? { edges: nextEdges } : { nodes: nextNodes, edges: nextEdges });
   return true;
 }
 
@@ -732,12 +859,19 @@ export function updateNodeParams(nodeId, patch) {
   const { graph } = getState();
   const nextNodes = graph.nodes.map((node) => {
     if (node.id !== nodeId) return node;
+    let nextParams = {
+      ...node.params,
+      ...patch,
+    };
+    if (node.type === "value" && Object.prototype.hasOwnProperty.call(patch, "value")) {
+      nextParams = {
+        ...nextParams,
+        value: clampToBounds(Number(nextParams.value), getValueNodeOutputBounds(nodeId, graph)),
+      };
+    }
     return {
       ...node,
-      params: {
-        ...node.params,
-        ...patch,
-      },
+      params: nextParams,
     };
   });
 
@@ -761,7 +895,7 @@ export function toggleNodeBypass(nodeId) {
   return true;
 }
 
-export function setParamExposed(nodeId, paramKey, exposed) {
+export function setParamExposed(nodeId, paramKey, exposed, config = null) {
   if (!nodeId || !paramKey) return false;
   const { graph } = getState();
   let changed = false;
@@ -770,18 +904,29 @@ export function setParamExposed(nodeId, paramKey, exposed) {
   const nextNodes = graph.nodes.map((node) => {
     if (node.id !== nodeId) return node;
     const list = Array.isArray(node.exposedParams) ? [...node.exposedParams] : [];
+    const nextConfig = { ...(node.exposedParamConfig ?? {}) };
     const has = list.includes(paramKey);
     if (exposed && !has) {
       list.push(paramKey);
+      const bounds = normalizeBounds(config) ?? getNodeParamBounds(node, paramKey);
+      if (bounds) nextConfig[paramKey] = bounds;
       changed = true;
     } else if (!exposed && has) {
       list.splice(list.indexOf(paramKey), 1);
+      delete nextConfig[paramKey];
       changed = true;
       removedSocket = true;
+    } else if (exposed && has) {
+      const bounds = normalizeBounds(config);
+      if (!bounds) return node;
+      const current = normalizeBounds(nextConfig[paramKey]);
+      if (current && current.min === bounds.min && current.max === bounds.max) return node;
+      nextConfig[paramKey] = bounds;
+      changed = true;
     } else {
       return node;
     }
-    return { ...node, exposedParams: list };
+    return { ...node, exposedParams: list, exposedParamConfig: nextConfig };
   });
 
   if (!changed) return false;
@@ -796,11 +941,11 @@ export function setParamExposed(nodeId, paramKey, exposed) {
   return true;
 }
 
-export function toggleParamExposed(nodeId, paramKey) {
+export function toggleParamExposed(nodeId, paramKey, config = null) {
   const node = getNodeById(nodeId);
   if (!node) return false;
   const exposed = Array.isArray(node.exposedParams) && node.exposedParams.includes(paramKey);
-  return setParamExposed(nodeId, paramKey, !exposed);
+  return setParamExposed(nodeId, paramKey, !exposed, config);
 }
 
 export function removeEdgesById(edgeIds) {
@@ -850,6 +995,7 @@ export function serializeGraph(graph = getState().graph) {
       y: node.y,
       params: clone(node.params),
       exposedParams: Array.isArray(node.exposedParams) ? [...node.exposedParams] : [],
+      exposedParamConfig: clone(node.exposedParamConfig),
       bypassed: Boolean(node.bypassed),
     })),
     edges: graph.edges.map((edge) => ({ ...edge })),
@@ -910,6 +1056,7 @@ function normalizeGraph(graph) {
         y: node.y,
         params: node.params,
         exposedParams: node.exposedParams,
+        exposedParamConfig: node.exposedParamConfig,
         bypassed: node.bypassed,
       });
     })
@@ -962,6 +1109,7 @@ function createNode(id, type, options = {}) {
       ...clone(options.params),
     },
     exposedParams: Array.isArray(options.exposedParams) ? [...options.exposedParams] : [],
+    exposedParamConfig: clone(options.exposedParamConfig),
     bypassed: Boolean(options.bypassed),
   };
 }
@@ -1293,6 +1441,48 @@ function spacePrimaryChainAroundNode(nodes, edges, leftNodeId, insertedNodeId, r
 
 function midpoint(a, b) {
   return (Number(a) + Number(b)) / 2;
+}
+
+function clampValueNodeForEdges(nodes, edges, valueNodeId) {
+  const graph = { nodes, edges };
+  const bounds = getValueNodeOutputBounds(valueNodeId, graph);
+  if (!bounds) return nodes;
+
+  let changed = false;
+  const nextNodes = nodes.map((node) => {
+    if (node.id !== valueNodeId || node.type !== "value") return node;
+    const nextValue = clampToBounds(Number(node.params?.value ?? 0), bounds);
+    if (Object.is(nextValue, node.params?.value)) return node;
+    changed = true;
+    return {
+      ...node,
+      params: {
+        ...node.params,
+        value: nextValue,
+      },
+    };
+  });
+
+  return changed ? nextNodes : nodes;
+}
+
+function normalizeBounds(bounds) {
+  if (!bounds || typeof bounds !== "object") return null;
+  const min = Number(bounds.min);
+  const max = Number(bounds.max);
+  const hasMin = Number.isFinite(min);
+  const hasMax = Number.isFinite(max);
+  if (!hasMin && !hasMax) return null;
+  return {
+    min: hasMin ? min : -Infinity,
+    max: hasMax ? max : Infinity,
+  };
+}
+
+function clampToBounds(value, bounds) {
+  const numeric = Number.isFinite(Number(value)) ? Number(value) : 0;
+  if (!bounds) return numeric;
+  return Math.max(bounds.min, Math.min(bounds.max, numeric));
 }
 
 function clone(value) {

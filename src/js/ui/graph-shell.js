@@ -6,6 +6,7 @@ import {
   getNodeById,
   getNodeDefinition,
   getSelectedNode,
+  getValueNodeOutputBounds,
   insertExistingNodeOnEdge,
   insertNodeOnEdge,
   mutateNodePosition,
@@ -53,6 +54,7 @@ const SOCKET_HIT_RADIUS = 28;
 const EDGE_INSERT_RADIUS = 140;
 const EDGE_INSERT_FALLBACK_RADIUS = 240;
 const GRAPH_VIEW_PADDING = 120;
+const EDGE_CUT_RADIUS = 10;
 
 let nodesEl;
 let edgesEl;
@@ -408,7 +410,7 @@ function startEdgeCut(e) {
       editorEl.releasePointerCapture(e.pointerId);
     } catch {}
 
-    const cuts = findEdgesIntersectingStroke(points.map((point) => point.client));
+    const cuts = findEdgesIntersectingStroke(points.map((point) => point.scene));
     path.remove();
     if (cuts.length > 0) removeEdgesById(cuts);
   };
@@ -418,31 +420,36 @@ function startEdgeCut(e) {
   editorEl.addEventListener("pointercancel", onUp);
 }
 
-function findEdgesIntersectingStroke(strokeClientPoints) {
-  if (!strokeClientPoints || strokeClientPoints.length < 2) return [];
+function findEdgesIntersectingStroke(strokeScenePoints) {
+  if (!strokeScenePoints || strokeScenePoints.length < 2) return [];
   const cut = [];
   for (const path of edgesEl.querySelectorAll(".graph-edge[data-edge-id]")) {
-    if (edgeCrossesStroke(path, strokeClientPoints)) {
+    if (edgeCrossesStroke(path, strokeScenePoints)) {
       cut.push(path.dataset.edgeId);
     }
   }
   return cut;
 }
 
-function edgeCrossesStroke(path, strokeClientPoints) {
+function edgeCrossesStroke(path, strokeScenePoints) {
   const total = path.getTotalLength?.() ?? 0;
   if (!Number.isFinite(total) || total <= 0) return false;
-  const matrix = path.getScreenCTM?.() ?? null;
   const sampleCount = Math.max(16, Math.min(96, Math.round(total / 6)));
   const edgePoints = [];
   for (let i = 0; i <= sampleCount; i++) {
-    const point = path.getPointAtLength((total * i) / sampleCount);
-    edgePoints.push(toScreenPoint(point, matrix));
+    edgePoints.push(path.getPointAtLength((total * i) / sampleCount));
   }
 
   for (let i = 0; i < edgePoints.length - 1; i++) {
-    for (let j = 0; j < strokeClientPoints.length - 1; j++) {
-      if (segmentsIntersect(edgePoints[i], edgePoints[i + 1], strokeClientPoints[j], strokeClientPoints[j + 1])) {
+    for (let j = 0; j < strokeScenePoints.length - 1; j++) {
+      const edgeA = edgePoints[i];
+      const edgeB = edgePoints[i + 1];
+      const cutA = strokeScenePoints[j];
+      const cutB = strokeScenePoints[j + 1];
+      if (
+        segmentsIntersect(edgeA, edgeB, cutA, cutB) ||
+        segmentDistance(edgeA, edgeB, cutA, cutB) <= EDGE_CUT_RADIUS
+      ) {
         return true;
       }
     }
@@ -456,6 +463,26 @@ function segmentsIntersect(a, b, c, d) {
   const t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / denom;
   const u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / denom;
   return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+
+function segmentDistance(a, b, c, d) {
+  return Math.min(
+    pointToSegmentDistance(a, c, d),
+    pointToSegmentDistance(b, c, d),
+    pointToSegmentDistance(c, a, b),
+    pointToSegmentDistance(d, a, b)
+  );
+}
+
+function pointToSegmentDistance(point, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq <= 0) return Math.hypot(point.x - a.x, point.y - a.y);
+  const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq, 0, 1);
+  const x = a.x + dx * t;
+  const y = a.y + dy * t;
+  return Math.hypot(point.x - x, point.y - y);
 }
 
 function zoomGraphAtPointer(e) {
@@ -915,9 +942,14 @@ function onInspectorInput(event) {
     }
 
     const nodeId = node.id;
+    const paramKey = control.dataset.nodeParam;
     updateNodeParams(nodeId, {
-      [control.dataset.nodeParam]: readControlValue(control),
+      [paramKey]: readControlValue(control),
     });
+    const applied = getNodeById(nodeId)?.params?.[paramKey];
+    if (applied !== undefined && control.type !== "checkbox" && control.value !== String(applied)) {
+      control.value = String(applied);
+    }
     updateInlineReadout(control);
     syncSiblingControls(control);
     return;
@@ -954,7 +986,10 @@ function onInspectorClick(event) {
     event.preventDefault();
     const node = getSelectedNode();
     if (!node) return;
-    toggleParamExposed(node.id, socketToggle.dataset.paramSocketToggle);
+    toggleParamExposed(node.id, socketToggle.dataset.paramSocketToggle, {
+      min: socketToggle.dataset.paramMin,
+      max: socketToggle.dataset.paramMax,
+    });
     return;
   }
 
@@ -2131,10 +2166,10 @@ function renderMixNode(node) {
 
 function renderValueNode(node) {
   const params = node.params;
+  const bounds = getValueNodeOutputBounds(node.id);
   return `
     <section class="node-panel-section">
-      ${renderRangeField("Value", "value", params.value, -1000, 1000, String(params.value))}
-      <p class="hint">Utility output for future parameter wiring.</p>
+      ${renderNumberField("Value", "value", params.value, bounds)}
     </section>
   `;
 }
@@ -2196,7 +2231,7 @@ function renderRangeField(label, key, value, min, max, _readout) {
     <div class="field range-field">
       <label>
         <span class="field-label-row">
-          ${renderParamSocketDot(safeKey)}
+          ${renderParamSocketDot(safeKey, min, max)}
           <span class="field-label-text">${escapeHtml(label)}</span>
         </span>
         <span class="field-suffix" data-param-readout="${safeKey}"></span>
@@ -2224,14 +2259,41 @@ function renderRangeField(label, key, value, min, max, _readout) {
   `;
 }
 
-function renderParamSocketDot(safeKey) {
+function renderNumberField(label, key, value, bounds = null) {
+  const safeKey = escapeHtml(key);
+  const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+  const minAttr = bounds && Number.isFinite(bounds.min) ? ` min="${bounds.min}"` : "";
+  const maxAttr = bounds && Number.isFinite(bounds.max) ? ` max="${bounds.max}"` : "";
+  return `
+    <div class="field number-field">
+      <label>
+        <span class="field-label-row">
+          <span class="field-label-text">${escapeHtml(label)}</span>
+        </span>
+      </label>
+      <input
+        type="number"
+        class="num-edit"
+        value="${numericValue}"
+        data-node-param="${safeKey}"
+        data-input-kind="number"
+        ${minAttr}${maxAttr}
+      />
+    </div>
+  `;
+}
+
+function renderParamSocketDot(safeKey, min = null, max = null) {
   const node = getSelectedNode();
   if (!node || node.type === "source" || node.type === "viewer-output") return "";
   const exposed = Array.isArray(node.exposedParams) && node.exposedParams.includes(safeKey);
+  const minAttr = Number.isFinite(Number(min)) ? ` data-param-min="${Number(min)}"` : "";
+  const maxAttr = Number.isFinite(Number(max)) ? ` data-param-max="${Number(max)}"` : "";
   return `<button
     type="button"
     class="param-socket-toggle${exposed ? " is-exposed" : ""}"
     data-param-socket-toggle="${safeKey}"
+    ${minAttr}${maxAttr}
     aria-label="${exposed ? "Hide parameter socket" : "Expose parameter socket"}"
     title="${exposed ? "Remove input socket" : "Expose as input socket"}"
   ></button>`;

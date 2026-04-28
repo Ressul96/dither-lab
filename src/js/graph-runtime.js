@@ -19,6 +19,7 @@ import {
   applyTransformNode,
   releaseBuffer,
 } from "./image-ops.js";
+import { getNodeParamBounds } from "./graph.js";
 
 // Per-node memoization. Each entry pins its output canvas — buffer pool must
 // not reclaim it until the cache invalidates (params/inputs/source change or
@@ -413,10 +414,15 @@ function applyParamEdges(node, index, results) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) continue;
     if (!merged) merged = { ...node.params };
-    merged[paramKey] = numeric;
+    merged[paramKey] = clampToBounds(numeric, getNodeParamBounds(node, paramKey));
   }
 
   return merged ?? node.params;
+}
+
+function clampToBounds(value, bounds) {
+  if (!bounds) return value;
+  return Math.max(bounds.min, Math.min(bounds.max, value));
 }
 
 function applyMathNode(a, b, params) {

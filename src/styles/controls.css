@@ -143,6 +143,22 @@
   margin: 0;
 }
 
+.number-field .num-edit {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  text-align: right;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.number-field .num-edit::-webkit-outer-spin-button,
+.number-field .num-edit::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .row {
   display: flex;
   align-items: center;
