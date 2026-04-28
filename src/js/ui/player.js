@@ -1,36 +1,62 @@
 import { getState, subscribe, dispatch, pushHistory } from "../state.js";
-import { replaceGraph, serializeGraph } from "../graph.js";
-import { applyCustomPalettes, serializeCustomPalettes } from "../palettes.js";
 import {
   togglePlay,
   restart,
   stepFrame,
   seek,
   snapPlayhead,
-  setIn,
-  setOut,
   resetTrim,
   formatTime,
 } from "../source.js";
+
+const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
+
+const playerEls = {
+  playBtn: null,
+  scrub: null,
+  timeLabels: [],
+  compareSeg: null,
+  compareButtons: [],
+  compareReadouts: [],
+  trimIn: null,
+  trimOut: null,
+  trimLeftDim: null,
+  trimRightDim: null,
+  trimSelection: null,
+};
 
 export function initPlayer() {
   bindAction("restart", restart);
   bindAction("prev-frame", () => stepFrame(-1));
   bindAction("toggle-play", togglePlay, { pointerDown: true });
   bindAction("next-frame", () => stepFrame(1));
-  bindAction("set-in", () => commitTrimAction(setIn, "Set trim in"));
-  bindAction("set-out", () => commitTrimAction(setOut, "Set trim out"));
   bindAction("reset-trim", () => commitTrimAction(resetTrim, "Reset trim"));
   bindAction("snap-playhead", snapPlayhead);
 
   wireScrubber();
   wireCompare();
   wireTrim();
-  wireAB();
 
+  cachePlayerEls();
   subscribe("source", onSourceChange);
   subscribe("playback", onPlaybackChange);
   subscribe("view", onViewChange);
+}
+
+function cachePlayerEls() {
+  playerEls.playBtn = document.querySelector('[data-action="toggle-play"]');
+  playerEls.scrub = document.querySelector(".scrubber");
+  playerEls.timeLabels = Array.from(document.querySelectorAll(".player-timeline .time-label"));
+  playerEls.compareSeg = document.querySelector(".compare-mode");
+  playerEls.compareButtons = playerEls.compareSeg
+    ? Array.from(playerEls.compareSeg.querySelectorAll("button"))
+    : [];
+  playerEls.compareReadouts = Array.from(document.querySelectorAll('[data-stage-readout="compare"]'));
+  playerEls.trimIn = document.querySelector(".trim-handle.trim-in");
+  playerEls.trimOut = document.querySelector(".trim-handle.trim-out");
+  playerEls.trimLeftDim = document.querySelector(".trim-dim--left");
+  playerEls.trimRightDim = document.querySelector(".trim-dim--right");
+  playerEls.trimSelection = document.querySelector(".trim-selection");
 }
 
 function bindAction(action, handler, options = {}) {
@@ -80,8 +106,9 @@ function wireCompare() {
   seg.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-mode]");
     if (!btn) return;
-    const prev = getState().view.compare;
-    const next = btn.dataset.mode;
+    const prev = normalizeCompareMode(getState().view.compare);
+    const requested = normalizeCompareMode(btn.dataset.mode);
+    const next = prev === requested ? "processed" : requested;
     if (prev === next) return;
     dispatch("view", { compare: next });
     pushHistory({
@@ -163,61 +190,6 @@ function pickTrimState() {
   return { trimStart, trimEnd };
 }
 
-// A/B snapshots: capture compare mode + graph state.
-
-function wireAB() {
-  bindAction("capture-a", () => capture("a"));
-  bindAction("capture-b", () => capture("b"));
-  bindAction("swap-ab", swap);
-  const hold = document.querySelector('[data-action="ab-hold"]');
-  if (hold) {
-    hold.addEventListener("pointerdown", () => preview(true));
-    hold.addEventListener("pointerup", () => preview(false));
-    hold.addEventListener("pointerleave", () => preview(false));
-  }
-}
-
-function snapshot() {
-  const { view, graph } = getState();
-  return {
-    view: { compare: view.compare },
-    graph: serializeGraph(graph),
-    customPalettes: serializeCustomPalettes(),
-  };
-}
-
-function apply(snap) {
-  if (!snap) return;
-  dispatch("view", { compare: snap.view.compare });
-  applyCustomPalettes(snap.customPalettes ?? []);
-  replaceGraph(snap.graph);
-}
-
-function capture(slot) {
-  dispatch("ab", { [slot]: snapshot() });
-  const btn = document.querySelector(`[data-action="capture-${slot}"]`);
-  if (btn) btn.classList.add("captured");
-}
-
-function swap() {
-  const { a, b } = getState().ab;
-  dispatch("ab", { a: b, b: a });
-  if (a) apply(a);
-}
-
-let heldPrev = null;
-function preview(on) {
-  const ab = getState().ab;
-  if (on) {
-    if (!ab.a) return;
-    heldPrev = snapshot();
-    apply(ab.a);
-  } else if (heldPrev) {
-    apply(heldPrev);
-    heldPrev = null;
-  }
-}
-
 // Subscribers ------------------------------------------------------
 
 function onSourceChange(source) {
@@ -228,17 +200,18 @@ function onPlaybackChange(playback) {
   const { source } = getState();
   const duration = source.duration || 0;
 
-  const playBtn = document.querySelector('[data-action="toggle-play"]');
-  if (playBtn) playBtn.textContent = playback.playing ? "⏸" : "▶";
+  if (!playerEls.playBtn || !playerEls.scrub) cachePlayerEls();
 
-  const scrub = document.querySelector(".scrubber");
+  if (playerEls.playBtn) playerEls.playBtn.textContent = playback.playing ? "⏸" : "▶";
+
+  const scrub = playerEls.scrub;
   if (scrub && duration > 0 && document.activeElement !== scrub) {
     scrub.value = String(Math.round((playback.currentTime / duration) * 1000));
   } else if (scrub && duration <= 0 && document.activeElement !== scrub) {
     scrub.value = "0";
   }
 
-  const labels = document.querySelectorAll(".player-timeline .time-label");
+  const labels = playerEls.timeLabels;
   if (labels.length >= 2) {
     labels[0].textContent = formatTime(playback.currentTime);
     labels[1].textContent = formatTime(duration);
@@ -248,23 +221,30 @@ function onPlaybackChange(playback) {
 }
 
 function onViewChange(view) {
-  const seg = document.querySelector(".compare-mode");
-  if (!seg) return;
-  for (const btn of seg.querySelectorAll("button")) {
-    btn.classList.toggle("active", btn.dataset.mode === view.compare);
+  if (!playerEls.compareSeg) cachePlayerEls();
+  if (!playerEls.compareSeg) return;
+  const compare = normalizeCompareMode(view.compare);
+  if (compare !== view.compare) {
+    dispatch("view", { compare });
+    return;
+  }
+  for (const btn of playerEls.compareButtons) {
+    const active = btn.dataset.mode === compare;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
   }
 
-  for (const el of document.querySelectorAll('[data-stage-readout="compare"]')) {
-    el.textContent = formatCompareMode(view.compare);
+  for (const el of playerEls.compareReadouts) {
+    el.textContent = formatCompareMode(compare);
   }
 }
 
 function updateTrimHandles(playback, duration) {
-  const inH = document.querySelector(".trim-handle.trim-in");
-  const outH = document.querySelector(".trim-handle.trim-out");
-  const leftDim = document.querySelector(".trim-dim--left");
-  const rightDim = document.querySelector(".trim-dim--right");
-  const selection = document.querySelector(".trim-selection");
+  const inH = playerEls.trimIn;
+  const outH = playerEls.trimOut;
+  const leftDim = playerEls.trimLeftDim;
+  const rightDim = playerEls.trimRightDim;
+  const selection = playerEls.trimSelection;
   if (duration <= 0) {
     if (inH) inH.style.left = "0%";
     if (outH) outH.style.left = "100%";
@@ -297,8 +277,12 @@ function clamp(n, lo, hi) {
 }
 
 function formatCompareMode(value) {
-  return value
+  return normalizeCompareMode(value)
     .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function normalizeCompareMode(value) {
+  return COMPARE_MODES.has(value) ? value : "processed";
 }

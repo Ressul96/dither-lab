@@ -17,6 +17,7 @@ export function canUseNativeRender(graph) {
   if (!window.__TAURI__?.core?.invoke) return false;
   const scoped = pruneHiddenGraph(graph);
   if (!scoped?.nodes?.length) return false;
+  if (scoped.edges?.some((edge) => String(edge.toSocket ?? "").startsWith("param:"))) return false;
   if (!scoped.nodes.every((node) => NATIVE_SUPPORTED_TYPES.has(node.type))) return false;
   return scoped.nodes.some((node) => !PASS_THROUGH_TYPES.has(node.type));
 }

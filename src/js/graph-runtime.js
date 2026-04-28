@@ -1,17 +1,22 @@
-import { getNodeById } from "./graph.js";
 import {
   applyAdjustNode,
   applyBlurNode,
+  applyCropNode,
   applyDitherNode,
+  applyDisplaceNode,
+  applyFlipNode,
   applyGlareNode,
+  applyHsvNode,
   applyInvertNode,
   applyLensDistortNode,
   applyMixNode,
   applyPixelateNode,
   applyPosterizeNode,
+  applyRgbCurvesNode,
   applyRgbToBwNode,
   applyScaleNode,
   applyToneMapNode,
+  applyTransformNode,
   releaseBuffer,
 } from "./image-ops.js";
 
@@ -67,13 +72,14 @@ export function evaluateGraphOutputs(graph, context) {
   }
 
   const sourceVersion = context?.sourceVersion ?? "live";
+  const index = createRuntimeIndex(scoped);
   const order = topologicalSort(scoped);
   const results = new Map();
   const versions = new Map();
   const reachableIds = new Set();
 
   for (const nodeId of order) {
-    const node = getNodeById(nodeId, scoped);
+    const node = index.nodesById.get(nodeId);
     if (!node) continue;
     reachableIds.add(node.id);
 
@@ -85,31 +91,36 @@ export function evaluateGraphOutputs(graph, context) {
     }
 
     if (node.type === "viewer-output") {
-      const output = resolveInputImage(node, "image", scoped, results);
+      const output = resolveInputImage(node, "image", index, results);
       results.set(node.id, output);
-      versions.set(node.id, inputVersionKey(node, scoped, versions, "image"));
+      versions.set(node.id, inputVersionKey(node, index, versions, "image"));
       continue;
     }
 
+    const effectiveParams = applyParamEdges(node, index, results);
     const inputSockets = inputSocketsFor(node);
     const inputVersions = inputSockets.map((socket) =>
-      inputVersionKey(node, scoped, versions, socket)
+      inputVersionKey(node, index, versions, socket)
     );
-    const paramsHash = hashParams(node.params);
+    const paramVersions = paramSocketsFor(node).map((socket) =>
+      inputVersionKey(node, index, versions, socket)
+    );
+    const paramsHash = `${hashParams(effectiveParams)}bypass=${node.bypassed ? 1 : 0};`;
     const cached = nodeCache.get(node.id);
     if (
       cached &&
       cached.type === node.type &&
       cached.paramsHash === paramsHash &&
-      arraysEqual(cached.inputVersions, inputVersions)
+      arraysEqual(cached.inputVersions, inputVersions) &&
+      arraysEqual(cached.paramVersions ?? [], paramVersions)
     ) {
       results.set(node.id, cached.output);
       versions.set(node.id, cached.version);
       continue;
     }
 
-    const output = computeNodeOutput(node, scoped, results);
-    if (output) {
+    const output = computeNodeOutput({ ...node, params: effectiveParams }, index, results);
+    if (output !== null && output !== undefined) {
       // A node may pass its input through unchanged (blur radius=0, lens-
       // distort with no effect, etc.). Caching that buffer would mean the
       // node "owns" a canvas it doesn't actually own — clearGraphCache or
@@ -117,7 +128,8 @@ export function evaluateGraphOutputs(graph, context) {
       // while another node still holds it, and the next acquireBuffer
       // would clearRect it out from under them.
       const sourceImage = context?.sourceImage ?? null;
-      const passthrough = output === sourceImage || sharesOutputWithCachedNode(output);
+      const passthrough =
+        output === sourceImage || (isCanvasLike(output) && sharesOutputWithCachedNode(output));
       if (passthrough) {
         if (cached) {
           if (cached.output) releaseBuffer(cached.output);
@@ -134,6 +146,7 @@ export function evaluateGraphOutputs(graph, context) {
           type: node.type,
           paramsHash,
           inputVersions,
+          paramVersions,
           output,
           version,
         });
@@ -161,7 +174,7 @@ export function evaluateGraphOutputs(graph, context) {
     };
   }
 
-  const ditherNodeId = findNearestUpstreamNodeOfType(viewerNode.id, scoped, "dither");
+  const ditherNodeId = findNearestUpstreamNodeOfType(viewerNode.id, index, "dither");
   const viewerOutput = results.get(viewerNode.id) ?? null;
   const ditherOutput = ditherNodeId ? results.get(ditherNodeId) ?? null : null;
 
@@ -188,6 +201,10 @@ function sharesOutputWithCachedNode(output) {
   return false;
 }
 
+function isCanvasLike(value) {
+  return Boolean(value && typeof value === "object" && "width" in value && "height" in value);
+}
+
 function pruneCache(reachableIds) {
   for (const [id, entry] of nodeCache) {
     if (reachableIds.has(id)) continue;
@@ -200,15 +217,48 @@ function inputSocketsFor(node) {
   switch (node.type) {
     case "mix":
       return ["image_a", "image_b"];
+    case "displace":
+      return ["image", "map"];
+    case "math":
+      return ["a", "b"];
+    case "value":
+      return [];
     default:
       return ["image"];
   }
 }
 
-function inputVersionKey(node, graph, versions, socket) {
-  const edge = graph.edges.find(
-    (item) => item.toNode === node.id && item.toSocket === socket
-  );
+function paramSocketsFor(node) {
+  if (!Array.isArray(node.exposedParams) || node.exposedParams.length === 0) return [];
+  return node.exposedParams.map((paramKey) => `param:${paramKey}`);
+}
+
+function createRuntimeIndex(graph) {
+  const nodesById = new Map();
+  const inputEdgesBySocket = new Map();
+  const incomingEdgesByNode = new Map();
+
+  for (const node of graph.nodes ?? []) {
+    nodesById.set(node.id, node);
+    incomingEdgesByNode.set(node.id, []);
+  }
+
+  for (const edge of graph.edges ?? []) {
+    if (!nodesById.has(edge.fromNode) || !nodesById.has(edge.toNode)) continue;
+    const socketKey = inputSocketKey(edge.toNode, edge.toSocket);
+    if (!inputEdgesBySocket.has(socketKey)) inputEdgesBySocket.set(socketKey, edge);
+    incomingEdgesByNode.get(edge.toNode)?.push(edge);
+  }
+
+  return { nodesById, inputEdgesBySocket, incomingEdgesByNode };
+}
+
+function inputSocketKey(nodeId, socket) {
+  return `${nodeId}\u0000${socket}`;
+}
+
+function inputVersionKey(node, index, versions, socket) {
+  const edge = index.inputEdgesBySocket.get(inputSocketKey(node.id, socket));
   if (!edge) return "none";
   const upstreamVersion = versions.get(edge.fromNode);
   return `${edge.fromNode}:${upstreamVersion ?? "?"}`;
@@ -254,62 +304,159 @@ function releaseIntermediateBuffers(results, keep, context) {
   }
 }
 
-function computeNodeOutput(node, graph, results) {
+function computeNodeOutput(node, index, results) {
+  if (node.bypassed) return computeBypassOutput(node, index, results);
+
   switch (node.type) {
     case "adjust":
-      return applyAdjustNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyAdjustNode(resolveInputImage(node, "image", index, results), node.params);
     case "posterize":
-      return applyPosterizeNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyPosterizeNode(resolveInputImage(node, "image", index, results), node.params);
     case "invert":
-      return applyInvertNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyInvertNode(resolveInputImage(node, "image", index, results), node.params);
     case "rgb-to-bw":
-      return applyRgbToBwNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyRgbToBwNode(resolveInputImage(node, "image", index, results), node.params);
     case "tone-map":
-      return applyToneMapNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyToneMapNode(resolveInputImage(node, "image", index, results), node.params);
+    case "hsv":
+      return applyHsvNode(resolveInputImage(node, "image", index, results), node.params);
+    case "rgb-curves":
+      return applyRgbCurvesNode(resolveInputImage(node, "image", index, results), node.params);
     case "blur":
-      return applyBlurNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyBlurNode(resolveInputImage(node, "image", index, results), node.params);
     case "pixelate":
-      return applyPixelateNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyPixelateNode(resolveInputImage(node, "image", index, results), node.params);
     case "scale":
-      return applyScaleNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyScaleNode(resolveInputImage(node, "image", index, results), node.params);
+    case "transform":
+      return applyTransformNode(resolveInputImage(node, "image", index, results), node.params);
+    case "crop":
+      return applyCropNode(resolveInputImage(node, "image", index, results), node.params);
+    case "flip":
+      return applyFlipNode(resolveInputImage(node, "image", index, results), node.params);
     case "dither":
-      return applyDitherNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyDitherNode(resolveInputImage(node, "image", index, results), node.params);
     case "glare":
-      return applyGlareNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyGlareNode(resolveInputImage(node, "image", index, results), node.params);
     case "lens-distort":
-      return applyLensDistortNode(resolveInputImage(node, "image", graph, results), node.params);
+      return applyLensDistortNode(resolveInputImage(node, "image", index, results), node.params);
+    case "displace":
+      return applyDisplaceNode(
+        resolveInputImage(node, "image", index, results),
+        resolveInputImage(node, "map", index, results),
+        node.params
+      );
     case "mix":
       return applyMixNode(
-        resolveInputImage(node, "image_a", graph, results),
-        resolveInputImage(node, "image_b", graph, results),
+        resolveInputImage(node, "image_a", index, results),
+        resolveInputImage(node, "image_b", index, results),
+        node.params
+      );
+    case "value":
+      return Number(node.params?.value ?? 0);
+    case "math":
+      return applyMathNode(
+        resolveInputValue(node, "a", index, results, node.params?.a ?? 0),
+        resolveInputValue(node, "b", index, results, node.params?.b ?? 1),
         node.params
       );
     default:
       // Unknown nodes stay passthrough-friendly during the transition so the shell
       // can evolve without crashing the preview.
-      return resolveFirstConnectedInput(node, graph, results);
+      return resolveFirstConnectedInput(node, index, results);
   }
 }
 
-function resolveInputImage(node, socketName, graph, results) {
-  const edge = graph.edges.find(
-    (item) => item.toNode === node.id && item.toSocket === socketName
-  );
+function computeBypassOutput(node, index, results) {
+  switch (node.type) {
+    case "value":
+      return Number(node.params?.value ?? 0);
+    case "math":
+      return resolveInputValue(node, "a", index, results, node.params?.a ?? 0);
+    case "mix":
+      return resolveInputImage(node, "image_a", index, results);
+    case "displace":
+    default:
+      return resolveInputImage(node, "image", index, results) ?? resolveFirstConnectedInput(node, index, results);
+  }
+}
+
+function resolveInputImage(node, socketName, index, results) {
+  const edge = index.inputEdgesBySocket.get(inputSocketKey(node.id, socketName));
   if (!edge) return null;
   return results.get(edge.fromNode) ?? null;
 }
 
-function resolveFirstConnectedInput(node, graph, results) {
-  const edge = graph.edges.find((item) => item.toNode === node.id);
+function resolveFirstConnectedInput(node, index, results) {
+  const edge = index.incomingEdgesByNode.get(node.id)?.[0];
   if (!edge) return null;
   return results.get(edge.fromNode) ?? null;
+}
+
+function resolveInputValue(node, socketName, index, results, fallback = 0) {
+  const edge = index.inputEdgesBySocket.get(inputSocketKey(node.id, socketName));
+  if (!edge) return Number(fallback) || 0;
+  const value = results.get(edge.fromNode);
+  return Number.isFinite(Number(value)) ? Number(value) : Number(fallback) || 0;
+}
+
+function applyParamEdges(node, index, results) {
+  if (!Array.isArray(node.exposedParams) || node.exposedParams.length === 0) {
+    return node.params;
+  }
+
+  let merged = null;
+  for (const paramKey of node.exposedParams) {
+    const edge = index.inputEdgesBySocket.get(inputSocketKey(node.id, `param:${paramKey}`));
+    if (!edge) continue;
+    const value = results.get(edge.fromNode);
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) continue;
+    if (!merged) merged = { ...node.params };
+    merged[paramKey] = numeric;
+  }
+
+  return merged ?? node.params;
+}
+
+function applyMathNode(a, b, params) {
+  let value;
+  switch (String(params?.operation ?? "add")) {
+    case "subtract":
+      value = a - b;
+      break;
+    case "multiply":
+      value = a * b;
+      break;
+    case "divide":
+      value = b === 0 ? 0 : a / b;
+      break;
+    case "power":
+      value = Math.pow(a, b);
+      break;
+    case "min":
+      value = Math.min(a, b);
+      break;
+    case "max":
+      value = Math.max(a, b);
+      break;
+    case "modulo":
+      value = b === 0 ? 0 : a % b;
+      break;
+    case "add":
+    default:
+      value = a + b;
+      break;
+  }
+  if (params?.clamp) value = Math.max(0, Math.min(1, value));
+  return Number.isFinite(value) ? value : 0;
 }
 
 function topologicalSort(graph) {
   const incomingCount = new Map(graph.nodes.map((node) => [node.id, 0]));
   const outgoing = new Map(graph.nodes.map((node) => [node.id, []]));
 
-  for (const edge of graph.edges) {
+  for (const edge of graph.edges ?? []) {
     if (!incomingCount.has(edge.toNode) || !outgoing.has(edge.fromNode)) continue;
     incomingCount.set(edge.toNode, incomingCount.get(edge.toNode) + 1);
     outgoing.get(edge.fromNode).push(edge.toNode);
@@ -320,8 +467,9 @@ function topologicalSort(graph) {
     .filter((nodeId) => (incomingCount.get(nodeId) ?? 0) === 0);
   const order = [];
 
-  while (queue.length > 0) {
-    const nodeId = queue.shift();
+  let cursor = 0;
+  while (cursor < queue.length) {
+    const nodeId = queue[cursor++];
     order.push(nodeId);
 
     for (const nextNodeId of outgoing.get(nodeId) ?? []) {
@@ -338,24 +486,23 @@ function topologicalSort(graph) {
   return order;
 }
 
-function findNearestUpstreamNodeOfType(startNodeId, graph, type) {
+function findNearestUpstreamNodeOfType(startNodeId, index, type) {
   const queue = [startNodeId];
   const visited = new Set();
+  let cursor = 0;
 
-  while (queue.length > 0) {
-    const nodeId = queue.shift();
+  while (cursor < queue.length) {
+    const nodeId = queue[cursor++];
     if (!nodeId || visited.has(nodeId)) continue;
     visited.add(nodeId);
 
-    const node = getNodeById(nodeId, graph);
+    const node = index.nodesById.get(nodeId);
     if (node && node.id !== startNodeId && node.type === type) {
       return node.id;
     }
 
-    for (const edge of graph.edges) {
-      if (edge.toNode === nodeId) {
-        queue.push(edge.fromNode);
-      }
+    for (const edge of index.incomingEdgesByNode.get(nodeId) ?? []) {
+      queue.push(edge.fromNode);
     }
   }
 

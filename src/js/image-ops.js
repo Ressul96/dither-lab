@@ -14,13 +14,6 @@ let supportsCanvasBlurFilter = null;
 export function applyAdjustNode(input, params) {
   if (!input?.width || !input?.height) return null;
 
-  const output = createBuffer(input.width, input.height);
-  const context = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  context.drawImage(input, 0, 0);
-
-  const imageData = context.getImageData(0, 0, output.width, output.height);
-  const data = imageData.data;
-
   const brightness = clamp((params.brightness ?? 0) / 100, -1, 1);
   const contrast = clamp((params.contrast ?? 100) / 100, 0, 2);
   const saturation = clamp((params.saturation ?? 100) / 100, 0, 2);
@@ -34,10 +27,14 @@ export function applyAdjustNode(input, params) {
     saturation === 1 &&
     gamma === 1 &&
     exposure === 0;
-  if (identity) {
-    context.putImageData(imageData, 0, 0);
-    return output;
-  }
+  if (identity) return input;
+
+  const output = createBuffer(input.width, input.height);
+  const context = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  context.drawImage(input, 0, 0);
+
+  const imageData = context.getImageData(0, 0, output.width, output.height);
+  const data = imageData.data;
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -297,7 +294,7 @@ function renderStreaks(brightCanvas, streakCount, angleOffset, iterations, fade)
     pCtx.drawImage(brightCanvas, 0, 0);
 
     for (let i = 0; i < iterations; i++) {
-      const offset = Math.pow(2, i);
+      const offset = 1 << i;
       const next = createBuffer(width, height);
       const nCtx = next.getContext("2d", { willReadFrequently: false });
       nCtx.clearRect(0, 0, width, height);
@@ -349,6 +346,7 @@ export function applyInvertNode(input, params) {
     g: channels.includes("g"),
     b: channels.includes("b"),
   };
+  if (!inv.r && !inv.g && !inv.b) return input;
   const output = createBuffer(input.width, input.height);
   const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
   ctx.drawImage(input, 0, 0);
@@ -396,6 +394,62 @@ export function applyRgbToBwNode(input, params) {
     const luma = Math.round(cr * data[i] + cg * data[i + 1] + cb * data[i + 2]);
     data[i] = data[i + 1] = data[i + 2] = luma;
   }
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+export function applyHsvNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const hue = Number(params.hue ?? 0);
+  const saturation = clamp(Number(params.saturation ?? 100) / 100, 0, 4);
+  const value = clamp(Number(params.value ?? 100) / 100, 0, 4);
+  if (hue === 0 && saturation === 1 && value === 1) return input;
+
+  const output = createBuffer(input.width, input.height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  ctx.drawImage(input, 0, 0);
+  const imageData = ctx.getImageData(0, 0, output.width, output.height);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const [h, s, v] = rgbToHsv(data[i], data[i + 1], data[i + 2]);
+    const [r, g, b] = hsvToRgb(
+      ((h + hue / 360) % 1 + 1) % 1,
+      clamp01(s * saturation),
+      clamp01(v * value)
+    );
+    data[i] = r;
+    data[i + 1] = g;
+    data[i + 2] = b;
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+export function applyRgbCurvesNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const master = buildRgbCurveLut(params, "master");
+  const red = buildRgbCurveLut(params, "red");
+  const green = buildRgbCurveLut(params, "green");
+  const blue = buildRgbCurveLut(params, "blue");
+
+  if (isIdentityLut(master) && isIdentityLut(red) && isIdentityLut(green) && isIdentityLut(blue)) {
+    return input;
+  }
+
+  const output = createBuffer(input.width, input.height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  ctx.drawImage(input, 0, 0);
+  const imageData = ctx.getImageData(0, 0, output.width, output.height);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = red[master[data[i]]];
+    data[i + 1] = green[master[data[i + 1]]];
+    data[i + 2] = blue[master[data[i + 2]]];
+  }
+
   ctx.putImageData(imageData, 0, 0);
   return output;
 }
@@ -457,6 +511,77 @@ export function applyScaleNode(input, params) {
   return output;
 }
 
+export function applyTransformNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const translateX = Number(params.translateX ?? 0);
+  const translateY = Number(params.translateY ?? 0);
+  const rotation = Number(params.rotation ?? 0);
+  const scale = clamp(Number(params.scale ?? 100) / 100, 0.01, 10);
+  const filter = params.filter === "nearest" ? false : true;
+  if (translateX === 0 && translateY === 0 && rotation === 0 && scale === 1) return input;
+
+  const width = input.width;
+  const height = input.height;
+  const output = createBuffer(width, height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, width, height);
+  ctx.imageSmoothingEnabled = filter;
+  ctx.save();
+  ctx.translate(width / 2 + (translateX / 100) * width, height / 2 + (translateY / 100) * height);
+  ctx.rotate((rotation / 180) * Math.PI);
+  ctx.scale(scale, scale);
+  ctx.drawImage(input, -width / 2, -height / 2, width, height);
+  ctx.restore();
+  return output;
+}
+
+export function applyCropNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const left = clamp(Number(params.left ?? 0), 0, 95);
+  const right = clamp(Number(params.right ?? 0), 0, 95);
+  const top = clamp(Number(params.top ?? 0), 0, 95);
+  const bottom = clamp(Number(params.bottom ?? 0), 0, 95);
+  const mode = String(params.mode ?? "mask");
+  if (left === 0 && right === 0 && top === 0 && bottom === 0) return input;
+
+  const width = input.width;
+  const height = input.height;
+  const sx = Math.round((left / 100) * width);
+  const sy = Math.round((top / 100) * height);
+  const sw = Math.max(1, Math.round(width - sx - (right / 100) * width));
+  const sh = Math.max(1, Math.round(height - sy - (bottom / 100) * height));
+
+  const output = createBuffer(width, height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, width, height);
+  if (mode === "fit") {
+    ctx.drawImage(input, sx, sy, sw, sh, 0, 0, width, height);
+  } else {
+    ctx.drawImage(input, sx, sy, sw, sh, sx, sy, sw, sh);
+  }
+  return output;
+}
+
+export function applyFlipNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const horizontal = Boolean(params.horizontal);
+  const vertical = Boolean(params.vertical);
+  if (!horizontal && !vertical) return input;
+
+  const width = input.width;
+  const height = input.height;
+  const output = createBuffer(width, height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
+  ctx.save();
+  ctx.translate(horizontal ? width : 0, vertical ? height : 0);
+  ctx.scale(horizontal ? -1 : 1, vertical ? -1 : 1);
+  ctx.drawImage(input, 0, 0, width, height);
+  ctx.restore();
+  return output;
+}
+
 // Tone Map — extended Reinhard with intensity (pre-exposure) + whitepoint
 // (target brightest value). Useful before dither so blown highlights have
 // somewhere to go instead of clipping to white.
@@ -464,6 +589,7 @@ export function applyToneMapNode(input, params) {
   if (!input?.width || !input?.height) return null;
   const intensity = clamp(Number(params.intensity ?? 100) / 100, 0.1, 10);
   const whitepoint = clamp(Number(params.whitepoint ?? 100) / 100, 0.1, 10);
+  if (intensity === 1 && whitepoint === 1) return input;
   const wpSq = whitepoint * whitepoint;
   const output = createBuffer(input.width, input.height);
   const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
@@ -610,6 +736,68 @@ export function applyLensDistortNode(input, params) {
   return output;
 }
 
+export function applyDisplaceNode(input, mapInput, params) {
+  if (!input?.width || !input?.height) return null;
+  const xAmount = Number(params.xAmount ?? 0);
+  const yAmount = Number(params.yAmount ?? 0);
+  const strength = clamp(Number(params.strength ?? 100) / 100, 0, 4);
+  const mode = String(params.mode ?? "wave");
+  const filter = params.filter === "nearest" ? "nearest" : "linear";
+  if ((xAmount === 0 && yAmount === 0) || strength === 0) return input;
+
+  const width = input.width;
+  const height = input.height;
+  const srcBuf = createBuffer(width, height);
+  const srcCtx = srcBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+  srcCtx.drawImage(input, 0, 0);
+  const src = srcCtx.getImageData(0, 0, width, height).data;
+  releaseBuffer(srcBuf);
+
+  let map = null;
+  if (mode === "map" && mapInput?.width && mapInput?.height) {
+    const mapBuf = createBuffer(width, height);
+    const mapCtx = mapBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+    mapCtx.drawImage(mapInput, 0, 0, width, height);
+    map = mapCtx.getImageData(0, 0, width, height).data;
+    releaseBuffer(mapBuf);
+  }
+
+  const output = createBuffer(width, height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  const imageData = ctx.createImageData(width, height);
+  const out = imageData.data;
+  const frequency = Math.max(0.001, Number(params.frequency ?? 4));
+  const phase = (Number(params.phase ?? 0) / 180) * Math.PI;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      let dx;
+      let dy;
+      if (map) {
+        dx = ((map[i] - 128) / 128) * xAmount * strength;
+        dy = ((map[i + 1] - 128) / 128) * yAmount * strength;
+      } else {
+        dx = Math.sin((y / height) * frequency * Math.PI * 2 + phase) * xAmount * strength;
+        dy = Math.sin((x / width) * frequency * Math.PI * 2 + phase) * yAmount * strength;
+      }
+      const sx = x - dx;
+      const sy = y - dy;
+      if (filter === "nearest") {
+        sampleNearestInto(src, width, height, sx, sy, out, i);
+      } else {
+        out[i] = sampleBilinearChannel(src, width, height, sx, sy, 0);
+        out[i + 1] = sampleBilinearChannel(src, width, height, sx, sy, 1);
+        out[i + 2] = sampleBilinearChannel(src, width, height, sx, sy, 2);
+        out[i + 3] = 255;
+      }
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
 // Smoothly darken pixels as their normalised distance from the lens centre
 // approaches 1. `amount` controls the falloff strength — 0 leaves the image
 // untouched, 1 fully blacks out the corners.
@@ -633,6 +821,204 @@ function applyVignetteInPlace(data, width, height, centerXPct, centerYPct, amoun
       data[i + 2] = Math.round(data[i + 2] * factor);
     }
   }
+}
+
+function rgbToHsv(r8, g8, b8) {
+  const r = r8 / 255;
+  const g = g8 / 255;
+  const b = b8 / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  let h = 0;
+
+  if (delta > 0) {
+    if (max === r) h = ((g - b) / delta) % 6;
+    else if (max === g) h = (b - r) / delta + 2;
+    else h = (r - g) / delta + 4;
+    h /= 6;
+    if (h < 0) h += 1;
+  }
+
+  return [h, max === 0 ? 0 : delta / max, max];
+}
+
+function hsvToRgb(h, s, v) {
+  const c = v * s;
+  const sector = h * 6;
+  const x = c * (1 - Math.abs((sector % 2) - 1));
+  const m = v - c;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (sector < 1) {
+    r = c;
+    g = x;
+  } else if (sector < 2) {
+    r = x;
+    g = c;
+  } else if (sector < 3) {
+    g = c;
+    b = x;
+  } else if (sector < 4) {
+    g = x;
+    b = c;
+  } else if (sector < 5) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
+
+  return [
+    Math.round((r + m) * 255),
+    Math.round((g + m) * 255),
+    Math.round((b + m) * 255),
+  ];
+}
+
+function buildRgbCurveLut(params, prefix) {
+  const points = params?.[`points_${prefix}`];
+  if (Array.isArray(points) && points.length >= 2) {
+    return buildCurvePointLut(points);
+  }
+  return buildLegacyCurveLut(
+    params?.[`${prefix}Low`],
+    params?.[`${prefix}Mid`],
+    params?.[`${prefix}High`]
+  );
+}
+
+function buildLegacyCurveLut(lowValue, midValue, highValue) {
+  const low = clamp(Number(lowValue ?? 0), 0, 255);
+  const mid = clamp(Number(midValue ?? 128), 0, 255);
+  const high = clamp(Number(highValue ?? 255), 0, 255);
+  const lut = new Uint8Array(256);
+
+  for (let i = 0; i < 256; i++) {
+    const value = i <= 128
+      ? low + (mid - low) * (i / 128)
+      : mid + (high - mid) * ((i - 128) / 127);
+    lut[i] = Math.round(clamp(value, 0, 255));
+  }
+
+  return lut;
+}
+
+function buildCurvePointLut(rawPoints) {
+  const lut = new Uint8ClampedArray(256);
+  const points = sanitizeCurvePoints(rawPoints);
+  if (points.length < 2) {
+    for (let i = 0; i < 256; i++) lut[i] = i;
+    return lut;
+  }
+
+  const n = points.length;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const dx = new Array(n - 1);
+  const dy = new Array(n - 1);
+  const slope = new Array(n - 1);
+  for (let i = 0; i < n - 1; i++) {
+    dx[i] = xs[i + 1] - xs[i];
+    dy[i] = ys[i + 1] - ys[i];
+    slope[i] = dx[i] !== 0 ? dy[i] / dx[i] : 0;
+  }
+
+  const tangent = new Array(n);
+  tangent[0] = slope[0];
+  tangent[n - 1] = slope[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    tangent[i] = slope[i - 1] * slope[i] <= 0 ? 0 : (slope[i - 1] + slope[i]) / 2;
+  }
+
+  for (let i = 0; i < n - 1; i++) {
+    if (slope[i] === 0) {
+      tangent[i] = 0;
+      tangent[i + 1] = 0;
+      continue;
+    }
+    const a = tangent[i] / slope[i];
+    const b = tangent[i + 1] / slope[i];
+    const h = a * a + b * b;
+    if (h > 9) {
+      const scale = 3 / Math.sqrt(h);
+      tangent[i] = scale * a * slope[i];
+      tangent[i + 1] = scale * b * slope[i];
+    }
+  }
+
+  for (let x = 0; x < 256; x++) {
+    if (x <= xs[0]) {
+      lut[x] = clamp(Math.round(ys[0]), 0, 255);
+      continue;
+    }
+    if (x >= xs[n - 1]) {
+      lut[x] = clamp(Math.round(ys[n - 1]), 0, 255);
+      continue;
+    }
+    let segment = 0;
+    while (segment < n - 1 && x > xs[segment + 1]) segment++;
+    const h = dx[segment];
+    const t = (x - xs[segment]) / h;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const y =
+      (2 * t3 - 3 * t2 + 1) * ys[segment] +
+      (t3 - 2 * t2 + t) * h * tangent[segment] +
+      (-2 * t3 + 3 * t2) * ys[segment + 1] +
+      (t3 - t2) * h * tangent[segment + 1];
+    lut[x] = clamp(Math.round(y), 0, 255);
+  }
+  return lut;
+}
+
+function sanitizeCurvePoints(rawPoints) {
+  const cleaned = [];
+  for (const point of Array.isArray(rawPoints) ? rawPoints : []) {
+    const x = Math.round(Number(point?.x));
+    const y = Math.round(Number(point?.y));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    cleaned.push({ x: clamp(x, 0, 255), y: clamp(y, 0, 255) });
+  }
+  cleaned.sort((a, b) => a.x - b.x);
+
+  const unique = [];
+  for (const point of cleaned) {
+    const last = unique[unique.length - 1];
+    if (last && last.x === point.x) {
+      last.y = Math.round((last.y + point.y) / 2);
+    } else {
+      unique.push({ ...point });
+    }
+  }
+  return unique;
+}
+
+function isIdentityLut(lut) {
+  for (let i = 0; i < 256; i++) {
+    if (lut[i] !== i) return false;
+  }
+  return true;
+}
+
+function sampleNearestInto(data, width, height, x, y, target, offset) {
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  if (ix < 0 || ix >= width || iy < 0 || iy >= height) {
+    target[offset] = 0;
+    target[offset + 1] = 0;
+    target[offset + 2] = 0;
+    target[offset + 3] = 255;
+    return;
+  }
+  const src = (iy * width + ix) * 4;
+  target[offset] = data[src];
+  target[offset + 1] = data[src + 1];
+  target[offset + 2] = data[src + 2];
+  target[offset + 3] = 255;
 }
 
 function sampleBilinearChannel(data, width, height, x, y, channel) {
@@ -660,6 +1046,8 @@ export function applyMixNode(inputA, inputB, params) {
   const height = primary.height;
   const factor = clamp((params.factor ?? 50) / 100, 0, 1);
   const mode = params.mode ?? "normal";
+  if (!inputB) return inputA ?? null;
+  if (factor === 0 && inputA) return inputA;
 
   const output = createBuffer(width, height);
   const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
@@ -780,6 +1168,8 @@ function supportsBlurFilter() {
   const center = outputCtx.getImageData(8, 8, 1, 1).data[0];
   const outer = outputCtx.getImageData(3, 8, 1, 1).data[0];
   supportsCanvasBlurFilter = center > outer && outer > 0;
+  releaseBuffer(source);
+  releaseBuffer(output);
   return supportsCanvasBlurFilter;
 }
 
@@ -891,6 +1281,7 @@ export function acquireBuffer(width, height) {
     const reused = stack.pop();
     const ctx = reused.getContext("2d", { willReadFrequently: true });
     if (ctx) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
       ctx.filter = "none";

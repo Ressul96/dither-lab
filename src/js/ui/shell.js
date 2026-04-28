@@ -24,12 +24,10 @@ function initScopesDrawer() {
   const drawer = document.getElementById("scopesDrawer");
   const toggle = document.getElementById("scopesToggle");
   const close = document.getElementById("scopesClose");
-  const workspace = document.getElementById("workspace");
-  if (!drawer || !toggle || !workspace) return;
+  if (!drawer || !toggle) return;
 
   const setOpen = (open) => {
     drawer.classList.toggle("open", open);
-    workspace.classList.toggle("scopes-open", open);
     drawer.setAttribute("aria-hidden", open ? "false" : "true");
     toggle.setAttribute("aria-pressed", open ? "true" : "false");
     toggle.classList.toggle("scopes-active", open);
@@ -87,7 +85,6 @@ function startResize(e, handle) {
 function startWorkspaceResize(e, handle) {
   const workspace = document.getElementById("workspace");
   const nodeEditor = document.querySelector(".node-editor-shell");
-  const scopesDrawer = document.getElementById("scopesDrawer");
   const playerCard = document.getElementById("playerCard");
   if (!workspace || !nodeEditor) return;
 
@@ -95,18 +92,15 @@ function startWorkspaceResize(e, handle) {
   const startH = nodeEditor.getBoundingClientRect().height;
   const workspaceRect = workspace.getBoundingClientRect();
   const playerHeight = playerCard?.getBoundingClientRect().height ?? 0;
-  const scopesHeight = scopesDrawer?.classList.contains("open")
-    ? scopesDrawer.getBoundingClientRect().height
-    : 0;
   const minH = 220;
-  const maxH = Math.max(minH, workspaceRect.height - playerHeight - scopesHeight - 180);
+  const maxH = Math.max(minH, workspaceRect.height - playerHeight - 180);
 
   handle.classList.add("dragging");
   document.body.classList.add("resizing-y");
   handle.setPointerCapture(e.pointerId);
 
   const onMove = (ev) => {
-    const next = clamp(startH + (ev.clientY - startY), minH, maxH);
+    const next = clamp(startH - (ev.clientY - startY), minH, maxH);
     workspace.style.setProperty("--node-editor-h", `${next}px`);
   };
 
