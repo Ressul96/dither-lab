@@ -29,6 +29,7 @@ src-tauri/gen
 
 # Claude Code
 .claude/settings.local.json
+.claude/worktrees/
 
 # Dither Lab project atomic writes
 *.ditherlab.tmp
