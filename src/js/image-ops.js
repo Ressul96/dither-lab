@@ -3,6 +3,14 @@ import { getPalette } from "./palettes.js";
 
 let supportsCanvasBlurFilter = null;
 
+// Adjust — canonical color-grade order: exposure (linear-light) → gamma →
+// brightness offset → contrast pivot → saturation around luma. The previous
+// order applied exposure last, multiplying on top of an already-clamped
+// gamma-corrected value, which made bright pixels saturate immediately and
+// felt unresponsive at low exposure values. Each operation only clamps once,
+// at the end, so intermediate over-range values can still be brought back
+// into [0,1] by a later op (e.g. exposure pushes white past 1 then contrast
+// pulls it back rather than clipping mid-chain).
 export function applyAdjustNode(input, params) {
   if (!input?.width || !input?.height) return null;
 
@@ -20,31 +28,58 @@ export function applyAdjustNode(input, params) {
   const exposure = clamp((params.exposure ?? 0) / 100, -4, 4);
   const exposureMultiplier = 2 ** exposure;
 
+  const identity =
+    brightness === 0 &&
+    contrast === 1 &&
+    saturation === 1 &&
+    gamma === 1 &&
+    exposure === 0;
+  if (identity) {
+    context.putImageData(imageData, 0, 0);
+    return output;
+  }
+
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
     let g = data[index + 1] / 255;
     let b = data[index + 2] / 255;
 
-    r = clamp01(r + brightness);
-    g = clamp01(g + brightness);
-    b = clamp01(b + brightness);
+    // 1. Exposure first — multiplies linear-ish values, so highlights stretch
+    //    before downstream tonal ops decide what to do with them.
+    r *= exposureMultiplier;
+    g *= exposureMultiplier;
+    b *= exposureMultiplier;
 
-    r = clamp01((r - 0.5) * contrast + 0.5);
-    g = clamp01((g - 0.5) * contrast + 0.5);
-    b = clamp01((b - 0.5) * contrast + 0.5);
+    // 2. Gamma — perceptual lift (gamma > 1 lightens midtones).
+    if (gamma !== 1) {
+      r = Math.pow(Math.max(0, r), 1 / gamma);
+      g = Math.pow(Math.max(0, g), 1 / gamma);
+      b = Math.pow(Math.max(0, b), 1 / gamma);
+    }
 
-    const luma = luminance01(r, g, b);
-    r = clamp01(luma + (r - luma) * saturation);
-    g = clamp01(luma + (g - luma) * saturation);
-    b = clamp01(luma + (b - luma) * saturation);
+    // 3. Brightness — flat offset.
+    r += brightness;
+    g += brightness;
+    b += brightness;
 
-    r = clamp01(Math.pow(r, 1 / gamma) * exposureMultiplier);
-    g = clamp01(Math.pow(g, 1 / gamma) * exposureMultiplier);
-    b = clamp01(Math.pow(b, 1 / gamma) * exposureMultiplier);
+    // 4. Contrast — pivot around mid-grey.
+    if (contrast !== 1) {
+      r = (r - 0.5) * contrast + 0.5;
+      g = (g - 0.5) * contrast + 0.5;
+      b = (b - 0.5) * contrast + 0.5;
+    }
 
-    data[index] = Math.round(r * 255);
-    data[index + 1] = Math.round(g * 255);
-    data[index + 2] = Math.round(b * 255);
+    // 5. Saturation — pull each channel toward / away from luma.
+    if (saturation !== 1) {
+      const luma = luminance01(r, g, b);
+      r = luma + (r - luma) * saturation;
+      g = luma + (g - luma) * saturation;
+      b = luma + (b - luma) * saturation;
+    }
+
+    data[index] = Math.round(clamp01(r) * 255);
+    data[index + 1] = Math.round(clamp01(g) * 255);
+    data[index + 2] = Math.round(clamp01(b) * 255);
   }
 
   context.putImageData(imageData, 0, 0);
@@ -59,11 +94,12 @@ export function applyBlurNode(input, params) {
 }
 
 // Glare — extract bright pixels, transform into bloom / streaks / fog glow,
-// screen-blend the result over the source. Replaces the simpler Glow node;
-// the Streaks type is the iconic anamorphic flare look that pure threshold-
-// blur Glow couldn't produce. Algorithm follows Blender's compositor Glare
-// at a high level — Streaks uses iterative power-of-2 displacement blur per
-// direction, Bloom and Fog Glow are progressively wider Gaussian blurs.
+// blend the result over the source. Replaces the simpler Glow node; the
+// Streaks type is the iconic anamorphic flare look that pure threshold-blur
+// Glow couldn't produce. Algorithm follows Blender's compositor Glare at a
+// high level — Streaks uses iterative power-of-2 displacement blur per
+// direction, Bloom and Fog Glow are progressively wider Gaussian blurs with
+// optional multi-octave passes for a softer falloff.
 export function applyGlareNode(input, params) {
   if (!input?.width || !input?.height) return null;
   const type = String(params.type ?? "streaks");
@@ -71,11 +107,16 @@ export function applyGlareNode(input, params) {
   const mix = clamp(Number(params.mix ?? 100) / 100, 0, 4);
   const saturation = clamp(Number(params.saturation ?? 100) / 100, 0, 4);
   const size = Math.max(1, Number(params.size ?? 16));
+  const blendMode = String(params.blend ?? "screen");
+  // Tint: hue 0..360, amount 0..100. amount = 0 keeps original highlight
+  // colour; amount = 100 fully replaces with the tinted hue.
+  const tintAmount = clamp(Number(params.tintAmount ?? 0) / 100, 0, 1);
+  const tintHue = ((Number(params.tintHue ?? 0) % 360) + 360) % 360;
 
   const width = input.width;
   const height = input.height;
 
-  const bright = extractBrightPass(input, threshold, saturation);
+  const bright = extractBrightPass(input, threshold, saturation, tintHue, tintAmount);
 
   let glare;
   switch (type) {
@@ -88,12 +129,14 @@ export function applyGlareNode(input, params) {
       break;
     }
     case "fog-glow": {
-      glare = blurImage(bright, Math.min(80, size * 4), 3);
+      const fogQuality = clamp(Math.round(Number(params.quality ?? 2)), 1, 4);
+      glare = renderMultiOctaveBlur(bright, Math.min(80, size * 4), fogQuality);
       break;
     }
     case "bloom":
     default: {
-      glare = blurImage(bright, size);
+      const bloomQuality = clamp(Math.round(Number(params.quality ?? 1)), 1, 4);
+      glare = bloomQuality > 1 ? renderMultiOctaveBlur(bright, size, bloomQuality) : blurImage(bright, size);
       break;
     }
   }
@@ -102,7 +145,7 @@ export function applyGlareNode(input, params) {
   const outCtx = output.getContext("2d", { alpha: false, willReadFrequently: true });
   outCtx.drawImage(input, 0, 0);
   outCtx.globalAlpha = mix;
-  outCtx.globalCompositeOperation = "screen";
+  outCtx.globalCompositeOperation = mapGlareBlend(blendMode);
   outCtx.drawImage(glare, 0, 0);
   outCtx.globalCompositeOperation = "source-over";
   outCtx.globalAlpha = 1;
@@ -112,10 +155,47 @@ export function applyGlareNode(input, params) {
   return output;
 }
 
+function mapGlareBlend(mode) {
+  switch (mode) {
+    case "add":
+      return "lighter";
+    case "lighten":
+      return "lighten";
+    case "overlay":
+      return "overlay";
+    case "screen":
+    default:
+      return "screen";
+  }
+}
+
+// Multi-octave Gaussian: blur at the requested radius, again at half the
+// radius, again at a quarter, and add them together. Cheap, smooth, and
+// gives bloom a richer falloff than a single radius pass.
+function renderMultiOctaveBlur(bright, radius, octaves) {
+  const out = createBuffer(bright.width, bright.height);
+  const ctx = out.getContext("2d", { willReadFrequently: false });
+  ctx.clearRect(0, 0, out.width, out.height);
+  let working = radius;
+  ctx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < octaves && working >= 1; i++) {
+    const passed = blurImage(bright, Math.max(1, Math.round(working)));
+    ctx.globalAlpha = 1 / octaves;
+    ctx.drawImage(passed, 0, 0);
+    if (passed !== bright) releaseBuffer(passed);
+    working *= 0.5;
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  return out;
+}
+
 // Pull pixels above the luma threshold into a transparent canvas, weighting
 // alpha by how far above the threshold each pixel sits. Saturation can boost
-// (or kill) the chroma so coloured highlights flare with their own hue.
-function extractBrightPass(input, threshold, saturation) {
+// (or kill) the chroma so coloured highlights flare with their own hue, and
+// a tint colour can mix in toward the user-chosen hue (amount = 1 fully
+// replaces the source colour with a luma-preserving tinted version).
+function extractBrightPass(input, threshold, saturation, tintHue, tintAmount) {
   const width = input.width;
   const height = input.height;
   const base = createBuffer(width, height);
@@ -130,6 +210,16 @@ function extractBrightPass(input, threshold, saturation) {
   const brightData = brightImage.data;
 
   const denom = Math.max(1, 255 - threshold);
+  const useTint = tintAmount > 0;
+  let tintR = 1;
+  let tintG = 1;
+  let tintB = 1;
+  if (useTint) {
+    const [tr, tg, tb] = hueToRgb01(tintHue);
+    tintR = tr;
+    tintG = tg;
+    tintB = tb;
+  }
   for (let i = 0; i < sourceData.length; i += 4) {
     const r = sourceData[i];
     const g = sourceData[i + 1];
@@ -140,23 +230,47 @@ function extractBrightPass(input, threshold, saturation) {
       continue;
     }
     const alpha = Math.round(((luma - threshold) / denom) * 255);
+    let outR;
+    let outG;
+    let outB;
     if (saturation === 1) {
-      brightData[i] = r;
-      brightData[i + 1] = g;
-      brightData[i + 2] = b;
+      outR = r;
+      outG = g;
+      outB = b;
     } else {
-      const cr = clamp(luma + (r - luma) * saturation, 0, 255);
-      const cg = clamp(luma + (g - luma) * saturation, 0, 255);
-      const cb = clamp(luma + (b - luma) * saturation, 0, 255);
-      brightData[i] = Math.round(cr);
-      brightData[i + 1] = Math.round(cg);
-      brightData[i + 2] = Math.round(cb);
+      outR = clamp(luma + (r - luma) * saturation, 0, 255);
+      outG = clamp(luma + (g - luma) * saturation, 0, 255);
+      outB = clamp(luma + (b - luma) * saturation, 0, 255);
     }
+    if (useTint) {
+      // Tinted target: luma-matched pure-hue colour, then mix.
+      const tR = tintR * luma;
+      const tG = tintG * luma;
+      const tB = tintB * luma;
+      outR = outR * (1 - tintAmount) + tR * tintAmount;
+      outG = outG * (1 - tintAmount) + tG * tintAmount;
+      outB = outB * (1 - tintAmount) + tB * tintAmount;
+    }
+    brightData[i] = Math.round(outR);
+    brightData[i + 1] = Math.round(outG);
+    brightData[i + 2] = Math.round(outB);
     brightData[i + 3] = alpha;
   }
   brightCtx.putImageData(brightImage, 0, 0);
   releaseBuffer(base);
   return bright;
+}
+
+// HSV → RGB at saturation = 1, value = 1, returned in [0,1] floats.
+function hueToRgb01(hue) {
+  const h = (hue % 360) / 60;
+  const x = 1 - Math.abs((h % 2) - 1);
+  if (h < 1) return [1, x, 0];
+  if (h < 2) return [x, 1, 0];
+  if (h < 3) return [0, 1, x];
+  if (h < 4) return [0, x, 1];
+  if (h < 5) return [x, 0, 1];
+  return [1, 0, x];
 }
 
 // Iterative directional blur per streak axis: each iteration doubles the
@@ -314,23 +428,32 @@ export function applyPixelateNode(input, params) {
   return output;
 }
 
-// Scale — explicit resize node. width/height factors are stored as percentage
-// integers (100 = identity) so the inspector slider format stays consistent
-// with the rest of the chain. Output canvas matches the new dimensions, which
-// downstream nodes adapt to via their existing width/height handling.
+// Scale — resize the image content inside a canvas of the original size, so
+// the change is actually visible to downstream nodes (the previous version
+// resized the output canvas itself and commitProcessedFrame stretched the
+// result back, hiding the effect entirely). Scale > 100% crops outwards;
+// Scale < 100% leaves a black border around the centred shrunk image. Pair
+// it with Pixelate or downstream Dither to get retro pixel-art workflows.
 export function applyScaleNode(input, params) {
   if (!input?.width || !input?.height) return null;
-  const xPct = clamp(Number(params.x ?? 100), 1, 1000);
-  const yPct = clamp(Number(params.y ?? 100), 1, 1000);
+  const xPct = clamp(Number(params.x ?? 100), 10, 400) / 100;
+  const yPct = clamp(Number(params.y ?? 100), 10, 400) / 100;
   const filter = params.filter === "nearest" ? false : true;
-  if (xPct === 100 && yPct === 100) return input;
+  if (xPct === 1 && yPct === 1) return input;
 
-  const w = Math.max(1, Math.round((input.width * xPct) / 100));
-  const h = Math.max(1, Math.round((input.height * yPct) / 100));
-  const output = createBuffer(w, h);
+  const width = input.width;
+  const height = input.height;
+  const output = createBuffer(width, height);
   const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, width, height);
   ctx.imageSmoothingEnabled = filter;
-  ctx.drawImage(input, 0, 0, input.width, input.height, 0, 0, w, h);
+
+  const newW = Math.max(1, Math.round(width * xPct));
+  const newH = Math.max(1, Math.round(height * yPct));
+  const dx = Math.round((width - newW) / 2);
+  const dy = Math.round((height - newH) / 2);
+  ctx.drawImage(input, 0, 0, width, height, dx, dy, newW, newH);
   return output;
 }
 

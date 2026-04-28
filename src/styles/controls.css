@@ -69,6 +69,48 @@
   font-weight: 500;
 }
 
+.field .field-suffix {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.field-suffix:empty {
+  display: none;
+}
+
+/* Slider + number input combo: slider takes the remaining width, number
+   input sits at the right edge as a tight digit box. */
+.range-field .range-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.range-field .range-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.range-field .range-row .num-edit {
+  flex: 0 0 64px;
+  width: 64px;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 12px;
+  text-align: right;
+  /* Hide the spinner — keeps the cell narrow and consistent across browsers. */
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.range-field .range-row .num-edit::-webkit-outer-spin-button,
+.range-field .range-row .num-edit::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .row {
   display: flex;
   align-items: center;

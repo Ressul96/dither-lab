@@ -44,8 +44,10 @@ const SOCKET_HIT_RADIUS = 28;
 // Generous radius around an edge counts as a drop-on-edge target. The user
 // rarely lands the ghost preview exactly on the SVG path, so a wide tolerance
 // trades a tiny bit of "free placement" precision for the much more useful
-// "drop here, snap into the chain" behaviour.
-const EDGE_INSERT_RADIUS = 110;
+// "drop here, snap into the chain" behaviour. The fallback radius is even
+// wider and is only consulted when the precise path-distance check fails.
+const EDGE_INSERT_RADIUS = 140;
+const EDGE_INSERT_FALLBACK_RADIUS = 240;
 const GRAPH_VIEW_PADDING = 120;
 
 let nodesEl;
@@ -658,8 +660,31 @@ function findInsertableEdgeAt(clientX, clientY) {
   return best;
 }
 
+// Last-resort lookup: when path sampling didn't snap to anything (often
+// because the user dropped a bit far from the line), accept the closest
+// edge whose midpoint is within the fallback radius.
+function findClosestEdgeByMidpoint(clientX, clientY) {
+  let best = null;
+  for (const path of edgesEl.querySelectorAll(".graph-edge[data-edge-id]")) {
+    if (!path?.getBoundingClientRect) continue;
+    const rect = path.getBoundingClientRect();
+    if (!rect.width && !rect.height) continue;
+    const mx = rect.left + rect.width / 2;
+    const my = rect.top + rect.height / 2;
+    const distance = Math.hypot(clientX - mx, clientY - my);
+    if (distance > EDGE_INSERT_FALLBACK_RADIUS) continue;
+    if (best && best.distance <= distance) continue;
+    best = { edgeId: path.dataset.edgeId, distance, el: path };
+  }
+  return best;
+}
+
 function findInsertTargetAt(clientX, clientY) {
-  return findInsertableEdgeAt(clientX, clientY) ?? getHighlightedInsertEdge();
+  return (
+    findInsertableEdgeAt(clientX, clientY) ??
+    getHighlightedInsertEdge() ??
+    findClosestEdgeByMidpoint(clientX, clientY)
+  );
 }
 
 function getHighlightedInsertEdge() {
@@ -744,6 +769,7 @@ function onInspectorInput(event) {
     if (node.type === "viewer-output" && control.dataset.nodeParam === "viewer-fps") {
       setFps(readControlValue(control));
       updateInlineReadout(control);
+      syncSiblingControls(control);
       return;
     }
 
@@ -752,6 +778,7 @@ function onInspectorInput(event) {
       [control.dataset.nodeParam]: readControlValue(control),
     });
     updateInlineReadout(control);
+    syncSiblingControls(control);
     return;
   }
 
@@ -1460,11 +1487,20 @@ function renderGlareNode(node) {
     ["bloom", "Bloom"],
     ["fog-glow", "Fog Glow"],
   ];
+  const blend = String(params.blend ?? "screen");
+  const blendOptions = [
+    ["screen", "Screen (default)"],
+    ["add", "Add (lighter)"],
+    ["lighten", "Lighten"],
+    ["overlay", "Overlay"],
+  ];
 
-  // Common params first; per-type extras follow underneath so the inspector
-  // doesn't bury the most-tweaked sliders behind a pile of streak knobs.
+  // Common knobs first so the most-tweaked sliders sit at the top, then
+  // per-type extras (streaks vs bloom/fog have different shapes), then
+  // tint at the bottom — most users keep tint at zero.
   const common = `
     ${renderSelectField("Type", "type", type, typeOptions)}
+    ${renderSelectField("Blend", "blend", blend, blendOptions)}
     ${renderRangeField("Threshold", "threshold", params.threshold, 0, 255, String(params.threshold))}
     ${renderRangeField("Mix", "mix", params.mix, 0, 400, `${params.mix}%`)}
     ${renderRangeField("Saturation", "saturation", params.saturation, 0, 400, `${(params.saturation / 100).toFixed(2)}x`)}
@@ -1479,13 +1515,22 @@ function renderGlareNode(node) {
       ${renderRangeField("Fade", "fade", params.fade, 0, 99, `${params.fade}%`)}
     `;
   } else {
-    typeFields = renderRangeField("Size", "size", params.size, 1, 80, `${params.size}px`);
+    typeFields = `
+      ${renderRangeField("Size", "size", params.size, 1, 80, `${params.size}px`)}
+      ${renderRangeField("Quality", "quality", params.quality, 1, 4, `${params.quality} octave${params.quality === 1 ? "" : "s"}`)}
+    `;
   }
+
+  const tintFields = `
+    ${renderRangeField("Tint Amount", "tintAmount", params.tintAmount, 0, 100, `${params.tintAmount}%`)}
+    ${renderRangeField("Tint Hue", "tintHue", params.tintHue, 0, 360, `${params.tintHue}°`)}
+  `;
 
   return `
     <section class="node-panel-section">
       ${common}
       ${typeFields}
+      ${tintFields}
     </section>
   `;
 }
@@ -1567,17 +1612,37 @@ function renderEmptyInspector() {
   `;
 }
 
+// `readout` is the formatted hint (e.g. "100% barrel"); it stays on the
+// label as a unit suffix while the editable number input takes the right
+// edge of the row, paired with the slider on the same line.
 function renderRangeField(label, key, value, min, max, readout) {
+  const safeKey = escapeHtml(key);
+  const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+  const suffix = readout && readout !== String(numericValue)
+    ? `<span class="field-suffix" data-param-readout="${safeKey}">${escapeHtml(readout)}</span>`
+    : `<span class="field-suffix" data-param-readout="${safeKey}"></span>`;
   return `
-    <div class="field">
-      <label>${escapeHtml(label)} <span class="num" data-param-readout="${escapeHtml(key)}">${escapeHtml(readout)}</span></label>
-      <input
-        type="range"
-        min="${min}"
-        max="${max}"
-        value="${value}"
-        data-node-param="${escapeHtml(key)}"
-      />
+    <div class="field range-field">
+      <label>${escapeHtml(label)}${suffix}</label>
+      <div class="range-row">
+        <input
+          type="range"
+          min="${min}"
+          max="${max}"
+          value="${numericValue}"
+          data-node-param="${safeKey}"
+          data-input-kind="range"
+        />
+        <input
+          type="number"
+          class="num-edit"
+          min="${min}"
+          max="${max}"
+          value="${numericValue}"
+          data-node-param="${safeKey}"
+          data-input-kind="number"
+        />
+      </div>
     </div>
   `;
 }
@@ -1647,6 +1712,20 @@ function readControlValue(control) {
   if (control.type === "checkbox") return control.checked;
   if (control.tagName === "SELECT") return control.value;
   return Number(control.value);
+}
+
+// Slider and number input share the same data-node-param key — when one
+// moves the other has to follow without going through a full re-render
+// (re-render would steal focus / blow away the user's typed digits).
+function syncSiblingControls(control) {
+  const key = control.dataset.nodeParam;
+  if (!key || !inspectorEl) return;
+  const value = control.value;
+  const siblings = inspectorEl.querySelectorAll(`[data-node-param="${cssEscape(key)}"]`);
+  for (const el of siblings) {
+    if (el === control) continue;
+    if (el.value !== value) el.value = value;
+  }
 }
 
 function updateInlineReadout(control) {

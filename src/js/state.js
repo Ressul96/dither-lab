@@ -31,6 +31,10 @@ const state = {
     pixelInspector: false,
     compare: "processed",
     splitPosition: 0.5,
+    // "auto" runs the effect chain at half-res during playback for speed and
+    // jumps back to full-res when paused; "full" always processes at source
+    // resolution so the live preview matches the export pixel-for-pixel.
+    playbackQuality: "auto",
   },
   graph: {
     nodes: [],

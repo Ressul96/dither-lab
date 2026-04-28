@@ -779,8 +779,15 @@ function renderCurrentFrame() {
   // source. The processed/dither commits already scale the result back up to
   // full resolution so the displayed preview lines up with the export-sized
   // canvases — only the per-pixel CPU loops shrink. Paused/scrubbing frames
-  // and export both stay at full resolution.
-  const usePlaybackScale = !v.paused && !v.ended && !exportSessionActive;
+  // and export both stay at full resolution. The user can opt out via
+  // view.playbackQuality === "full" when they want pixel-accurate live
+  // playback at the cost of frame rate.
+  const playbackQuality = getState().view.playbackQuality ?? "auto";
+  const usePlaybackScale =
+    playbackQuality !== "full" &&
+    !v.paused &&
+    !v.ended &&
+    !exportSessionActive;
   const sourceForEval = usePlaybackScale
     ? buildPreviewSource(sourceCanvas)
     : sourceCanvas;

@@ -611,6 +611,19 @@ body.resizing-y * {
   font-size: 10px;
 }
 
+.quality-pill .quality-label {
+  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.quality-pill[data-quality="full"] {
+  background: rgba(120, 220, 140, 0.18);
+  border-color: rgba(120, 220, 140, 0.4);
+  color: #cbe9d2;
+}
+
 .pixel-inspector {
   position: absolute;
   top: 16px;

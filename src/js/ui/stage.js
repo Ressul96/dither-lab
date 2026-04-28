@@ -10,6 +10,7 @@ export function initStage() {
   const splitOverlay = document.getElementById("splitOverlay");
   const splitDivider = document.getElementById("splitDivider");
   const zoomToggle = document.getElementById("zoomToggle");
+  const qualityToggle = document.getElementById("qualityToggle");
   if (!stage || !canvas || !stageCanvas || !splitOverlay || !splitDivider) return;
 
   const outputs = [canvas, splitCanvas].filter(Boolean);
@@ -21,9 +22,19 @@ export function initStage() {
   wireContextMenu(stage);
   wireZoomToggle(zoomToggle, outputs);
   wireZoomShortcuts(outputs);
+  wireQualityToggle(qualityToggle);
 
   const sync = () =>
-    syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs, zoomToggle);
+    syncStagePresentation(
+      stageCanvas,
+      canvas,
+      splitCanvas,
+      splitOverlay,
+      splitDivider,
+      outputs,
+      zoomToggle,
+      qualityToggle
+    );
 
   if (typeof ResizeObserver === "function") {
     const observer = new ResizeObserver(sync);
@@ -163,6 +174,14 @@ function setActualPixels(outputs) {
   applyTransform(outputs);
 }
 
+function wireQualityToggle(qualityToggle) {
+  if (!qualityToggle) return;
+  qualityToggle.addEventListener("click", () => {
+    const current = getState().view.playbackQuality ?? "auto";
+    dispatch("view", { playbackQuality: current === "auto" ? "full" : "auto" });
+  });
+}
+
 function wireZoomToggle(zoomToggle, outputs) {
   if (!zoomToggle) return;
   zoomToggle.addEventListener("click", () => {
@@ -223,9 +242,10 @@ export function togglePixelInspector() {
   if (hud) hud.classList.toggle("hidden", !next);
 }
 
-function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs, zoomToggle) {
+function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, splitDivider, outputs, zoomToggle, qualityToggle) {
   applyTransform(outputs);
   syncZoomToggle(zoomToggle, canvas);
+  syncQualityToggle(qualityToggle);
 
   const { source, view } = getState();
   const compare = source.loaded ? view.compare : "processed";
@@ -259,6 +279,14 @@ function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, s
   splitDivider.style.height = "";
 }
 
+function syncQualityToggle(qualityToggle) {
+  if (!qualityToggle) return;
+  const quality = getState().view.playbackQuality ?? "auto";
+  qualityToggle.dataset.quality = quality;
+  const label = qualityToggle.querySelector(".quality-label");
+  if (label) label.textContent = quality === "full" ? "FX: Full" : "FX: Auto";
+}
+
 function syncZoomToggle(zoomToggle, canvas) {
   if (!zoomToggle) return;
   const label = zoomToggle.querySelector(".zoom-label");
@@ -287,11 +315,13 @@ function syncZoomToggle(zoomToggle, canvas) {
   // exact pixels that will be exported. Anything below that is a downscale
   // approximation. During playback the effect chain itself runs at half
   // resolution to keep up, so even a 1:1 zoom shows an approximation —
-  // the badge has to call that out so the user knows pause = truth.
+  // unless the user has flipped the FX quality pill to Full, in which case
+  // playback also processes at source resolution.
   const video = document.getElementById("sourceVideo");
   const playing = video && !video.paused && !video.ended && video.readyState >= 2;
   const zoomExact = effectiveScale >= 0.999;
-  if (playing) {
+  const playbackFull = (getState().view.playbackQuality ?? "auto") === "full";
+  if (playing && !playbackFull) {
     accuracy.dataset.state = "approx";
     accuracy.textContent = "playback · half-res";
   } else if (zoomExact) {
