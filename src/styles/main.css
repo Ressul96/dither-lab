@@ -1673,6 +1673,17 @@ body.cutting-edges * {
   background: rgba(255, 255, 255, 0.04);
 }
 
+/* Marquee selection rectangle — drawn while drag-selecting on a lane. */
+.marquee-rect {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(74, 158, 255, 0.18);
+  border: 1px solid rgba(74, 158, 255, 0.55);
+  pointer-events: none;
+  z-index: 4;
+}
+
 .animation-keyframe {
   position: absolute;
   top: 50%;

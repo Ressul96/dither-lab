@@ -256,6 +256,9 @@ function wireAnimationTimeline() {
 
     const lane = event.target.closest(".animation-track-lane");
     if (!lane) return;
+    // A marquee drag just ended on this lane — the user did not intend to
+    // click-seek; their selection is the result they want.
+    if (marqueeJustEnded) return;
     // Clicking the lane background (not a keyframe) clears multi-selection
     // and seeks the playhead — matches After Effects style.
     clearSelection();
@@ -674,7 +677,13 @@ function renderSelectedKeyframePanel(selected) {
 
 function onAnimationTimelinePointerDown(event) {
   const keyframe = event.target.closest(".animation-keyframe[data-timeline-keyframe-id]");
-  if (!keyframe) return;
+  if (!keyframe) {
+    // No keyframe under the pointer — try starting a marquee selection if
+    // the pointer is on a lane background.
+    const laneBg = event.target.closest(".animation-track-lane");
+    if (laneBg) startMarqueeDrag(laneBg, event);
+    return;
+  }
 
   const lane = keyframe.closest(".animation-track-lane");
   if (!lane) return;
@@ -756,6 +765,124 @@ function onAnimationTimelinePointerUp() {
   document.removeEventListener("pointermove", onAnimationTimelinePointerMove);
   document.removeEventListener("pointerup", onAnimationTimelinePointerUp);
   document.removeEventListener("pointercancel", onAnimationTimelinePointerUp);
+}
+
+// ---------- Marquee selection (Faz 2.c) ----------
+//
+// Drag-select on a lane's empty area. The marquee element lives inside the
+// lane so it follows scroll/zoom; selection is updated on every pointermove
+// without re-rendering the whole timeline (we toggle is-selected classes
+// directly to keep the marquee element alive).
+//
+// `marqueeJustEnded` is a one-tick flag the click handler reads to swallow
+// the seek that would otherwise fire when pointerup lands on the lane.
+
+const MARQUEE_THRESHOLD = 4;
+let marqueeDrag = null;
+let marqueeJustEnded = false;
+
+function startMarqueeDrag(lane, event) {
+  // Right-click and middle-click should not start a marquee.
+  if (event.button !== 0 && event.button !== undefined) return;
+  event.preventDefault();
+  const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+  marqueeDrag = {
+    lane,
+    rect: lane.getBoundingClientRect(),
+    startX: event.clientX,
+    additive,
+    initial: additive ? new Set(selectedKeyframes) : new Set(),
+    moved: false,
+    el: null,
+  };
+  document.addEventListener("pointermove", onMarqueePointerMove);
+  document.addEventListener("pointerup", onMarqueePointerUp);
+  document.addEventListener("pointercancel", onMarqueePointerUp);
+}
+
+function onMarqueePointerMove(event) {
+  if (!marqueeDrag) return;
+  const dx = event.clientX - marqueeDrag.startX;
+  if (!marqueeDrag.moved && Math.abs(dx) < MARQUEE_THRESHOLD) return;
+  marqueeDrag.moved = true;
+
+  // Refresh the lane rect each frame in case the layout shifted (e.g. a
+  // scroll or a panel resize while dragging).
+  const rect = marqueeDrag.lane.getBoundingClientRect();
+  const x1 = Math.min(event.clientX, marqueeDrag.startX);
+  const x2 = Math.max(event.clientX, marqueeDrag.startX);
+
+  if (!marqueeDrag.el) {
+    const el = document.createElement("div");
+    el.className = "marquee-rect";
+    marqueeDrag.lane.appendChild(el);
+    marqueeDrag.el = el;
+  }
+  marqueeDrag.el.style.left = `${x1 - rect.left}px`;
+  marqueeDrag.el.style.width = `${x2 - x1}px`;
+
+  // Recompute selection: initial set + every keyframe whose centre falls
+  // inside the marquee horizontal span. Keyframes are rendered as 12px
+  // diamonds centred on their time, so `center.x` between [x1, x2] is the
+  // intuitive hit test.
+  const next = new Set(marqueeDrag.initial);
+  for (const k of marqueeDrag.lane.querySelectorAll(".animation-keyframe")) {
+    const kr = k.getBoundingClientRect();
+    const cx = kr.left + kr.width / 2;
+    if (cx >= x1 && cx <= x2) {
+      next.add(selectionKey(k.dataset.timelineTrackId, k.dataset.timelineKeyframeId));
+    }
+  }
+  applySelectionSet(next);
+}
+
+function onMarqueePointerUp() {
+  if (!marqueeDrag) return;
+  const moved = marqueeDrag.moved;
+  if (marqueeDrag.el) marqueeDrag.el.remove();
+  marqueeDrag = null;
+  document.removeEventListener("pointermove", onMarqueePointerMove);
+  document.removeEventListener("pointerup", onMarqueePointerUp);
+  document.removeEventListener("pointercancel", onMarqueePointerUp);
+
+  if (moved) {
+    // Suppress the lane-background click handler that would otherwise seek
+    // the playhead. The flag clears on the next tick so a real subsequent
+    // click still works.
+    marqueeJustEnded = true;
+    setTimeout(() => {
+      marqueeJustEnded = false;
+    }, 0);
+    // Render once at the end so the inspector cursor + final selection are
+    // committed through the normal path.
+    renderAnimationTimeline();
+  }
+}
+
+// Replace the multi-select set with `next` and update the DOM in place,
+// without going through the full renderAnimationTimeline pass. The marquee
+// element is parented to a lane that renderAnimationTimeline rebuilds, so
+// we deliberately avoid re-rendering during the drag.
+function applySelectionSet(next) {
+  selectedKeyframes.clear();
+  for (const k of next) selectedKeyframes.add(k);
+  // Inspector cursor: keep "last clicked" if still in the set, otherwise
+  // promote any survivor.
+  if (
+    selectedTimelineKeyframe &&
+    !selectedKeyframes.has(
+      selectionKey(selectedTimelineKeyframe.trackId, selectedTimelineKeyframe.keyframeId)
+    )
+  ) {
+    const last = selectedKeyframes.size ? [...selectedKeyframes].pop() : null;
+    selectedTimelineKeyframe = last ? parseSelectionKey(last) : null;
+  } else if (!selectedTimelineKeyframe && selectedKeyframes.size) {
+    selectedTimelineKeyframe = parseSelectionKey([...selectedKeyframes].pop());
+  }
+  for (const k of document.querySelectorAll(".animation-keyframe")) {
+    const key = selectionKey(k.dataset.timelineTrackId, k.dataset.timelineKeyframeId);
+    k.classList.toggle("is-selected", selectedKeyframes.has(key));
+  }
 }
 
 function onAnimationTimelineChange(event) {
