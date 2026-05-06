@@ -1,6 +1,6 @@
 import { initShell } from "./ui/shell.js";
 import { initGraphShell } from "./ui/graph-shell.js";
-import { initPlayer } from "./ui/player.js";
+import { initPlayer, goToLastFrame, deleteSelectedKeyframes } from "./ui/player.js";
 import { initStage, resetZoom, togglePixelInspector } from "./ui/stage.js";
 import { newProject, openProject, saveProject, saveProjectAs } from "./project.js";
 import { initExport, openExport } from "./export.js";
@@ -92,6 +92,8 @@ function initKeyboard() {
       return;
     }
     const meta = e.metaKey || e.ctrlKey;
+    // Frame stepping uses 10× when Shift is held — matches AE/Cavalry.
+    const FRAME_BIG_STEP = 10;
     switch (e.key) {
       case " ":
         // If a button is focused, let its native Space→click fire instead of double-toggling.
@@ -101,15 +103,27 @@ function initKeyboard() {
         break;
       case "ArrowLeft":
         e.preventDefault();
-        stepFrame(-1);
+        stepFrame(e.shiftKey ? -FRAME_BIG_STEP : -1);
         break;
       case "ArrowRight":
         e.preventDefault();
-        stepFrame(1);
+        stepFrame(e.shiftKey ? FRAME_BIG_STEP : 1);
         break;
       case "Home":
         e.preventDefault();
         restart();
+        break;
+      case "End":
+        e.preventDefault();
+        goToLastFrame();
+        break;
+      case "Delete":
+      case "Backspace":
+        // Only swallow Delete/Backspace when there is something to delete —
+        // otherwise let the browser handle it (e.g. navigation back).
+        if (deleteSelectedKeyframes()) {
+          e.preventDefault();
+        }
         break;
       case "0":
         if (meta) {

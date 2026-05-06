@@ -114,15 +114,7 @@ export function initPlayer() {
   bindAction("prev-frame", () => stepFrame(-1));
   bindAction("toggle-play", togglePlay, { pointerDown: true });
   bindAction("next-frame", () => stepFrame(1));
-  bindAction("last-frame", () => {
-    const { source, timeline } = getState();
-    const duration = resolveTimelineDuration(timeline, source);
-    if (duration <= 0) return;
-    const fps = timelineFrameRate(timeline, source.fps);
-    // Last addressable frame: duration*fps - 1, then back to seconds.
-    const totalFrames = durationToFrames(duration, fps);
-    seek(snapTimeToFrame((totalFrames - 1) / fps, fps));
-  });
+  bindAction("last-frame", goToLastFrame);
   bindAction("reset-trim", () => commitTrimAction(resetTrim, "Reset trim"));
   bindAction("snap-playhead", snapPlayhead);
   bindAction("stop", () => {
@@ -424,6 +416,19 @@ function positionMorePopover(popover, anchor) {
   popover.style.position = "fixed";
   popover.style.right = `${Math.max(8, window.innerWidth - a.right)}px`;
   popover.style.bottom = `${Math.max(8, window.innerHeight - a.top + margin)}px`;
+}
+
+
+// Jump the playhead to the last addressable frame (durationFrames - 1). The
+// transport bar's End-frame button and the End keyboard shortcut both call
+// through here.
+export function goToLastFrame() {
+  const { source, timeline } = getState();
+  const duration = resolveTimelineDuration(timeline, source);
+  if (duration <= 0) return;
+  const fps = timelineFrameRate(timeline, source.fps);
+  const totalFrames = durationToFrames(duration, fps);
+  seek(snapTimeToFrame((totalFrames - 1) / fps, fps));
 }
 
 
@@ -797,8 +802,10 @@ function onAnimationTimelineChange(event) {
 // Public form, used by the Inspector "Delete" button and by the Faz 2.b
 // keyboard shortcut. Removes every keyframe currently in the multi-select
 // set in a single timeline pass, then clears selection.
+// Returns true if anything was removed — the keyboard handler uses this to
+// decide whether to swallow the Delete/Backspace key.
 export function deleteSelectedKeyframes() {
-  if (selectedKeyframes.size === 0) return;
+  if (selectedKeyframes.size === 0) return false;
   let next = getState().timeline;
   for (const key of selectedKeyframes) {
     const { trackId, keyframeId } = parseSelectionKey(key);
@@ -807,6 +814,7 @@ export function deleteSelectedKeyframes() {
   }
   dispatch("timeline", next);
   clearSelection();
+  return true;
 }
 
 // Backwards-compat alias — older callers (and the inline Inspector button)
