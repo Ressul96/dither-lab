@@ -3,6 +3,12 @@ import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
 import { clearGraphCache, evaluateGraphOutputs, isOutputCached } from "./graph-runtime.js";
 import { canUseNativeRender, evaluateNativeGraphOutputs } from "./native-render.js";
 import { acquireBuffer, releaseBuffer } from "./image-ops.js";
+import {
+  applyTimelineToGraph,
+  snapTimeToFrame,
+  timeToFrame,
+  timelineFrameRate,
+} from "./timeline.js";
 
 const FRAME_CACHE_TARGET_BYTES = 150_000_000;
 const FRAME_CACHE_MIN = 8;
@@ -38,6 +44,7 @@ let playRequestToken = 0;
 let renderVersion = 0;
 let sourceToken = 0;
 let nativeRenderInFlight = false;
+let nativeRenderStatus = "js";
 let exportSessionActive = false;
 let renderQueued = false;
 let previewSourceCanvas = null;
@@ -51,6 +58,7 @@ export function initSource() {
 
   subscribe("view", () => presentPreview());
   subscribe("graph", () => scheduleRender());
+  subscribe("timeline", () => scheduleRender());
 }
 
 // Coalesce multiple render requests within the same animation frame. Slider
@@ -137,7 +145,8 @@ async function loadVideo(src, path, options = {}) {
     videoWidth: v.videoWidth,
     videoHeight: v.videoHeight,
   });
-  syncVideoPlaybackRate(v, sourceFps, sourceFps);
+  dispatch("timeline", { duration: v.duration, fps: sourceFps });
+  applyPlaybackSpeed(v);
   setViewerOutputFps(sourceFps);
   dispatch("playback", {
     playing: false,
@@ -217,6 +226,7 @@ export function clearSource() {
     trimEnd: 0,
     loopEnabled: true,
   });
+  dispatch("timeline", { duration: 0, fps: 30 });
   disablePlayerControls();
 }
 
@@ -470,19 +480,32 @@ function clampFps(fps) {
   return Math.min(120, Math.max(1, Math.round(fps)));
 }
 
+function normalizePlaybackTime(seconds, fps) {
+  const state = getState();
+  const grid = fps ?? timelineFrameRate(state.timeline, state.source.fps);
+  return snapTimeToFrame(seconds, grid);
+}
+
 function syncPlaybackState(v, patch = {}) {
+  const time = normalizePlaybackTime(Number.isFinite(v.currentTime) ? v.currentTime : 0);
   dispatch("playback", {
     playing: !v.paused && !v.ended,
-    currentTime: Number.isFinite(v.currentTime) ? v.currentTime : 0,
+    currentTime: time,
     ...patch,
   });
 }
 
-function syncVideoPlaybackRate(v, fps = getState().source.fps, sourceFps = getState().source.sourceFps) {
+function applyPlaybackSpeed(v, speed = getState().playback.speed) {
   if (!v) return;
-  const baseFps = Math.max(1, clampFps(sourceFps || fps || 30));
-  const targetFps = Math.max(1, clampFps(fps || baseFps));
-  v.playbackRate = clamp(targetFps / baseFps, 0.1, 4);
+  const numeric = Number.isFinite(Number(speed)) ? Number(speed) : 1;
+  v.playbackRate = clamp(numeric, 0.1, 4);
+}
+
+export function setPlaybackSpeed(speed) {
+  const numeric = clamp(Number(speed) || 1, 0.1, 4);
+  const { video: v } = ensureEls();
+  applyPlaybackSpeed(v, numeric);
+  dispatch("playback", { speed: numeric });
 }
 
 async function startPlayback(v, options = {}) {
@@ -587,7 +610,7 @@ export function seek(seconds) {
   const { video: v } = ensureEls();
   if (!v?.src) return;
   const duration = Number.isFinite(v.duration) ? v.duration : 0;
-  const target = Math.max(0, Math.min(duration, Number(seconds) || 0));
+  const target = normalizePlaybackTime(Math.max(0, Math.min(duration, Number(seconds) || 0)));
   const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
   try {
     if (Math.abs(before - target) > 0.0005) {
@@ -657,12 +680,13 @@ export async function seekForExport(seconds) {
 export function stepFrame(direction) {
   const { video: v } = ensureEls();
   if (!v?.src) return;
-  const { source, playback } = getState();
-  const fps = source.fps || 30;
+  const { source, playback, timeline } = getState();
+  const fps = timelineFrameRate(timeline, source.fps);
   const duration = Number.isFinite(v.duration) ? v.duration : 0;
   pausePlayback();
+  const currentFrame = timeToFrame(v.currentTime || 0, fps);
   const next = clamp(
-    (v.currentTime || 0) + direction / fps,
+    (currentFrame + direction) / fps,
     playback.trimStart,
     Math.max(playback.trimStart, (playback.trimEnd || duration) - 1 / fps)
   );
@@ -682,7 +706,7 @@ export function setIn() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
   const { playback } = getState();
-  const next = Math.min(v.currentTime || 0, playback.trimEnd - 0.01);
+  const next = Math.min(normalizePlaybackTime(v.currentTime || 0), playback.trimEnd - 0.01);
   const trimStart = Math.max(0, next);
   dispatch("playback", { trimStart });
   if ((v.currentTime || 0) < trimStart) seek(trimStart);
@@ -693,7 +717,7 @@ export function setOut() {
   if (!v?.src) return;
   const { playback } = getState();
   const duration = Number.isFinite(v.duration) ? v.duration : 0;
-  const next = Math.max(v.currentTime || 0, playback.trimStart + 0.01);
+  const next = Math.max(normalizePlaybackTime(v.currentTime || 0), playback.trimStart + 0.01);
   const trimEnd = Math.min(duration, next);
   dispatch("playback", { trimEnd });
   if ((v.currentTime || 0) > trimEnd) seek(trimEnd);
@@ -705,10 +729,12 @@ export function resetTrim() {
   dispatch("playback", { trimStart: 0, trimEnd: Number.isFinite(v.duration) ? v.duration : 0 });
 }
 
+// viewer-output.fps is now strictly an export target. Changing it no longer
+// retunes the live <video> playback rate (that's setPlaybackSpeed's job).
+// We still mirror the value into source.fps so legacy reads keep working,
+// but the live preview keeps running at sourceFps.
 export function setFps(fps) {
   const nextFps = clampFps(fps);
-  const { video: v } = ensureEls();
-  syncVideoPlaybackRate(v, nextFps, getState().source.sourceFps);
   dispatch("source", { fps: nextFps });
   setViewerOutputFps(nextFps);
 }
@@ -797,9 +823,20 @@ function renderCurrentFrame() {
     : baseSourceVersion;
 
   const graph = ensureBootGraph();
+  const timelineContext = createTimelineRenderContext(v);
+  const nativeRenderGraph = applyTimelineToGraph(
+    graph,
+    timelineContext.timeline,
+    timelineContext.timeSeconds,
+    {
+      duration: timelineContext.durationSeconds,
+      fps: timelineContext.fps,
+    }
+  );
   const graphOutputs = evaluateGraphOutputs(graph, {
     sourceImage: sourceForEval,
     sourceVersion,
+    ...timelineContext,
   }) ?? { viewerOutput: null, ditherOutput: null };
   const graphOutput = graphOutputs.viewerOutput;
 
@@ -808,7 +845,7 @@ function renderCurrentFrame() {
   recyclePreviewOutput(graphOutput);
   recyclePreviewOutput(graphOutputs.ditherOutput);
   presentPreview();
-  queueNativePreview(graph, currentRenderVersion, currentSourceToken);
+  queueNativePreview(nativeRenderGraph, currentRenderVersion, currentSourceToken);
 }
 
 function recyclePreviewOutput(image) {
@@ -871,7 +908,7 @@ function sourceFrameKey(v) {
   if (!v?.src || !Number.isFinite(v.currentTime)) return null;
   const fps = getState().source.sourceFps || 30;
   if (!fps) return null;
-  return `${frameCacheStamp}|${Math.round(v.currentTime * fps)}`;
+  return `${frameCacheStamp}|${timeToFrame(v.currentTime, fps)}`;
 }
 
 function cacheCurrentFrame(key) {
@@ -934,25 +971,60 @@ function commitDitherFrame(image) {
   ditherCtx.drawImage(image, 0, 0, ditherCanvas.width, ditherCanvas.height);
 }
 
-function queueNativePreview(graph, currentRenderVersion, currentSourceToken) {
+function createTimelineRenderContext(v) {
+  const state = getState();
+  const fps = state.source.fps || 30;
+  return {
+    timeline: state.timeline,
+    timeSeconds: normalizePlaybackTime(
+      Number.isFinite(v?.currentTime) ? v.currentTime : state.playback.currentTime,
+      fps
+    ),
+    durationSeconds: state.source.duration || v?.duration || 0,
+    fps,
+  };
+}
+
+function queueNativePreview(renderGraph, currentRenderVersion, currentSourceToken) {
   if (exportSessionActive) return;
-  if (nativeRenderInFlight || !canUseNativeRender(graph)) return;
+  if (!canUseNativeRender(renderGraph)) {
+    setNativeRenderStatus("js");
+    return;
+  }
+  if (nativeRenderInFlight) return;
+  setNativeRenderStatus("native-pending");
   nativeRenderInFlight = true;
 
-  void evaluateNativeGraphOutputs(graph, sourceCanvas)
+  void evaluateNativeGraphOutputs(renderGraph, sourceCanvas)
     .then((nativeOutputs) => {
-      if (!nativeOutputs) return;
-      if (currentRenderVersion !== renderVersion) return;
-      if (currentSourceToken !== sourceToken) return;
+      if (!nativeOutputs) {
+        setNativeRenderStatus("native-disabled");
+        return;
+      }
+      if (currentRenderVersion !== renderVersion) {
+        setNativeRenderStatus(canUseNativeRender(renderGraph) ? "native" : "js");
+        return;
+      }
+      if (currentSourceToken !== sourceToken) {
+        setNativeRenderStatus("js");
+        return;
+      }
       commitProcessedFrame(nativeOutputs.viewerOutput);
       commitDitherFrame(nativeOutputs.ditherOutput);
       recyclePreviewOutput(nativeOutputs.viewerOutput);
       recyclePreviewOutput(nativeOutputs.ditherOutput);
+      setNativeRenderStatus("native");
       presentPreview();
     })
     .finally(() => {
       nativeRenderInFlight = false;
     });
+}
+
+function setNativeRenderStatus(status) {
+  if (nativeRenderStatus === status) return;
+  nativeRenderStatus = status;
+  dispatch("view", { renderBackend: status });
 }
 
 function presentPreview() {

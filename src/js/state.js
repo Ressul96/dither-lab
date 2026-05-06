@@ -22,6 +22,9 @@ const state = {
     trimStart: 0,
     trimEnd: 0,
     loopEnabled: true,
+    // Independent slow/fast-motion control. Decoupled from viewer-output.fps,
+    // which is now strictly an export target. Range 0.1 – 4.0; 1.0 = realtime.
+    speed: 1,
   },
   view: {
     zoom: 1,
@@ -35,11 +38,27 @@ const state = {
     // jumps back to full-res when paused; "full" always processes at source
     // resolution so the live preview matches the export pixel-for-pixel.
     playbackQuality: "auto",
+    renderBackend: "js",
   },
   graph: {
     nodes: [],
     edges: [],
     selectedNodeId: null,
+  },
+  timeline: {
+    version: 1,
+    duration: 0,
+    fps: 30,
+    loop: true,
+    autokey: false,
+    tracks: [],
+    // 1B-i UI state. Not wired to the DOM yet; 1B-ii hooks the layout reform
+    // up to these fields. Persisted across project save/load via timeline.js.
+    viewMode: "layers",         // "layers" | "graph"
+    durationUnit: "frame",      // "frame" | "second"
+    zoom: 1,                    // ruler zoom multiplier (0.25 – 8)
+    selectedPropertyId: null,   // string | null — sol panelde aktif property
+    expandedTrackIds: [],       // collapsed-by-default; user opens a lane explicitly
   },
   graphView: { ...DEFAULT_GRAPH_VIEW },
   ab: { a: null, b: null },

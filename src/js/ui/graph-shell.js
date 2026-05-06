@@ -37,6 +37,13 @@ import {
   updateCustomPalette,
 } from "../palettes.js";
 import { getCurrentSourceFrameCanvas, setFps } from "../source.js";
+import {
+  commitParamValueToTimeline,
+  hasParamKeyframeAtCurrentTime,
+  hasTimelineTrackForParam,
+  toggleParamKeyframeAtCurrentTime,
+  updateParamKeyframeAtCurrentTime,
+} from "../timeline.js";
 
 const NODE_WIDTH = 220;
 const NODE_HEIGHT = 108;
@@ -117,6 +124,12 @@ export function initGraphShell() {
       graphAutoCentered = false;
     }
     renderShell();
+  });
+  subscribe("timeline", () => {
+    if (!inspectorEditing) renderInspector();
+  });
+  subscribe("playback", () => {
+    if (!inspectorEditing) syncTimelineButtons();
   });
   subscribe("graphView", applyGraphViewport);
   subscribe("source", () => {
@@ -943,9 +956,17 @@ function onInspectorInput(event) {
 
     const nodeId = node.id;
     const paramKey = control.dataset.nodeParam;
+    const value = readControlValue(control);
     updateNodeParams(nodeId, {
-      [paramKey]: readControlValue(control),
+      [paramKey]: value,
     });
+    // Autokey: when a track already exists OR the global autokey switch is on,
+    // record this slider tick as a keyframe. Falls back to the legacy
+    // "update existing keyframe only" behaviour for tracks that exist with
+    // autokey off, which is identical to the old call.
+    if (!commitParamValueToTimeline(nodeId, paramKey, value)) {
+      updateParamKeyframeAtCurrentTime(nodeId, paramKey, value);
+    }
     const applied = getNodeById(nodeId)?.params?.[paramKey];
     if (applied !== undefined && control.type !== "checkbox" && control.value !== String(applied)) {
       control.value = String(applied);
@@ -981,6 +1002,16 @@ function onInspectorChange(event) {
 }
 
 function onInspectorClick(event) {
+  const keyframeToggle = event.target.closest("[data-param-keyframe-toggle]");
+  if (keyframeToggle) {
+    event.preventDefault();
+    const node = getSelectedNode();
+    if (!node) return;
+    toggleParamKeyframeAtCurrentTime(node.id, keyframeToggle.dataset.paramKeyframeToggle);
+    renderInspector();
+    return;
+  }
+
   const socketToggle = event.target.closest("[data-param-socket-toggle]");
   if (socketToggle) {
     event.preventDefault();
@@ -1346,7 +1377,11 @@ function renderSocketRows(node) {
 function renderExposedParamRows(node) {
   const exposed = Array.isArray(node.exposedParams) ? node.exposedParams : [];
   if (exposed.length === 0) return "";
+  // Same guard as the inspector: skip exposed entries that collide with an
+  // explicit input socket so legacy saves don't keep their duplicate pins.
+  const explicitInputs = new Set((node.inputs ?? []).map((socket) => socket.name));
   return exposed
+    .filter((paramKey) => !explicitInputs.has(paramKey))
     .map((paramKey) => {
       const socket = { name: `param:${paramKey}`, label: paramKey, type: "value" };
       return `
@@ -1465,10 +1500,34 @@ function renderNodeSpecifics(node) {
       return renderFlipNode(node);
     case "dither":
       return renderDitherNode(node);
+    case "pattern-dither":
+      return renderPatternDitherNode(node);
+    case "threshold":
+      return renderThresholdNode(node);
+    case "mask-combine":
+      return renderMaskCombineNode(node);
+    case "mask-apply":
+      return renderMaskApplyNode(node);
     case "glare":
       return renderGlareNode(node);
+    case "analog":
+      return renderAnalogNode(node);
     case "lens-distort":
       return renderLensDistortNode(node);
+    case "chromatic-aberration":
+      return renderChromaticAberrationNode(node);
+    case "vhs":
+      return renderVhsNode(node);
+    case "crt":
+      return renderCrtNode(node);
+    case "bloom":
+      return renderBloomNode(node);
+    case "halation":
+      return renderHalationNode(node);
+    case "ascii":
+      return renderAsciiNode(node);
+    case "halftone":
+      return renderHalftoneNode(node);
     case "displace":
       return renderDisplaceNode(node);
     case "mix":
@@ -1489,9 +1548,47 @@ function renderNodeSpecifics(node) {
 }
 
 function renderSourceNode() {
+  const node = getSelectedNode();
+  const params = node?.params ?? {};
+  const bwMode = String(params.bwMode ?? "off");
+  const invert = String(params.invert ?? "off");
+  const invertChannels = String(params.invertChannels ?? "rgb");
   return `
-    <section class="node-panel-section">
-      <p class="hint">Source node has no editable parameters yet.</p>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Adjust</header>
+      ${renderRangeField("Brightness", "brightness", params.brightness ?? 0, -100, 100, formatSignedValue(params.brightness ?? 0))}
+      ${renderRangeField("Contrast", "contrast", params.contrast ?? 100, 0, 200, `${params.contrast ?? 100}%`)}
+      ${renderRangeField("Saturation", "saturation", params.saturation ?? 100, 0, 200, `${params.saturation ?? 100}%`)}
+      ${renderRangeField("Gamma", "gamma", params.gamma ?? 100, 10, 400, `${((params.gamma ?? 100) / 100).toFixed(2)}`)}
+      ${renderRangeField("Exposure", "exposure", params.exposure ?? 0, -400, 400, formatSignedStops(params.exposure ?? 0))}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">HSV</header>
+      ${renderRangeField("Hue", "hue", params.hue ?? 0, -180, 180, `${params.hue ?? 0}°`)}
+      ${renderRangeField("Saturation", "hsvSaturation", params.hsvSaturation ?? 100, 0, 400, `${params.hsvSaturation ?? 100}%`)}
+      ${renderRangeField("Value", "value", params.value ?? 100, 0, 400, `${params.value ?? 100}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Conversion</header>
+      ${renderSelectField("Black & White", "bwMode", bwMode, [
+        ["off", "Off"],
+        ["bt709", "Bt.709 (HD)"],
+        ["bt601", "Bt.601 (SD)"],
+        ["average", "Average"],
+      ])}
+      ${renderSelectField("Invert", "invert", invert, [
+        ["off", "Off"],
+        ["on", "On"],
+      ])}
+      ${renderSelectField("Invert Channels", "invertChannels", invertChannels, [
+        ["rgb", "RGB"],
+        ["r", "Red only"],
+        ["g", "Green only"],
+        ["b", "Blue only"],
+        ["rg", "Red + Green"],
+        ["gb", "Green + Blue"],
+        ["rb", "Red + Blue"],
+      ])}
     </section>
   `;
 }
@@ -1531,6 +1628,46 @@ function renderDitherNode(node) {
       ${renderCheckboxField("Serpentine", "serpentine", params.serpentine)}
     </section>
     ${renderPaletteManager(paletteId)}
+  `;
+}
+
+function renderPatternDitherNode(node) {
+  const params = node.params;
+  const opacity = Number(params.opacity ?? 100);
+  const saturation = Number(params.saturation ?? 100);
+  const pattern = String(params.pattern ?? "bayer-4x4");
+  const scale = Number(params.scale ?? 1);
+  const strength = Number(params.strength ?? 100);
+  const depth = Number(params.depth ?? 4);
+  const gamma = String(params.gamma ?? "srgb");
+  const colorCount = 2 ** Math.round(depth);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+      ${renderRangeField("Saturation", "saturation", saturation, 0, 200, `${saturation}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Pattern</header>
+      ${renderSelectField("Type", "pattern", pattern, [
+        ["none", "None"],
+        ["bayer-2x2", "Bayer 2x2"],
+        ["bayer-4x4", "Bayer 4x4"],
+        ["bayer-8x8", "Bayer 8x8"],
+        ["blue-noise", "Blue Noise"],
+        ["white-noise", "White Noise"],
+      ])}
+      ${renderRangeField("Scale", "scale", scale, 1, 8, `${scale}px`)}
+      ${renderRangeField("Strength", "strength", strength, 0, 200, `${strength}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Quantization</header>
+      ${renderRangeField("Color Depth", "depth", depth, 1, 8, `${depth}-bit · ${colorCount}/ch`)}
+      ${renderSelectField("Gamma", "gamma", gamma, [
+        ["linear", "Linear"],
+        ["srgb", "sRGB-aware"],
+      ])}
+    </section>
   `;
 }
 
@@ -1665,9 +1802,34 @@ function renderBlurNode(node) {
 
 function renderPosterizeNode(node) {
   const params = node.params;
+  const steps = Number(params.steps ?? 8);
+  const stepsG = Number(params.stepsG ?? 0);
+  const stepsB = Number(params.stepsB ?? 0);
+  const gamma = String(params.gamma ?? "linear");
+  const lumaMode = String(params.lumaMode ?? "rgb");
+  const opacity = Number(params.opacity ?? 100);
+  // 0-step labels surface the "link to R" sentinel so the slider's intent
+  // is obvious without a separate toggle.
+  const gLabel = stepsG > 0 ? `${stepsG}` : `link (${steps})`;
+  const bLabel = stepsB > 0 ? `${stepsB}` : `link (${steps})`;
   return `
-    <section class="node-panel-section">
-      ${renderRangeField("Steps", "steps", params.steps, 2, 64, `${params.steps}`)}
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Steps</header>
+      ${renderRangeField("R", "steps", steps, 2, 64, `${steps}`)}
+      ${renderRangeField("G", "stepsG", stepsG, 0, 64, gLabel)}
+      ${renderRangeField("B", "stepsB", stepsB, 0, 64, bLabel)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Mode</header>
+      ${renderSelectField("Color Mode", "lumaMode", lumaMode, [
+        ["rgb", "RGB Independent"],
+        ["luma", "Luma + Chroma"],
+      ])}
+      ${renderSelectField("Gamma", "gamma", gamma, [
+        ["linear", "Linear"],
+        ["srgb", "sRGB-aware"],
+      ])}
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
     </section>
   `;
 }
@@ -1965,9 +2127,112 @@ function normalizeCurveChannel(value) {
 
 function renderPixelateNode(node) {
   const params = node.params;
+  const size = Number(params.size ?? 8);
+  const sizeY = Number(params.sizeY ?? 0);
+  const shape = String(params.shape ?? "square");
+  const smoothing = Number(params.smoothing ?? 0);
+  const opacity = Number(params.opacity ?? 100);
+  const sizeYLabel = sizeY > 0 ? `${sizeY}px` : `link (${size}px)`;
   return `
-    <section class="node-panel-section">
-      ${renderRangeField("Block size", "size", params.size, 1, 64, `${params.size}px`)}
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Cell</header>
+      ${renderRangeField("Block X", "size", size, 1, 64, `${size}px`)}
+      ${renderRangeField("Block Y", "sizeY", sizeY, 0, 64, sizeYLabel)}
+      ${renderSelectField("Shape", "shape", shape, [
+        ["square", "Square"],
+        ["circle", "Circle"],
+      ])}
+      ${renderRangeField("Smoothing", "smoothing", smoothing, 0, 100, `${smoothing}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+    </section>
+  `;
+}
+
+function renderThresholdNode(node) {
+  const params = node.params;
+  const opacity = Number(params.opacity ?? 100);
+  const threshold = Number(params.threshold ?? 50);
+  const softness = Number(params.softness ?? 0);
+  const channel = String(params.channel ?? "luma");
+  const invert = String(params.invert ?? "off");
+  const mode = String(params.mode ?? "bw");
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Threshold</header>
+      ${renderRangeField("Cutoff", "threshold", threshold, 0, 100, `${threshold}%`)}
+      ${renderRangeField("Softness", "softness", softness, 0, 50, `${softness}%`)}
+      ${renderSelectField("Channel", "channel", channel, [
+        ["luma", "Luma"],
+        ["r", "Red"],
+        ["g", "Green"],
+        ["b", "Blue"],
+        ["max", "Max RGB"],
+      ])}
+      ${renderSelectField("Invert", "invert", invert, [
+        ["off", "Off"],
+        ["on", "On"],
+      ])}
+      ${renderSelectField("Output", "mode", mode, [
+        ["bw", "Black / White"],
+        ["source", "Source Mask"],
+      ])}
+    </section>
+  `;
+}
+
+function renderMaskCombineNode(node) {
+  const params = node.params;
+  const operation = String(params.operation ?? "intersect");
+  const invertA = String(params.invertA ?? "off");
+  const invertB = String(params.invertB ?? "off");
+  const opacity = Number(params.opacity ?? 100);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Combine</header>
+      ${renderSelectField("Operation", "operation", operation, [
+        ["intersect", "Intersect (A AND B)"],
+        ["union", "Union (A OR B)"],
+        ["difference", "Difference (A XOR B)"],
+        ["subtract", "Subtract (A minus B)"],
+      ])}
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Inputs</header>
+      ${renderSelectField("Invert A", "invertA", invertA, [
+        ["off", "Off"],
+        ["on", "On"],
+      ])}
+      ${renderSelectField("Invert B", "invertB", invertB, [
+        ["off", "Off"],
+        ["on", "On"],
+      ])}
+    </section>
+  `;
+}
+
+function renderMaskApplyNode(node) {
+  const params = node.params;
+  const invert = String(params.invert ?? "off");
+  const feather = Number(params.feather ?? 0);
+  const opacity = Number(params.opacity ?? 100);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Apply</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+      ${renderRangeField("Feather", "feather", feather, 0, 50, `${feather}px`)}
+      ${renderSelectField("Invert Mask", "invert", invert, [
+        ["off", "Off"],
+        ["on", "On"],
+      ])}
+      <p class="hint">Wire any image into the Mask input — its luminance gates the main image.</p>
     </section>
   `;
 }
@@ -1990,16 +2255,44 @@ function renderScaleNode(node) {
 function renderTransformNode(node) {
   const params = node.params;
   const filter = params.filter ?? "linear";
+  const x = Number(params.x ?? params.scale ?? 100);
+  const y = Number(params.y ?? params.scale ?? 100);
+  const cropMode = String(params.cropMode ?? params.mode ?? "mask");
+  const left = Number(params.left ?? 0);
+  const right = Number(params.right ?? 0);
+  const top = Number(params.top ?? 0);
+  const bottom = Number(params.bottom ?? 0);
   return `
-    <section class="node-panel-section">
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Position</header>
       ${renderRangeField("Translate X", "translateX", params.translateX, -100, 100, `${params.translateX}%`)}
       ${renderRangeField("Translate Y", "translateY", params.translateY, -100, 100, `${params.translateY}%`)}
       ${renderRangeField("Rotation", "rotation", params.rotation, -180, 180, `${params.rotation}°`)}
-      ${renderRangeField("Scale", "scale", params.scale, 1, 400, `${params.scale}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Scale</header>
+      ${renderRangeField("Width", "x", x, 10, 400, `${x}%`)}
+      ${renderRangeField("Height", "y", y, 10, 400, `${y}%`)}
       ${renderSelectField("Filter", "filter", filter, [
         ["linear", "Linear (smooth)"],
         ["nearest", "Nearest (pixelated)"],
       ])}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Flip</header>
+      ${renderCheckboxField("Horizontal", "horizontal", params.horizontal)}
+      ${renderCheckboxField("Vertical", "vertical", params.vertical)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Crop</header>
+      ${renderSelectField("Mode", "cropMode", cropMode, [
+        ["mask", "Mask outside crop"],
+        ["fit", "Fit crop to frame"],
+      ])}
+      ${renderRangeField("Left", "left", left, 0, 95, `${left}%`)}
+      ${renderRangeField("Right", "right", right, 0, 95, `${right}%`)}
+      ${renderRangeField("Top", "top", top, 0, 95, `${top}%`)}
+      ${renderRangeField("Bottom", "bottom", bottom, 0, 95, `${bottom}%`)}
     </section>
   `;
 }
@@ -2033,11 +2326,14 @@ function renderFlipNode(node) {
 
 function renderGlareNode(node) {
   const params = node.params;
-  const type = String(params.type ?? "streaks");
+  const type = String(params.type ?? "bloom-gpu");
+  // Glow merges the old Bloom node into Glare: bloom-gpu is the fast modern
+  // single-pass path, the rest are the legacy CPU types kept for back-compat.
   const typeOptions = [
-    ["streaks", "Streaks"],
-    ["bloom", "Bloom"],
-    ["fog-glow", "Fog Glow"],
+    ["bloom-gpu", "Bloom (GPU, fast)"],
+    ["streaks", "Streaks (CPU)"],
+    ["bloom", "Bloom (CPU, legacy)"],
+    ["fog-glow", "Fog Glow (CPU)"],
   ];
   const blend = String(params.blend ?? "screen");
   const blendOptions = [
@@ -2048,18 +2344,26 @@ function renderGlareNode(node) {
   ];
 
   // Common knobs first so the most-tweaked sliders sit at the top, then
-  // per-type extras (streaks vs bloom/fog have different shapes), then
-  // tint at the bottom — most users keep tint at zero.
+  // per-type extras, then tint at the bottom (most users keep tint at zero).
+  // bloom-gpu skips Blend / saturation sat range parity since it composites
+  // additively inside the shader; the rest of the types still expose Blend.
+  const isGpu = type === "bloom-gpu";
   const common = `
     ${renderSelectField("Type", "type", type, typeOptions)}
-    ${renderSelectField("Blend", "blend", blend, blendOptions)}
+    ${isGpu ? "" : renderSelectField("Blend", "blend", blend, blendOptions)}
     ${renderRangeField("Threshold", "threshold", params.threshold, 0, 255, String(params.threshold))}
     ${renderRangeField("Mix", "mix", params.mix, 0, 400, `${params.mix}%`)}
     ${renderRangeField("Saturation", "saturation", params.saturation, 0, 400, `${(params.saturation / 100).toFixed(2)}x`)}
   `;
 
   let typeFields = "";
-  if (type === "streaks") {
+  if (type === "bloom-gpu") {
+    const knee = Number(params.knee ?? 20);
+    typeFields = `
+      ${renderRangeField("Size", "size", params.size, 1, 80, `${params.size}px`)}
+      ${renderRangeField("Knee", "knee", knee, 0, 50, `${knee}%`)}
+    `;
+  } else if (type === "streaks") {
     typeFields = `
       ${renderRangeField("Streaks", "streaks", params.streaks, 1, 16, String(params.streaks))}
       ${renderRangeField("Angle", "angle", params.angle, 0, 180, `${params.angle}°`)}
@@ -2073,10 +2377,14 @@ function renderGlareNode(node) {
     `;
   }
 
-  const tintFields = `
-    ${renderRangeField("Tint Amount", "tintAmount", params.tintAmount, 0, 100, `${params.tintAmount}%`)}
-    ${renderRangeField("Tint Hue", "tintHue", params.tintHue, 0, 360, `${params.tintHue}°`)}
-  `;
+  // Tint params are CPU-only — the GPU bloom path doesn't sample per-pixel
+  // hue, so hiding them avoids a slider that does nothing.
+  const tintFields = isGpu
+    ? ""
+    : `
+      ${renderRangeField("Tint Amount", "tintAmount", params.tintAmount, 0, 100, `${params.tintAmount}%`)}
+      ${renderRangeField("Tint Hue", "tintHue", params.tintHue, 0, 360, `${params.tintHue}°`)}
+    `;
 
   return `
     <section class="node-panel-section">
@@ -2146,6 +2454,300 @@ function renderDisplaceNode(node) {
   `;
 }
 
+function renderChromaticAberrationNode(node) {
+  const params = node.params;
+  return `
+    <section class="node-panel-section">
+      ${renderSelectField("Mode", "mode", params.mode, [
+        ["directional", "Directional"],
+        ["radial", "Radial"],
+      ])}
+      ${renderRangeField("Strength", "strength", params.strength, 0, 96, `${params.strength}px`)}
+      ${renderRangeField("Angle", "angle", params.angle, -180, 180, `${params.angle}deg`)}
+      ${renderRangeField("Center X", "centerX", params.centerX, 0, 100, `${params.centerX}%`)}
+      ${renderRangeField("Center Y", "centerY", params.centerY, 0, 100, `${params.centerY}%`)}
+    </section>
+  `;
+}
+
+function renderAnalogNode(node) {
+  const params = node.params;
+  const mode = String(params.mode ?? "vhs");
+  const opacity = Number(params.opacity ?? 100);
+  const brightness = Number(params.brightness ?? 110);
+  const saturation = Number(params.saturation ?? 110);
+  const chroma = Number(params.chroma ?? 6);
+  const bleed = Number(params.bleed ?? 50);
+  const noise = Number(params.noise ?? 35);
+  const scanlines = Number(params.scanlines ?? 60);
+  const tracking = Number(params.tracking ?? 35);
+  const wave = Number(params.wave ?? 4);
+  const curvature = Number(params.curvature ?? 25);
+  const mask = String(params.mask ?? "aperture");
+  const maskStrength = Number(params.maskStrength ?? 35);
+  const glow = Number(params.glow ?? 25);
+  const vignette = Number(params.vignette ?? 40);
+  const rolling = Number(params.rolling ?? 0);
+  const showTape = mode === "vhs" || mode === "vhs-crt";
+  const showTube = mode === "crt" || mode === "vhs-crt";
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderSelectField("Mode", "mode", mode, [
+        ["vhs", "VHS"],
+        ["crt", "CRT"],
+        ["vhs-crt", "VHS into CRT"],
+      ])}
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+      ${showTube ? renderRangeField("Brightness", "brightness", brightness, 0, 300, `${brightness}%`) : ""}
+      ${renderRangeField("Saturation", "saturation", saturation, 0, 200, `${saturation}%`)}
+    </section>
+    ${
+      showTape
+        ? `
+          <section class="node-panel-section node-panel-section--titled">
+            <header class="node-panel-section-title">Tape</header>
+            ${renderRangeField("Chroma Shift", "chroma", chroma, 0, 32, `${chroma}px`)}
+            ${renderRangeField("Color Bleed", "bleed", bleed, 0, 100, `${bleed}%`)}
+            ${renderRangeField("Wave", "wave", wave, 0, 32, `${wave}px`)}
+            ${renderRangeField("Tracking", "tracking", tracking, 0, 100, `${tracking}%`)}
+            ${renderRangeField("Noise", "noise", noise, 0, 100, `${noise}%`)}
+          </section>
+        `
+        : ""
+    }
+    ${
+      showTube
+        ? `
+          <section class="node-panel-section node-panel-section--titled">
+            <header class="node-panel-section-title">Tube</header>
+            ${renderRangeField("Curvature", "curvature", curvature, 0, 100, `${curvature}%`)}
+            ${renderRangeField("Scanlines", "scanlines", scanlines, 0, 100, `${scanlines}%`)}
+            ${renderRangeField("Glow", "glow", glow, 0, 100, `${glow}%`)}
+            ${renderSelectField("Mask", "mask", mask, [
+              ["none", "None"],
+              ["aperture", "Aperture Grille"],
+              ["slot", "Slot Mask"],
+            ])}
+            ${renderRangeField("Mask Strength", "maskStrength", maskStrength, 0, 100, `${maskStrength}%`)}
+            ${renderRangeField("Rolling Bar", "rolling", rolling, 0, 100, `${rolling}%`)}
+          </section>
+        `
+        : ""
+    }
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Frame</header>
+      ${!showTube ? renderRangeField("Scanlines", "scanlines", scanlines, 0, 100, `${scanlines}%`) : ""}
+      ${renderRangeField("Vignette", "vignette", vignette, 0, 100, `${vignette}%`)}
+    </section>
+  `;
+}
+
+function renderVhsNode(node) {
+  const params = node.params;
+  const opacity = Number(params.opacity ?? 100);
+  const saturation = Number(params.saturation ?? 110);
+  const chroma = Number(params.chroma ?? 6);
+  const bleed = Number(params.bleed ?? 50);
+  const noise = Number(params.noise ?? 35);
+  const scanlines = Number(params.scanlines ?? 60);
+  const tracking = Number(params.tracking ?? 35);
+  const wave = Number(params.wave ?? 4);
+  const vignette = Number(params.vignette ?? 40);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+      ${renderRangeField("Saturation", "saturation", saturation, 0, 200, `${saturation}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Tape</header>
+      ${renderRangeField("Chroma Shift", "chroma", chroma, 0, 32, `${chroma}px`)}
+      ${renderRangeField("Color Bleed", "bleed", bleed, 0, 100, `${bleed}%`)}
+      ${renderRangeField("Wave", "wave", wave, 0, 32, `${wave}px`)}
+      ${renderRangeField("Tracking", "tracking", tracking, 0, 100, `${tracking}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Tube</header>
+      ${renderRangeField("Scanlines", "scanlines", scanlines, 0, 100, `${scanlines}%`)}
+      ${renderRangeField("Noise", "noise", noise, 0, 100, `${noise}%`)}
+      ${renderRangeField("Vignette", "vignette", vignette, 0, 100, `${vignette}%`)}
+    </section>
+  `;
+}
+
+function renderCrtNode(node) {
+  const params = node.params;
+  const opacity = Number(params.opacity ?? 100);
+  const brightness = Number(params.brightness ?? 110);
+  const saturation = Number(params.saturation ?? 110);
+  const curvature = Number(params.curvature ?? 25);
+  const scanlines = Number(params.scanlines ?? 60);
+  const glow = Number(params.glow ?? 25);
+  const mask = String(params.mask ?? "aperture");
+  const maskStrength = Number(params.maskStrength ?? 35);
+  const vignette = Number(params.vignette ?? 35);
+  const rolling = Number(params.rolling ?? 0);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+      ${renderRangeField("Brightness", "brightness", brightness, 0, 300, `${brightness}%`)}
+      ${renderRangeField("Saturation", "saturation", saturation, 0, 200, `${saturation}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Tube</header>
+      ${renderRangeField("Curvature", "curvature", curvature, 0, 100, `${curvature}%`)}
+      ${renderRangeField("Scanlines", "scanlines", scanlines, 0, 100, `${scanlines}%`)}
+      ${renderRangeField("Glow", "glow", glow, 0, 100, `${glow}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Mask</header>
+      ${renderSelectField("Mode", "mask", mask, [
+        ["none", "None"],
+        ["aperture", "Aperture Grille"],
+        ["slot", "Slot Mask"],
+      ])}
+      ${renderRangeField("Strength", "maskStrength", maskStrength, 0, 100, `${maskStrength}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Sync</header>
+      ${renderRangeField("Vignette", "vignette", vignette, 0, 100, `${vignette}%`)}
+      ${renderRangeField("Rolling Bar", "rolling", rolling, 0, 100, `${rolling}%`)}
+    </section>
+  `;
+}
+
+function renderBloomNode(node) {
+  const params = node.params;
+  const opacity = Number(params.opacity ?? 100);
+  const saturation = Number(params.saturation ?? 100);
+  const threshold = Number(params.threshold ?? 70);
+  const knee = Number(params.knee ?? 20);
+  const intensity = Number(params.intensity ?? 100);
+  const radius = Number(params.radius ?? 16);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+      ${renderRangeField("Saturation", "saturation", saturation, 0, 200, `${saturation}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Bloom</header>
+      ${renderRangeField("Threshold", "threshold", threshold, 0, 100, `${threshold}%`)}
+      ${renderRangeField("Knee", "knee", knee, 0, 50, `${knee}%`)}
+      ${renderRangeField("Intensity", "intensity", intensity, 0, 400, `${intensity}%`)}
+      ${renderRangeField("Radius", "radius", radius, 0, 64, `${radius}px`)}
+    </section>
+  `;
+}
+
+function renderHalationNode(node) {
+  const params = node.params;
+  const opacity = Number(params.opacity ?? 100);
+  const saturation = Number(params.saturation ?? 100);
+  const threshold = Number(params.threshold ?? 70);
+  const knee = Number(params.knee ?? 20);
+  const intensity = Number(params.intensity ?? 120);
+  const radius = Number(params.radius ?? 24);
+  const tintR = Number(params.tintR ?? 255);
+  const tintG = Number(params.tintG ?? 120);
+  const tintB = Number(params.tintB ?? 60);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+      ${renderRangeField("Saturation", "saturation", saturation, 0, 200, `${saturation}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Halation</header>
+      ${renderRangeField("Threshold", "threshold", threshold, 0, 100, `${threshold}%`)}
+      ${renderRangeField("Knee", "knee", knee, 0, 50, `${knee}%`)}
+      ${renderRangeField("Intensity", "intensity", intensity, 0, 400, `${intensity}%`)}
+      ${renderRangeField("Radius", "radius", radius, 0, 96, `${radius}px`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Tint</header>
+      ${renderRangeField("Red", "tintR", tintR, 0, 255, `${tintR}`)}
+      ${renderRangeField("Green", "tintG", tintG, 0, 255, `${tintG}`)}
+      ${renderRangeField("Blue", "tintB", tintB, 0, 255, `${tintB}`)}
+    </section>
+  `;
+}
+
+function renderAsciiNode(node) {
+  const params = node.params;
+  const opacity = Number(params.opacity ?? 100);
+  const cellSize = Number(params.cellSize ?? 8);
+  const ramp = String(params.ramp ?? "standard");
+  const invert = String(params.invert ?? "off");
+  const colorMode = String(params.colorMode ?? "source");
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">ASCII</header>
+      ${renderRangeField("Cell Size", "cellSize", cellSize, 4, 32, `${cellSize}px`)}
+      ${renderSelectField("Ramp", "ramp", ramp, [
+        ["standard", "Standard"],
+        ["dense", "Dense"],
+        ["blocks", "Blocks"],
+        ["binary", "Binary"],
+      ])}
+      ${renderSelectField("Invert", "invert", invert, [
+        ["off", "Off"],
+        ["on", "On"],
+      ])}
+      ${renderSelectField("Color", "colorMode", colorMode, [
+        ["source", "From Image"],
+        ["mono", "Monochrome"],
+      ])}
+    </section>
+  `;
+}
+
+function renderHalftoneNode(node) {
+  const params = node.params;
+  // Migrate legacy projects: the early build called this `cellSize` and
+  // accepted `mode = mono | color`. Fall back so existing keyframes/saved
+  // projects still render their values into the new sliders.
+  const spacing = Number(params.spacing ?? params.cellSize ?? 5);
+  const angle = Number(params.angle ?? 15);
+  const dotScale = Number(params.dotScale ?? 100);
+  const opacity = Number(params.opacity ?? 100);
+  const hue = Number(params.hue ?? 0);
+  const saturation = Number(params.saturation ?? 100);
+  const colorMode = String(params.colorMode ?? (params.mode === "color" ? "cmy" : params.mode ?? "cmyk"));
+  const shape = String(params.shape ?? "circle");
+
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+      ${renderRangeField("Hue", "hue", hue, -180, 180, `${hue}deg`)}
+      ${renderRangeField("Saturation", "saturation", saturation, 0, 200, `${saturation}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Halftone</header>
+      ${renderSelectField("Color Mode", "colorMode", colorMode, [
+        ["mono", "Monochrome"],
+        ["cmy", "CMY"],
+        ["cmyk", "CMYK"],
+      ])}
+      ${renderSelectField("Shape", "shape", shape, [
+        ["circle", "Circle"],
+        ["square", "Square"],
+        ["diamond", "Diamond"],
+      ])}
+      ${renderRangeField("Spacing", "spacing", spacing, 2, 64, `${spacing}px`)}
+      ${renderRangeField("Angle", "angle", angle, -90, 90, `${angle}deg`)}
+      ${renderRangeField("Dot Scale", "dotScale", dotScale, 10, 250, `${dotScale}%`)}
+    </section>
+  `;
+}
+
 function renderMixNode(node) {
   const params = node.params;
 
@@ -2209,8 +2811,8 @@ function renderViewerOutputNode(node) {
   const maxFps = Math.max(1, source.loaded ? sourceFps : 120);
   return `
     <section class="node-panel-section">
-      ${renderRangeField("Playback FPS", "viewer-fps", currentFps, 1, maxFps, formatFpsReadout(currentFps, sourceFps))}
-      <p class="hint">Controls step size and preview playback rate relative to the source frame rate.</p>
+      ${renderRangeField("Export FPS", "viewer-fps", currentFps, 1, maxFps, formatFpsReadout(currentFps, sourceFps))}
+      <p class="hint">Target frame rate for export. Lower than source drops/blends frames in the encode. Preview keeps running at the source frame rate; slow / fast motion is a separate playback control.</p>
     </section>
   `;
 }
@@ -2232,6 +2834,7 @@ function renderRangeField(label, key, value, min, max, _readout) {
       <label>
         <span class="field-label-row">
           ${renderParamSocketDot(safeKey, min, max)}
+          ${renderParamKeyframeButton(key)}
           <span class="field-label-text">${escapeHtml(label)}</span>
         </span>
         <span class="field-suffix" data-param-readout="${safeKey}"></span>
@@ -2268,6 +2871,8 @@ function renderNumberField(label, key, value, bounds = null) {
     <div class="field number-field">
       <label>
         <span class="field-label-row">
+          ${renderParamSocketDot(safeKey, bounds?.min, bounds?.max)}
+          ${renderParamKeyframeButton(key)}
           <span class="field-label-text">${escapeHtml(label)}</span>
         </span>
       </label>
@@ -2283,9 +2888,49 @@ function renderNumberField(label, key, value, bounds = null) {
   `;
 }
 
+function renderParamKeyframeButton(paramKey) {
+  const node = getSelectedNode();
+  if (!node || node.type === "source" || node.type === "viewer-output") return "";
+  const safeKey = escapeHtml(paramKey);
+  const animated = hasTimelineTrackForParam(node.id, paramKey);
+  const keyed = hasParamKeyframeAtCurrentTime(node.id, paramKey);
+  return `<button
+    type="button"
+    class="param-keyframe-toggle${animated ? " is-animated" : ""}${keyed ? " is-keyed" : ""}"
+    data-param-keyframe-toggle="${safeKey}"
+    aria-label="${keyed ? "Remove keyframe" : "Set keyframe"}"
+    title="${keyed ? "Remove keyframe" : "Set keyframe"}"
+  ></button>`;
+}
+
+function syncTimelineButtons() {
+  if (!inspectorEl) return;
+  const node = getSelectedNode();
+  if (!node) return;
+  for (const button of inspectorEl.querySelectorAll("[data-param-keyframe-toggle]")) {
+    const paramKey = button.dataset.paramKeyframeToggle;
+    const animated = hasTimelineTrackForParam(node.id, paramKey);
+    const keyed = hasParamKeyframeAtCurrentTime(node.id, paramKey);
+    button.classList.toggle("is-animated", animated);
+    button.classList.toggle("is-keyed", keyed);
+    button.setAttribute("aria-label", keyed ? "Remove keyframe" : "Set keyframe");
+    button.setAttribute("title", keyed ? "Remove keyframe" : "Set keyframe");
+  }
+}
+
 function renderParamSocketDot(safeKey, min = null, max = null) {
   const node = getSelectedNode();
   if (!node || node.type === "source" || node.type === "viewer-output") return "";
+  // If the node already has an explicit input socket with this name (e.g. math.a,
+  // math.b), exposing it again as `param:a` would create a duplicate pin on the
+  // canvas. The existing socket is the only way in.
+  if (Array.isArray(node.inputs) && node.inputs.some((socket) => socket.name === safeKey)) {
+    return `<span
+      class="param-socket-toggle is-exposed is-fixed"
+      aria-label="Already exposed as an input socket"
+      title="Already exposed as an input socket"
+    ></span>`;
+  }
   const exposed = Array.isArray(node.exposedParams) && node.exposedParams.includes(safeKey);
   const minAttr = Number.isFinite(Number(min)) ? ` data-param-min="${Number(min)}"` : "";
   const maxAttr = Number.isFinite(Number(max)) ? ` data-param-max="${Number(max)}"` : "";
@@ -2472,22 +3117,24 @@ function initGraphContextMenu() {
   graphMenuEl = document.createElement("div");
   graphMenuEl.className = "context-menu floating-card hidden";
   graphMenuEl.innerHTML = `
-    <button data-add-node="adjust">Add Adjust</button>
     <button data-add-node="posterize">Add Posterize</button>
-    <button data-add-node="invert">Add Invert</button>
-    <button data-add-node="rgb-to-bw">Add RGB to BW</button>
     <button data-add-node="tone-map">Add Tone Map</button>
-    <button data-add-node="hsv">Add HSV</button>
     <button data-add-node="rgb-curves">Add RGB Curves</button>
     <button data-add-node="blur">Add Blur</button>
     <button data-add-node="pixelate">Add Pixelate</button>
-    <button data-add-node="scale">Add Scale</button>
     <button data-add-node="transform">Add Transform</button>
-    <button data-add-node="crop">Add Crop</button>
-    <button data-add-node="flip">Add Flip</button>
     <button data-add-node="dither">Add Dither</button>
-    <button data-add-node="glare">Add Glare</button>
+    <button data-add-node="pattern-dither">Add Pattern Dither</button>
+    <button data-add-node="threshold">Add Threshold</button>
+    <button data-add-node="mask-combine">Add Mask Combine</button>
+    <button data-add-node="mask-apply">Add Mask Apply</button>
+    <button data-add-node="glare">Add Bloom / Glare</button>
+    <button data-add-node="analog">Add Analog</button>
     <button data-add-node="lens-distort">Add Lens Distortion</button>
+    <button data-add-node="chromatic-aberration">Add Chromatic Aberration</button>
+    <button data-add-node="halation">Add Halation</button>
+    <button data-add-node="ascii">Add ASCII</button>
+    <button data-add-node="halftone">Add Halftone</button>
     <button data-add-node="displace">Add Displace</button>
     <button data-add-node="mix">Add Mix</button>
     <button data-add-node="value">Add Value</button>
