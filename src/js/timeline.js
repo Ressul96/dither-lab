@@ -448,6 +448,45 @@ export function removeTimelineKeyframeById(timeline, { trackId, keyframeId }) {
   return changed ? normalizeTimeline({ ...normalized, tracks: nextTracks }) : normalized;
 }
 
+/**
+ * Duplicate a list of keyframes by one frame each. Returns the new timeline
+ * along with the ids of the freshly-created keyframes so the UI can reroute
+ * the multi-select to them. Items pointing at non-existent keyframes or
+ * non-param bindings are skipped silently.
+ *
+ * If the +1 frame slot is already occupied, that occupant is overwritten —
+ * matches the setParamKeyframe semantics. Future improvement: shift to the
+ * next free frame instead of clobbering.
+ */
+export function duplicateTimelineKeyframes(timeline, items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return { timeline, newKeys: [] };
+  }
+  let next = normalizeTimeline(timeline);
+  const fps = next.fps;
+  const oneFrame = 1 / fps;
+  const newKeys = [];
+
+  for (const item of items) {
+    const found = getTimelineKeyframe(next, item.trackId, item.keyframeId);
+    if (!found) continue;
+    const { track, keyframe } = found;
+    if (track.binding?.type !== TIMELINE_BINDING_NODE_PARAM) continue;
+    const paramKey = track.binding.key;
+    const newTime = snapTimeToFrame(keyframe.time + oneFrame, fps);
+
+    next = setParamKeyframe(next, {
+      nodeId: track.nodeId,
+      paramKey,
+      time: newTime,
+      value: keyframe.value,
+    });
+    newKeys.push({ trackId: track.id, keyframeId: createKeyframeId(track.id, newTime) });
+  }
+
+  return { timeline: next, newKeys };
+}
+
 export function getTimelineKeyframe(timeline, trackId, keyframeId) {
   const normalized = normalizeTimeline(timeline);
   const track = normalized.tracks.find((item) => item.id === trackId);

@@ -11,6 +11,7 @@ import {
   setPlaybackSpeed,
 } from "../source.js";
 import {
+  duplicateTimelineKeyframes,
   durationToFrames,
   formatFrameReadout,
   formatSecondReadout,
@@ -948,6 +949,27 @@ export function deleteSelectedKeyframes() {
 // expect a singular name; both routes go through the multi-select path.
 function deleteSelectedKeyframe() {
   deleteSelectedKeyframes();
+}
+
+// Duplicate every selected keyframe one frame later. The resulting newly
+// created keyframes become the new selection so the user can immediately
+// drag or delete them. Returns true when at least one keyframe was made;
+// the keyboard handler uses that to decide whether to swallow Cmd+D.
+export function duplicateSelectedKeyframes() {
+  if (selectedKeyframes.size === 0) return false;
+  const items = [...selectedKeyframes].map(parseSelectionKey);
+  const { timeline: next, newKeys } = duplicateTimelineKeyframes(getState().timeline, items);
+  if (newKeys.length === 0) return false;
+  // Reroute the multi-select to the new keyframes BEFORE dispatching, since
+  // dispatch synchronously triggers renderAnimationTimeline which reads
+  // isKeyframeSelected.
+  selectedKeyframes.clear();
+  for (const { trackId, keyframeId } of newKeys) {
+    selectedKeyframes.add(selectionKey(trackId, keyframeId));
+  }
+  selectedTimelineKeyframe = newKeys[newKeys.length - 1];
+  dispatch("timeline", next);
+  return true;
 }
 
 function pickTimelineKeyframe(element) {

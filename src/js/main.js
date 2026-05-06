@@ -1,6 +1,11 @@
 import { initShell } from "./ui/shell.js";
 import { initGraphShell } from "./ui/graph-shell.js";
-import { initPlayer, goToLastFrame, deleteSelectedKeyframes } from "./ui/player.js";
+import {
+  initPlayer,
+  goToLastFrame,
+  deleteSelectedKeyframes,
+  duplicateSelectedKeyframes,
+} from "./ui/player.js";
 import { initStage, resetZoom, togglePixelInspector } from "./ui/stage.js";
 import { newProject, openProject, saveProject, saveProjectAs } from "./project.js";
 import { initExport, openExport } from "./export.js";
@@ -137,6 +142,17 @@ function initKeyboard() {
           e.preventDefault();
           if (e.shiftKey) redo();
           else undo();
+        }
+        break;
+      case "d":
+      case "D":
+        // Cmd/Ctrl+D would otherwise bookmark the page in Chrome — always
+        // preventDefault when the modifier is held, even if there's no
+        // selection to duplicate, so the browser gesture stays neutralised
+        // while the user is in the timeline.
+        if (meta) {
+          e.preventDefault();
+          duplicateSelectedKeyframes();
         }
         break;
     }
