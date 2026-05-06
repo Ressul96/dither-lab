@@ -31,10 +31,65 @@ import {
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 const KEYFRAME_DRAG_THRESHOLD = 3;
 
+// Multi-select keyframe state. `selectedKeyframes` is the full set of
+// "trackId|keyframeId" keys; `selectedTimelineKeyframe` always points at the
+// most recently picked one — the inspector panel only edits a single keyframe
+// at a time, so it follows that "last clicked" cursor.
+const selectedKeyframes = new Set();
 let selectedTimelineKeyframe = null;
 let keyframeDrag = null;
 
 let selectedPropertyTrackId = null;
+
+function selectionKey(trackId, keyframeId) {
+  return `${trackId}|${keyframeId}`;
+}
+
+function isKeyframeSelected(trackId, keyframeId) {
+  return selectedKeyframes.has(selectionKey(trackId, keyframeId));
+}
+
+function setSoleSelection(trackId, keyframeId) {
+  selectedKeyframes.clear();
+  selectedKeyframes.add(selectionKey(trackId, keyframeId));
+  selectedTimelineKeyframe = { trackId, keyframeId };
+}
+
+function toggleKeyframeSelection(trackId, keyframeId) {
+  const key = selectionKey(trackId, keyframeId);
+  if (selectedKeyframes.has(key)) {
+    selectedKeyframes.delete(key);
+    if (
+      selectedTimelineKeyframe?.trackId === trackId &&
+      selectedTimelineKeyframe?.keyframeId === keyframeId
+    ) {
+      // Promote any remaining selection to be the inspector target.
+      const next = selectedKeyframes.values().next().value;
+      selectedTimelineKeyframe = next ? parseSelectionKey(next) : null;
+    }
+  } else {
+    selectedKeyframes.add(key);
+    selectedTimelineKeyframe = { trackId, keyframeId };
+  }
+}
+
+function parseSelectionKey(key) {
+  const [trackId, keyframeId] = key.split("|");
+  return { trackId, keyframeId };
+}
+
+function clearSelection() {
+  selectedKeyframes.clear();
+  selectedTimelineKeyframe = null;
+}
+
+function pickKeyframeWithModifier(trackId, keyframeId, event) {
+  if (event && (event.shiftKey || event.metaKey || event.ctrlKey)) {
+    toggleKeyframeSelection(trackId, keyframeId);
+  } else {
+    setSoleSelection(trackId, keyframeId);
+  }
+}
 
 const playerEls = {
   playBtn: null,
@@ -196,21 +251,33 @@ function wireAnimationTimeline() {
 
     const timeTarget = event.target.closest("[data-timeline-time]");
     if (timeTarget) {
-      selectedTimelineKeyframe = pickTimelineKeyframe(timeTarget);
+      const picked = pickTimelineKeyframe(timeTarget);
+      pickKeyframeWithModifier(picked.trackId, picked.keyframeId, event);
       renderAnimationTimeline();
-      seek(Number(timeTarget.dataset.timelineTime));
+      // Only chase the playhead on a plain click — keeping it pinned during
+      // multi-select avoids re-seeking every additional shift-click.
+      if (!event.shiftKey && !event.metaKey && !event.ctrlKey) {
+        seek(Number(timeTarget.dataset.timelineTime));
+      }
       return;
     }
 
     const lane = event.target.closest(".animation-track-lane");
     if (!lane) return;
+    // Clicking the lane background (not a keyframe) clears multi-selection
+    // and seeks the playhead — matches After Effects style.
+    clearSelection();
     const { source, timeline } = getState();
     const duration = resolveTimelineDuration(timeline, source);
-    if (duration <= 0) return;
+    if (duration <= 0) {
+      renderAnimationTimeline();
+      return;
+    }
     const fps = timelineFrameRate(timeline, source.fps);
     const rect = lane.getBoundingClientRect();
     const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
     seek(snapTimeToFrame(ratio * duration, fps));
+    renderAnimationTimeline();
   });
   timelineEl.addEventListener("change", onAnimationTimelineChange);
 
@@ -532,10 +599,10 @@ function renderAnimationLane(track, duration, fps, selected) {
   return laneHtml + panelHtml;
 }
 
-function renderKeyframe(keyframe, track, duration, fps, selected) {
+function renderKeyframe(keyframe, track, duration, fps, _selected) {
   const time = Number(keyframe.time) || 0;
   const left = timeToTimelinePercent(time, duration, fps);
-  const active = selected?.track.id === track.id && selected?.keyframe.id === keyframe.id;
+  const active = isKeyframeSelected(track.id, keyframe.id);
   return `
     <button
       class="animation-keyframe${active ? " is-selected" : ""}"
@@ -619,7 +686,20 @@ function onAnimationTimelinePointerDown(event) {
   const fps = timelineFrameRate(normalized, source.fps);
   if (duration <= 0) return;
 
-  selectedTimelineKeyframe = pickTimelineKeyframe(keyframe);
+  const picked = pickTimelineKeyframe(keyframe);
+  // Pointerdown selection rules:
+  //   - shift / cmd / ctrl: toggle this keyframe in/out of the set
+  //   - otherwise, if it's already selected (multi-drag scenario), keep
+  //     the existing set; the drag will only move the picked one for now
+  //   - plain click on an unselected keyframe: replace selection with it
+  if (event.shiftKey || event.metaKey || event.ctrlKey) {
+    toggleKeyframeSelection(picked.trackId, picked.keyframeId);
+  } else if (!isKeyframeSelected(picked.trackId, picked.keyframeId)) {
+    setSoleSelection(picked.trackId, picked.keyframeId);
+  } else {
+    selectedTimelineKeyframe = picked;
+  }
+
   const selected = getSelectedTimelineKeyframe(normalized);
   if (!selected) return;
 
@@ -714,11 +794,25 @@ function onAnimationTimelineChange(event) {
   }
 }
 
+// Public form, used by the Inspector "Delete" button and by the Faz 2.b
+// keyboard shortcut. Removes every keyframe currently in the multi-select
+// set in a single timeline pass, then clears selection.
+export function deleteSelectedKeyframes() {
+  if (selectedKeyframes.size === 0) return;
+  let next = getState().timeline;
+  for (const key of selectedKeyframes) {
+    const { trackId, keyframeId } = parseSelectionKey(key);
+    if (!trackId || !keyframeId) continue;
+    next = removeTimelineKeyframeById(next, { trackId, keyframeId });
+  }
+  dispatch("timeline", next);
+  clearSelection();
+}
+
+// Backwards-compat alias — older callers (and the inline Inspector button)
+// expect a singular name; both routes go through the multi-select path.
 function deleteSelectedKeyframe() {
-  if (!selectedTimelineKeyframe) return;
-  const { timeline } = getState();
-  dispatch("timeline", removeTimelineKeyframeById(timeline, selectedTimelineKeyframe));
-  selectedTimelineKeyframe = null;
+  deleteSelectedKeyframes();
 }
 
 function pickTimelineKeyframe(element) {
@@ -735,7 +829,21 @@ function getSelectedTimelineKeyframe(timeline = getState().timeline) {
     selectedTimelineKeyframe.trackId,
     selectedTimelineKeyframe.keyframeId
   );
-  if (!selected) selectedTimelineKeyframe = null;
+  if (!selected) {
+    // Last-clicked keyframe was removed (delete, undo, etc.). Drop it from
+    // both the cursor and the multi-select set, then promote any survivor.
+    selectedKeyframes.delete(
+      selectionKey(selectedTimelineKeyframe.trackId, selectedTimelineKeyframe.keyframeId)
+    );
+    const next = selectedKeyframes.values().next().value;
+    selectedTimelineKeyframe = next ? parseSelectionKey(next) : null;
+    if (!selectedTimelineKeyframe) return null;
+    return getTimelineKeyframe(
+      timeline,
+      selectedTimelineKeyframe.trackId,
+      selectedTimelineKeyframe.keyframeId
+    );
+  }
   return selected;
 }
 
