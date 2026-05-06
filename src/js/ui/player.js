@@ -7,6 +7,8 @@ import {
   seek,
   snapPlayhead,
   resetTrim,
+  setIn,
+  setOut,
   formatTime,
   pausePlayback,
   setPlaybackSpeed,
@@ -269,6 +271,14 @@ function wireAnimationTimeline() {
       return;
     }
 
+    const curvePreset = event.target.closest("[data-curve-preset]");
+    if (curvePreset) {
+      event.preventDefault();
+      event.stopPropagation();
+      applyCurvePreset(curvePreset);
+      return;
+    }
+
     const trackToggle = event.target.closest("[data-track-toggle]");
     if (trackToggle) {
       event.preventDefault();
@@ -383,6 +393,78 @@ function onTimelineWheel(event) {
   setTimelineZoom(normalized.zoom * factor);
 }
 
+function applyCurvePreset(button) {
+  const preset = button.dataset.curvePreset;
+  const trackId = button.closest("[data-curve-track-id]")?.dataset.curveTrackId
+    ?? button.closest("[data-graph-track-id]")?.dataset.graphTrackId;
+  if (!trackId) return;
+
+  const { source, timeline } = getState();
+  const normalized = normalizeTimeline(timeline, {
+    duration: source.duration,
+    fps: source.fps,
+  });
+  const track = normalized.tracks.find((item) => item.id === trackId);
+  if (!track) return;
+
+  const selectedOnTrack = selectedTimelineKeyframe?.trackId === trackId
+    ? track.keyframes.find((keyframe) => keyframe.id === selectedTimelineKeyframe.keyframeId)
+    : null;
+  const target = selectedOnTrack ?? track.keyframes.find((keyframe, index) =>
+    typeof keyframe.value === "number" && index < track.keyframes.length - 1
+  );
+  if (!target) return;
+
+  const index = track.keyframes.findIndex((keyframe) => keyframe.id === target.id);
+  let next = getState().timeline;
+  const patches = createCurvePresetPatches(track, index, preset);
+  for (const patch of patches) {
+    next = updateTimelineKeyframe(next, patch);
+  }
+  dispatch("timeline", next);
+}
+
+function createCurvePresetPatches(track, index, preset) {
+  const from = track.keyframes[index];
+  const to = track.keyframes[index + 1];
+  if (!from || typeof from.value !== "number") return [];
+  if (preset === "linear" || !to || typeof to.value !== "number") {
+    return [{
+      trackId: track.id,
+      keyframeId: from.id,
+      patch: { easing: "linear", interpolation: "linear", outTangent: null },
+    }];
+  }
+
+  const span = Math.max(1 / 1200, to.time - from.time);
+  const presets = {
+    "ease-in": { p1x: 0.42, p1y: 0, p2x: 1, p2y: 1 },
+    "ease-out": { p1x: 0, p1y: 0, p2x: 0.58, p2y: 1 },
+    "ease-in-out": { p1x: 0.42, p1y: 0, p2x: 0.58, p2y: 1 },
+    "ease-in-out-cubic": { p1x: 0.65, p1y: 0, p2x: 0.35, p2y: 1 },
+  };
+  const curve = presets[preset] ?? presets["ease-in-out"];
+  const delta = to.value - from.value;
+  return [
+    {
+      trackId: track.id,
+      keyframeId: from.id,
+      patch: {
+        easing: "custom-bezier",
+        interpolation: "bezier",
+        outTangent: { dt: curve.p1x * span, dv: curve.p1y * delta },
+      },
+    },
+    {
+      trackId: track.id,
+      keyframeId: to.id,
+      patch: {
+        inTangent: { dt: (curve.p2x - 1) * span, dv: (curve.p2y - 1) * delta },
+      },
+    },
+  ];
+}
+
 function syncTimelineRulerScroll() {
   if (!playerEls.timeRuler || !playerEls.timelineBody) return;
   playerEls.timeRuler.style.transform = `translateX(${-playerEls.timelineBody.scrollLeft}px)`;
@@ -452,6 +534,12 @@ function wireMoreMenu() {
       if (!action) return;
       e.preventDefault();
       switch (action.dataset.popoverAction) {
+        case "set-range-start":
+          commitTrimAction(setIn, "Set render range start");
+          break;
+        case "set-range-end":
+          commitTrimAction(setOut, "Set render range end");
+          break;
         case "reset-trim":
           commitTrimAction(resetTrim, "Reset trim");
           break;
@@ -490,6 +578,12 @@ function renderMorePopover() {
       </div>
     </div>
     <div class="popover-section">
+      <div class="popover-label">Render Range</div>
+      <div class="popover-range-readout">${escapeHtml(formatRenderRangeReadout())}</div>
+      <button class="popover-row" data-popover-action="set-range-start">Set start at playhead</button>
+      <button class="popover-row" data-popover-action="set-range-end">Set end at playhead</button>
+    </div>
+    <div class="popover-section">
       <button class="popover-row" data-popover-action="reset-trim">Reset render range</button>
       <button class="popover-row" data-popover-action="snap-playhead">Snap playhead</button>
     </div>
@@ -517,6 +611,15 @@ function positionMorePopover(popover, anchor) {
   popover.style.position = "fixed";
   popover.style.right = `${Math.max(8, window.innerWidth - a.right)}px`;
   popover.style.bottom = `${Math.max(8, window.innerHeight - a.top + margin)}px`;
+}
+
+function formatRenderRangeReadout() {
+  const { playback, source, timeline } = getState();
+  const fps = timelineFrameRate(timeline, source.fps);
+  const duration = resolveTimelineDuration(timeline, source);
+  const start = clamp(playback.trimStart || 0, 0, duration);
+  const end = clamp(playback.trimEnd || duration, start, duration);
+  return `F${timeToFrame(start, fps)} – F${timeToFrame(end, fps)}`;
 }
 
 
@@ -675,7 +778,9 @@ function renderAnimationTimeline() {
       playerEls.emptyState.textContent = "Select a property to edit its curve.";
       playerEls.emptyState.classList.remove("hidden");
     } else {
-      playerEls.laneHost.innerHTML = renderGraphEditor(graphTrack, duration, fps, selected, graph, playback);
+      playerEls.laneHost.innerHTML =
+        renderRenderRangeOverlay(duration, playback) +
+        renderGraphEditor(graphTrack, duration, fps, selected, graph, playback, visibleTracks);
       playerEls.emptyState.classList.add("hidden");
     }
   } else if (visibleTracks.length === 0) {
@@ -684,9 +789,11 @@ function renderAnimationTimeline() {
     playerEls.emptyState.classList.remove("hidden");
   } else {
     playerEls.emptyState.classList.add("hidden");
-    playerEls.laneHost.innerHTML = visibleTracks
-      .map((track) => renderAnimationLane(track, duration, fps, selected, graph))
-      .join("");
+    playerEls.laneHost.innerHTML =
+      renderRenderRangeOverlay(duration, playback) +
+      visibleTracks
+        .map((track) => renderAnimationLane(track, duration, fps, selected, graph))
+        .join("");
   }
 
   updateAnimationPlayhead(playback, duration);
@@ -798,6 +905,24 @@ function renderAnimationLane(track, duration, fps, selected, graph) {
   return laneHtml + panelHtml;
 }
 
+function renderRenderRangeOverlay(duration, playback) {
+  if (!(duration > 0)) return "";
+  const start = clamp(playback.trimStart || 0, 0, duration);
+  const end = clamp(playback.trimEnd || duration, start, duration);
+  const left = (start / duration) * 100;
+  const width = Math.max(0, ((end - start) / duration) * 100);
+  return `
+    <div class="render-range-overlay" aria-hidden="true">
+      <div class="render-range-muted render-range-muted--before" style="width:${left}%"></div>
+      <div class="render-range-band" style="left:${left}%; width:${width}%">
+        <span class="render-range-handle render-range-handle--start"></span>
+        <span class="render-range-handle render-range-handle--end"></span>
+      </div>
+      <div class="render-range-muted render-range-muted--after" style="left:${left + width}%; width:${100 - left - width}%"></div>
+    </div>
+  `;
+}
+
 function renderGraphPlaceholder(tracks) {
   const keyframeCount = tracks.reduce((total, track) => total + track.keyframes.length, 0);
   return `
@@ -813,9 +938,12 @@ function pickGraphTrack(activeTrack, visibleTracks) {
   return visibleTracks.find(isNumericTimelineTrack) ?? activeTrack ?? visibleTracks[0] ?? null;
 }
 
-function renderGraphEditor(track, duration, fps, selected, graph, playback) {
+function renderGraphEditor(track, duration, fps, selected, graph, playback, visibleTracks = []) {
   const meta = getTrackDisplayMeta(track, graph);
-  const model = createGraphCurveModel(track, duration);
+  const overlayTracks = visibleTracks
+    .filter((item) => item.id !== track.id && isNumericTimelineTrack(item))
+    .slice(0, 4);
+  const model = createGraphCurveModel([track, ...overlayTracks], duration);
   if (!model) {
     return `
       <div class="timeline-graph-placeholder">
@@ -833,8 +961,10 @@ function renderGraphEditor(track, duration, fps, selected, graph, playback) {
     <div class="timeline-graph-editor" data-graph-track-id="${escapeHtml(track.id)}">
       <div class="timeline-graph-meta">
         <span>${escapeHtml(meta.nodeLabel)} · ${escapeHtml(meta.paramLabel)}</span>
+        ${renderCurvePresetBar(track)}
         <span>${escapeHtml(formatPropertyValue(model.min))} – ${escapeHtml(formatPropertyValue(model.max))}</span>
       </div>
+      ${renderGraphOverlayLegend(overlayTracks, graph)}
       <div class="animation-track-lane animation-graph-lane" data-timeline-lane="${escapeHtml(track.id)}">
         <svg
           class="timeline-graph-svg"
@@ -847,7 +977,13 @@ function renderGraphEditor(track, duration, fps, selected, graph, playback) {
           aria-label="${escapeHtml(meta.label)} curve"
         >
           ${renderGraphGrid(model)}
-          ${renderGraphPath(track, model)}
+          ${overlayTracks
+            .map((overlayTrack, index) => renderGraphPath(overlayTrack, model, {
+              overlay: true,
+              color: graphCurveColor(overlayTrack, graph, index),
+            }))
+            .join("")}
+          ${renderGraphPath(track, model, { color: graphCurveColor(track, graph, 0) })}
           <line class="timeline-graph-playhead" x1="${currentPoint.x}" x2="${currentPoint.x}" y1="0" y2="${GRAPH_EDITOR_HEIGHT}" />
           ${renderGraphTangents(track, model, selected)}
           ${renderGraphKeyframes(track, model, fps)}
@@ -869,7 +1005,36 @@ function renderGraphGrid(model) {
   `;
 }
 
-function renderGraphPath(track, model) {
+function renderCurvePresetBar(track) {
+  return `
+    <span class="timeline-curve-presets" data-curve-track-id="${escapeHtml(track.id)}">
+      <button type="button" data-curve-preset="linear" title="Linear">Lin</button>
+      <button type="button" data-curve-preset="ease-in" title="Ease in">In</button>
+      <button type="button" data-curve-preset="ease-out" title="Ease out">Out</button>
+      <button type="button" data-curve-preset="ease-in-out" title="Ease in/out">S</button>
+      <button type="button" data-curve-preset="ease-in-out-cubic" title="Ease in/out cubic">Cubic</button>
+    </span>
+  `;
+}
+
+function renderGraphOverlayLegend(tracks, graph) {
+  if (tracks.length === 0) return "";
+  return `
+    <div class="timeline-graph-overlay-legend">
+      ${tracks.map((track, index) => {
+        const meta = getTrackDisplayMeta(track, graph);
+        return `
+          <span>
+            <i style="background:${graphCurveColor(track, graph, index)}"></i>
+            ${escapeHtml(meta.paramLabel)}
+          </span>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderGraphPath(track, model, options = {}) {
   const keyframes = track.keyframes.filter((keyframe) => typeof keyframe.value === "number");
   if (keyframes.length === 0) return "";
   let d = "";
@@ -894,7 +1059,9 @@ function renderGraphPath(track, model) {
       d += ` L ${point.x.toFixed(3)} ${point.y.toFixed(3)}`;
     }
   }
-  return `<path class="timeline-graph-curve" d="${d}" />`;
+  const overlayClass = options.overlay ? " is-overlay" : "";
+  const color = options.color ? ` style="--curve-color:${options.color}"` : "";
+  return `<path class="timeline-graph-curve${overlayClass}" d="${d}"${color} />`;
 }
 
 function renderGraphTangents(track, model, selected) {
@@ -957,21 +1124,26 @@ function renderGraphKeyframes(track, model, fps) {
     .join("");
 }
 
-function createGraphCurveModel(track, duration) {
-  const numericKeyframes = track.keyframes.filter((keyframe) => typeof keyframe.value === "number");
+function createGraphCurveModel(trackOrTracks, duration) {
+  const tracks = Array.isArray(trackOrTracks) ? trackOrTracks : [trackOrTracks];
+  const numericKeyframes = tracks.flatMap((track) =>
+    track.keyframes.filter((keyframe) => typeof keyframe.value === "number")
+  );
   if (numericKeyframes.length === 0 || duration <= 0) return null;
   const values = [];
-  for (let index = 0; index < track.keyframes.length; index++) {
-    const keyframe = track.keyframes[index];
-    if (typeof keyframe.value !== "number") continue;
-    values.push(keyframe.value);
-    if (index > 0 && getSegmentInterpolation(track.keyframes[index - 1], track) === "bezier") {
-      const tangent = resolveGraphTangent(track, index, "in");
-      values.push(keyframe.value + tangent.dv);
-    }
-    if (index < track.keyframes.length - 1 && getSegmentInterpolation(keyframe, track) === "bezier") {
-      const tangent = resolveGraphTangent(track, index, "out");
-      values.push(keyframe.value + tangent.dv);
+  for (const track of tracks) {
+    for (let index = 0; index < track.keyframes.length; index++) {
+      const keyframe = track.keyframes[index];
+      if (typeof keyframe.value !== "number") continue;
+      values.push(keyframe.value);
+      if (index > 0 && getSegmentInterpolation(track.keyframes[index - 1], track) === "bezier") {
+        const tangent = resolveGraphTangent(track, index, "in");
+        values.push(keyframe.value + tangent.dv);
+      }
+      if (index < track.keyframes.length - 1 && getSegmentInterpolation(keyframe, track) === "bezier") {
+        const tangent = resolveGraphTangent(track, index, "out");
+        values.push(keyframe.value + tangent.dv);
+      }
     }
   }
   let min = Math.min(...values);
@@ -1069,6 +1241,23 @@ function normalizeGraphTangent(raw) {
   const dv = Number(raw.dv);
   if (!Number.isFinite(dt) || !Number.isFinite(dv)) return null;
   return { dt, dv };
+}
+
+function graphCurveColor(track, graph, index = 0) {
+  const meta = getTrackDisplayMeta(track, graph);
+  const fallback = ["#f0b55f", "#6ab0ff", "#7ddf95", "#f07ab6", "#a78bfa"][index % 5];
+  const familyMap = {
+    color: "#40c7d8",
+    process: "#7ddf95",
+    dither: "#f07ab6",
+    mask: "#68d6bd",
+    effect: "#f0b55f",
+    compose: "#a78bfa",
+    utility: "#bac2d0",
+    input: "#8b9bb3",
+    output: "#6ab0ff",
+  };
+  return familyMap[meta.family] ?? fallback;
 }
 
 function getTrackDisplayMeta(track, graph) {

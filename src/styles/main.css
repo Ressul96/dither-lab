@@ -1771,6 +1771,51 @@ body.cutting-edges * {
   box-sizing: border-box;
 }
 
+.render-range-overlay {
+  position: absolute;
+  inset: 0 12px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.render-range-muted,
+.render-range-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.render-range-muted {
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.render-range-muted--before {
+  left: 0;
+}
+
+.render-range-band {
+  border-left: 1px solid rgba(106, 176, 255, 0.7);
+  border-right: 1px solid rgba(106, 176, 255, 0.7);
+  background: rgba(74, 158, 255, 0.045);
+}
+
+.render-range-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  transform: translateX(-50%);
+  background: rgba(106, 176, 255, 0.28);
+}
+
+.render-range-handle--start {
+  left: 0;
+}
+
+.render-range-handle--end {
+  left: 100%;
+}
+
 .empty-state {
   position: absolute;
   inset: 0;
@@ -1860,6 +1905,62 @@ body.cutting-edges * {
   white-space: nowrap;
 }
 
+.timeline-curve-presets {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+}
+
+.timeline-graph-meta .timeline-curve-presets {
+  overflow: visible;
+}
+
+.timeline-curve-presets button {
+  height: 18px;
+  min-width: 24px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.timeline-curve-presets button:hover {
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-primary);
+}
+
+.timeline-graph-overlay-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 16px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.timeline-graph-overlay-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.timeline-graph-overlay-legend i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
 .animation-graph-lane {
   height: 136px;
   overflow: hidden;
@@ -1890,9 +1991,14 @@ body.cutting-edges * {
 
 .timeline-graph-curve {
   fill: none;
-  stroke: rgba(240, 181, 95, 0.95);
+  stroke: var(--curve-color, rgba(240, 181, 95, 0.95));
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
+}
+
+.timeline-graph-curve.is-overlay {
+  opacity: 0.52;
+  stroke-width: 1.4;
 }
 
 .timeline-graph-playhead {
@@ -2166,6 +2272,19 @@ body.dragging-tangent .timeline-tangent-handle {
 .popover-row:hover {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
+}
+
+.popover-range-readout {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .export-entry {
