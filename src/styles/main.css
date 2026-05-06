@@ -1503,17 +1503,18 @@ body.cutting-edges * {
   flex-direction: column;
   gap: 1px;
   min-width: 0;
-  max-height: 160px;
+  max-height: 178px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
 
 .property-card {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px 8px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  height: 28px;
-  padding: 0 10px;
+  column-gap: 8px;
+  min-height: 34px;
+  padding: 3px 8px 3px 4px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -1533,6 +1534,37 @@ body.cutting-edges * {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+.property-card.is-expanded {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.property-chevron {
+  width: 18px;
+  height: 22px;
+  min-width: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.property-chevron:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+}
+
+.property-chevron span {
+  display: inline-block;
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+}
+
+.property-card.is-expanded .property-chevron span {
+  transform: rotate(90deg);
+}
+
 .property-color {
   width: 8px;
   height: 8px;
@@ -1542,12 +1574,45 @@ body.cutting-edges * {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
 }
 
+.property-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+
 .property-name {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.property-node,
+.property-value,
+.animation-timeline-empty {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.property-node {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.property-value {
+  max-width: 72px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.animation-timeline-empty {
+  padding: 3px 8px;
 }
 
 /* Timeline pane (right side) -------------------------------------------- */
@@ -1558,17 +1623,75 @@ body.cutting-edges * {
   flex-direction: column;
   min-width: 0;
   min-height: 140px;
+  --timeline-content-width: 100%;
+  --timeline-zoom: 1;
 }
 
 .timeline-pane-head {
   position: relative;
-  height: 22px;
+  display: flex;
+  flex-direction: column;
+  height: 48px;
   border-bottom: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+
+.timeline-pane-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+  padding: 3px 10px 3px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+}
+
+.timeline-view-toggle,
+.timeline-zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+}
+
+.timeline-view-toggle button,
+.timeline-zoom-controls button {
+  height: 20px;
+  min-width: 24px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.timeline-view-toggle button:hover,
+.timeline-zoom-controls button:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+}
+
+.timeline-view-toggle button.is-active {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+.timeline-zoom-controls [data-timeline-zoom="reset"] {
+  min-width: 42px;
 }
 
 .time-ruler {
   position: relative;
-  height: 100%;
+  height: 21px;
+  width: var(--timeline-content-width);
+  will-change: transform;
 }
 
 .time-tick {
@@ -1596,6 +1719,10 @@ body.cutting-edges * {
   padding: 8px 0;
   overflow: auto;
   scrollbar-width: thin;
+}
+
+.timeline-pane.is-graph-mode .playhead {
+  display: none;
 }
 
 /* Playhead overlay (rendered once, positioned via inline style) ---------- */
@@ -1640,11 +1767,13 @@ body.cutting-edges * {
   flex-direction: column;
   gap: 4px;
   padding: 0 12px;
+  width: var(--timeline-content-width);
+  box-sizing: border-box;
 }
 
 .empty-state {
   position: absolute;
-  inset: 22px 0 0;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1660,6 +1789,16 @@ body.cutting-edges * {
 
 /* Lane row (rendered per active property by player.js) ------------------ */
 
+.animation-lane-row {
+  min-width: 0;
+  padding: 1px 0;
+  border-radius: var(--radius-sm);
+}
+
+.animation-lane-row.is-active {
+  background: rgba(74, 158, 255, 0.06);
+}
+
 .animation-track-lane {
   position: relative;
   height: 22px;
@@ -1671,6 +1810,140 @@ body.cutting-edges * {
 
 .animation-track-lane:hover {
   background: rgba(255, 255, 255, 0.04);
+}
+
+.timeline-graph-placeholder {
+  min-height: 72px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    rgba(255, 255, 255, 0.018);
+  background-size: 24px 24px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.timeline-graph-title {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.timeline-graph-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.timeline-graph-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 18px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-graph-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.animation-graph-lane {
+  height: 136px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    rgba(255, 255, 255, 0.018);
+  background-size: 28px 28px;
+}
+
+.timeline-graph-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.timeline-graph-grid line {
+  stroke: rgba(255, 255, 255, 0.055);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.timeline-graph-grid .timeline-graph-zero {
+  stroke: rgba(255, 255, 255, 0.11);
+}
+
+.timeline-graph-curve {
+  fill: none;
+  stroke: rgba(240, 181, 95, 0.95);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.timeline-graph-playhead {
+  stroke: rgba(245, 248, 255, 0.46);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.timeline-tangent {
+  opacity: 0.62;
+}
+
+.timeline-tangent.is-active,
+.animation-graph-lane:hover .timeline-tangent {
+  opacity: 1;
+}
+
+.timeline-tangent-line {
+  stroke: rgba(106, 176, 255, 0.62);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.timeline-tangent.is-auto .timeline-tangent-line {
+  stroke-dasharray: 3 3;
+}
+
+.timeline-tangent-handle {
+  fill: rgba(106, 176, 255, 0.94);
+  stroke: rgba(12, 13, 18, 0.82);
+  stroke-width: 1;
+  cursor: grab;
+  vector-effect: non-scaling-stroke;
+}
+
+.timeline-tangent-handle:hover {
+  fill: #9dccff;
+}
+
+.animation-graph-keyframe {
+  fill: #ffe1aa;
+  stroke: rgba(12, 13, 18, 0.82);
+  stroke-width: 1;
+  cursor: pointer;
+  vector-effect: non-scaling-stroke;
+}
+
+.animation-graph-keyframe:hover,
+.animation-graph-keyframe.is-selected {
+  stroke: rgba(255, 255, 255, 0.9);
+  filter: drop-shadow(0 0 4px rgba(74, 158, 255, 0.42));
 }
 
 /* Marquee selection rectangle — drawn while drag-selecting on a lane. */
@@ -1761,9 +2034,46 @@ body.cutting-edges * {
   padding: 0 10px;
 }
 
-body.dragging-keyframe {
+body.dragging-keyframe,
+body.dragging-tangent {
   cursor: ew-resize;
   user-select: none;
+}
+
+body.dragging-tangent .timeline-tangent-handle {
+  cursor: grabbing;
+}
+
+.animation-tangent-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 8px;
+  align-items: end;
+  padding-top: 6px;
+}
+
+.animation-tangent-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-heading);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.animation-tangent-panel input {
+  width: 100%;
+  height: 26px;
+  min-width: 0;
+}
+
+.animation-tangent-reset {
+  height: 26px;
+  padding: 0 10px;
 }
 
 /* (Old trim/scrubber + duplicate transport blocks were removed during the

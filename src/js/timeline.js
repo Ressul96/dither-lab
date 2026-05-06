@@ -216,6 +216,20 @@ export function getTimelineParamValue(
   return value === undefined ? baseValue : value;
 }
 
+export function getTimelineTrackValue(
+  timeline,
+  trackId,
+  timeSeconds,
+  baseValue,
+  options = {}
+) {
+  const normalized = normalizeTimeline(timeline, options);
+  const track = normalized.tracks.find((item) => item.id === trackId);
+  if (!track || !track.enabled) return baseValue;
+  const value = evaluateTrack(track, snapTimeToFrame(timeSeconds, normalized.fps), normalized);
+  return value === undefined ? baseValue : value;
+}
+
 export function hasTimelineTrackForParam(nodeId, paramKey, timeline = getState().timeline) {
   return Boolean(findParamTrack(normalizeTimeline(timeline), nodeId, paramKey));
 }
@@ -346,6 +360,9 @@ export function setParamKeyframe(timeline, { nodeId, paramKey, time, value }) {
     time: keyframeTime,
     value: clone(value),
     easing: "linear",
+    interpolation: "linear",
+    inTangent: null,
+    outTangent: null,
   };
   const existingIndex = findKeyframeIndexAtTime(track, keyframe.time, normalized.fps);
   if (existingIndex >= 0) {
@@ -481,7 +498,18 @@ export function duplicateTimelineKeyframes(timeline, items) {
       time: newTime,
       value: keyframe.value,
     });
-    newKeys.push({ trackId: track.id, keyframeId: createKeyframeId(track.id, newTime) });
+    const keyframeId = createKeyframeId(track.id, newTime);
+    next = updateTimelineKeyframe(next, {
+      trackId: track.id,
+      keyframeId,
+      patch: {
+        easing: keyframe.easing,
+        interpolation: keyframe.interpolation,
+        inTangent: keyframe.inTangent,
+        outTangent: keyframe.outTangent,
+      },
+    });
+    newKeys.push({ trackId: track.id, keyframeId });
   }
 
   return { timeline: next, newKeys };
@@ -517,7 +545,7 @@ function normalizeTrack(raw, context) {
     collapsed: raw.collapsed === true,
     nodeId,
     binding,
-    interpolation: normalizeEasing(raw.interpolation ?? "linear"),
+    interpolation: normalizeInterpolation(raw.interpolation, raw.easing ?? raw.interpolation ?? "linear"),
     keyframes: dedupeKeyframes(sortKeyframes(keyframes)),
   };
 }
@@ -536,6 +564,10 @@ export function updateTimelineTrack(timeline, { trackId, patch }) {
     if (Object.prototype.hasOwnProperty.call(patch, "collapsed")) {
       next.collapsed = patch.collapsed === true;
       if (next.collapsed !== track.collapsed) changed = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "interpolation")) {
+      next.interpolation = normalizeInterpolation(patch.interpolation, next.interpolation);
+      if (next.interpolation !== track.interpolation) changed = true;
     }
     return next;
   });
@@ -578,11 +610,15 @@ function normalizeKeyframe(raw, index, context, fallbackEasing) {
   if (!raw || typeof raw !== "object") return null;
   const time = snapTimeToFrame(normalizeKeyframeTime(raw, context), context.fps);
   if (!Number.isFinite(time)) return null;
+  const easing = normalizeEasing(raw.easing ?? raw.interpolation ?? fallbackEasing ?? "linear");
   return {
     id: String(raw.id ?? `kf-${index}`),
     time,
     value: clone(raw.value),
-    easing: normalizeEasing(raw.easing ?? raw.interpolation ?? fallbackEasing ?? "linear"),
+    easing,
+    interpolation: normalizeInterpolation(raw.interpolation, easing),
+    inTangent: normalizeTangent(raw.inTangent),
+    outTangent: normalizeTangent(raw.outTangent),
   };
 }
 
@@ -616,12 +652,66 @@ function evaluateTrack(track, timeSeconds, timeline) {
     if (time < from.time || time > to.time) continue;
     const span = Math.max(KEYFRAME_TIME_EPSILON, to.time - from.time);
     const rawT = clamp01((time - from.time) / span);
+    const interpolation = resolveSegmentInterpolation(from, track);
+    if (interpolation === "hold") return clone(from.value);
+    if (interpolation === "bezier") {
+      const bezier = evaluateBezierSegment(track, index, time, timeline);
+      if (bezier !== undefined) return bezier;
+    }
     const easing = normalizeEasing(from.easing ?? track.interpolation);
-    if (easing === "hold") return clone(from.value);
     return interpolateValues(from.value, to.value, ease(rawT, easing));
   }
 
   return clone(last.value);
+}
+
+function evaluateBezierSegment(track, index, time, timeline) {
+  const from = track.keyframes[index];
+  const to = track.keyframes[index + 1];
+  if (typeof from.value !== "number" || typeof to.value !== "number") return undefined;
+
+  const out = resolveKeyframeTangent(track, index, "out");
+  const inn = resolveKeyframeTangent(track, index + 1, "in");
+  const p0 = { x: from.time, y: from.value };
+  const p1 = { x: from.time + out.dt, y: from.value + out.dv };
+  const p2 = { x: to.time + inn.dt, y: to.value + inn.dv };
+  const p3 = { x: to.time, y: to.value };
+  const u = solveCubicX(p0.x, p1.x, p2.x, p3.x, resolveTimelineTime(timeline, time));
+  return cubicAt(p0.y, p1.y, p2.y, p3.y, u);
+}
+
+function resolveKeyframeTangent(track, index, side) {
+  const keyframe = track.keyframes[index];
+  const key = side === "in" ? "inTangent" : "outTangent";
+  const explicit = normalizeTangent(keyframe?.[key]);
+  if (explicit) return explicit;
+  return createAutoTangent(track, index, side);
+}
+
+function createAutoTangent(track, index, side) {
+  const keyframe = track.keyframes[index];
+  const previous = track.keyframes[index - 1];
+  const next = track.keyframes[index + 1];
+  if (!keyframe || typeof keyframe.value !== "number") return { dt: 0, dv: 0 };
+
+  const neighbor = side === "in" ? previous : next;
+  if (!neighbor || typeof neighbor.value !== "number") return { dt: 0, dv: 0 };
+
+  const windowStart = previous ?? keyframe;
+  const windowEnd = next ?? keyframe;
+  const windowSpan = Math.max(KEYFRAME_TIME_EPSILON, windowEnd.time - windowStart.time);
+  const slope =
+    typeof windowStart.value === "number" && typeof windowEnd.value === "number"
+      ? (windowEnd.value - windowStart.value) / windowSpan
+      : 0;
+  const segmentSpan = Math.max(KEYFRAME_TIME_EPSILON, Math.abs(neighbor.time - keyframe.time));
+  const dt = (side === "in" ? -1 : 1) * segmentSpan * 0.33;
+  return { dt, dv: slope * dt };
+}
+
+function resolveSegmentInterpolation(keyframe, track) {
+  if (keyframe?.interpolation) return normalizeInterpolation(keyframe.interpolation, keyframe.easing);
+  return normalizeInterpolation(track?.interpolation, keyframe?.easing);
 }
 
 function interpolateValues(from, to, t) {
@@ -689,15 +779,51 @@ function sanitizeKeyframePatch(patch) {
   if (Object.prototype.hasOwnProperty.call(patch, "easing")) {
     out.easing = normalizeEasing(patch.easing);
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "interpolation")) {
+    out.interpolation = normalizeInterpolation(patch.interpolation, out.easing ?? patch.easing);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "inTangent")) {
+    out.inTangent = normalizeTangent(patch.inTangent);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "outTangent")) {
+    out.outTangent = normalizeTangent(patch.outTangent);
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "time")) {
     out.time = normalizeDuration(patch.time);
   }
   return out;
 }
 
+function normalizeInterpolation(raw, easingFallback = "linear") {
+  const value = String(raw ?? "").toLowerCase().replace(/[_\s]+/g, "-");
+  if (value === "bezier" || value === "custom-bezier") return "bezier";
+  if (value === "hold") return "hold";
+  if (value === "linear") return "linear";
+  const easing = normalizeEasing(easingFallback);
+  if (easing === "hold") return "hold";
+  if (
+    easing === "ease-in" ||
+    easing === "ease-out" ||
+    easing === "ease-in-out" ||
+    easing === "custom-bezier"
+  ) {
+    return "bezier";
+  }
+  return "linear";
+}
+
+function normalizeTangent(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const dt = Number(raw.dt);
+  const dv = Number(raw.dv);
+  if (!Number.isFinite(dt) || !Number.isFinite(dv)) return null;
+  return { dt, dv };
+}
+
 function normalizeEasing(raw) {
   if (raw && typeof raw === "object" && raw.mode) return normalizeEasing(raw.mode);
   const value = String(raw ?? "linear").toLowerCase().replace(/_/g, "-");
+  if (value === "custom-bezier" || value === "bezier" || value === "custom") return "custom-bezier";
   if (value === "easein") return "ease-in";
   if (value === "easeout") return "ease-out";
   if (value === "easeinout" || value === "smooth") return "ease-in-out";
@@ -750,4 +876,25 @@ function isPlainObject(value) {
 function clone(value) {
   if (value === undefined) return undefined;
   return JSON.parse(JSON.stringify(value));
+}
+
+function solveCubicX(x0, x1, x2, x3, targetX) {
+  let lo = 0;
+  let hi = 1;
+  let t = 0.5;
+  for (let i = 0; i < 18; i++) {
+    t = (lo + hi) / 2;
+    const x = cubicAt(x0, x1, x2, x3, t);
+    if (x < targetX) lo = t;
+    else hi = t;
+  }
+  return t;
+}
+
+function cubicAt(p0, p1, p2, p3, t) {
+  const inv = 1 - t;
+  return inv * inv * inv * p0
+    + 3 * inv * inv * t * p1
+    + 3 * inv * t * t * p2
+    + t * t * t * p3;
 }

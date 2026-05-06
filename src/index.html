@@ -327,6 +327,17 @@
           </aside>
           <section class="timeline-pane" id="animationTimeline" aria-label="Animation timeline">
             <div class="timeline-pane-head">
+              <div class="timeline-pane-toolbar">
+                <div class="timeline-view-toggle" aria-label="Timeline view">
+                  <button type="button" data-timeline-view="layers" aria-pressed="true">Layers</button>
+                  <button type="button" data-timeline-view="graph" aria-pressed="false">Graph</button>
+                </div>
+                <div class="timeline-zoom-controls" aria-label="Timeline zoom">
+                  <button type="button" data-timeline-zoom="out" title="Zoom out">−</button>
+                  <button type="button" data-timeline-zoom="reset" data-timeline-zoom-readout>100%</button>
+                  <button type="button" data-timeline-zoom="in" title="Zoom in">+</button>
+                </div>
+              </div>
               <div class="time-ruler"></div>
             </div>
             <div class="timeline-pane-body">

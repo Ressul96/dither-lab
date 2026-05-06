@@ -1,4 +1,5 @@
 import { getState, subscribe, dispatch, pushHistory } from "../state.js";
+import { getNodeDefinition } from "../graph.js";
 import {
   togglePlay,
   restart,
@@ -11,26 +12,36 @@ import {
   setPlaybackSpeed,
 } from "../source.js";
 import {
+  TIMELINE_BINDING_NODE_PARAM,
+  TIMELINE_BINDING_NODE_PROPERTY,
   duplicateTimelineKeyframes,
   durationToFrames,
   formatFrameReadout,
   formatSecondReadout,
-  frameToTime,
   getTimelineKeyframe,
+  getTimelineTrackValue,
   moveTimelineKeyframe,
   normalizeTimeline,
   removeTimelineKeyframeById,
   setDurationUnit,
+  setSelectedProperty,
+  setTimelineZoom,
+  setTrackExpanded,
   setTimelineAutokey,
+  setViewMode,
   snapTimeToFrame,
   timeToFrame,
   timelineFrameRate,
+  toggleTrackExpanded,
   updateTimelineKeyframe,
-  updateTimelineTrack,
 } from "../timeline.js";
 
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 const KEYFRAME_DRAG_THRESHOLD = 3;
+const GRAPH_EDITOR_WIDTH = 1000;
+const GRAPH_EDITOR_HEIGHT = 136;
+const GRAPH_EDITOR_PADDING = 18;
+const GRAPH_MIN_VALUE_RANGE = 1;
 
 // Multi-select keyframe state. `selectedKeyframes` is the full set of
 // "trackId|keyframeId" keys; `selectedTimelineKeyframe` always points at the
@@ -39,6 +50,7 @@ const KEYFRAME_DRAG_THRESHOLD = 3;
 const selectedKeyframes = new Set();
 let selectedTimelineKeyframe = null;
 let keyframeDrag = null;
+let tangentDrag = null;
 
 let selectedPropertyTrackId = null;
 
@@ -106,6 +118,10 @@ const playerEls = {
   timeRuler: null,
   playhead: null,
   emptyState: null,
+  timelinePane: null,
+  timelineBody: null,
+  viewButtons: [],
+  zoomReadout: null,
   playerCard: null,
   moreBtn: null,
 };
@@ -154,6 +170,10 @@ function cachePlayerEls() {
   playerEls.timeRuler = root.querySelector(".time-ruler");
   playerEls.playhead = root.querySelector(".playhead-handle");
   playerEls.emptyState = root.querySelector(".empty-state");
+  playerEls.timelinePane = root.querySelector(".timeline-pane");
+  playerEls.timelineBody = root.querySelector(".timeline-pane-body");
+  playerEls.viewButtons = Array.from(root.querySelectorAll("[data-timeline-view]"));
+  playerEls.zoomReadout = root.querySelector("[data-timeline-zoom-readout]");
 
   playerEls.compareSeg = document.querySelector(".compare-mode");
   playerEls.compareButtons = playerEls.compareSeg
@@ -218,6 +238,12 @@ function wireAnimationTimeline() {
   if (!timelineEl) return;
   timelineEl.addEventListener("pointerdown", onAnimationTimelinePointerDown);
   timelineEl.addEventListener("click", (event) => {
+    if (event.target.closest("[data-tangent-handle]")) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     const autokey = event.target.closest('[data-action="toggle-autokey"]');
     if (autokey) {
       event.preventDefault();
@@ -227,18 +253,52 @@ function wireAnimationTimeline() {
       return;
     }
 
+    const viewButton = event.target.closest("[data-timeline-view]");
+    if (viewButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      setViewMode(viewButton.dataset.timelineView);
+      return;
+    }
+
+    const zoomButton = event.target.closest("[data-timeline-zoom]");
+    if (zoomButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      adjustTimelineZoom(zoomButton.dataset.timelineZoom);
+      return;
+    }
+
+    const trackToggle = event.target.closest("[data-track-toggle]");
+    if (trackToggle) {
+      event.preventDefault();
+      event.stopPropagation();
+      const trackId = trackToggle.dataset.trackToggle;
+      selectedPropertyTrackId = trackId;
+      setSelectedProperty(trackId);
+      toggleTrackExpanded(trackId);
+      return;
+    }
+
     const propCard = event.target.closest(".property-card");
     if (propCard) {
       event.preventDefault();
       event.stopPropagation();
       selectedPropertyTrackId = propCard.dataset.trackId;
-      renderAnimationTimeline();
+      setSelectedProperty(selectedPropertyTrackId);
+      setTrackExpanded(selectedPropertyTrackId, true);
       return;
     }
 
     const deleteButton = event.target.closest("[data-keyframe-action='delete']");
     if (deleteButton) {
       deleteSelectedKeyframe();
+      return;
+    }
+
+    const resetTangentsButton = event.target.closest("[data-keyframe-action='reset-tangents']");
+    if (resetTangentsButton) {
+      resetSelectedKeyframeTangents(resetTangentsButton);
       return;
     }
 
@@ -276,6 +336,11 @@ function wireAnimationTimeline() {
     renderAnimationTimeline();
   });
   timelineEl.addEventListener("change", onAnimationTimelineChange);
+  const body = timelineEl.querySelector(".timeline-pane-body");
+  if (body) {
+    body.addEventListener("wheel", onTimelineWheel, { passive: false });
+    body.addEventListener("scroll", syncTimelineRulerScroll, { passive: true });
+  }
 
   const durationInput = document.querySelector('[data-field="duration"]');
   if (durationInput) {
@@ -289,6 +354,38 @@ function wireAnimationTimeline() {
       dispatch("timeline", { duration: seconds });
     });
   }
+}
+
+function adjustTimelineZoom(action) {
+  const { source, timeline } = getState();
+  const normalized = normalizeTimeline(timeline, {
+    duration: source.duration,
+    fps: source.fps,
+  });
+  if (action === "reset") {
+    setTimelineZoom(1);
+    return;
+  }
+  const factor = action === "out" ? 0.8 : 1.25;
+  setTimelineZoom(normalized.zoom * factor);
+}
+
+function onTimelineWheel(event) {
+  if (!(event.altKey || event.metaKey || event.ctrlKey)) return;
+  if (event.target.closest("input, select, textarea")) return;
+  event.preventDefault();
+  const { source, timeline } = getState();
+  const normalized = normalizeTimeline(timeline, {
+    duration: source.duration,
+    fps: source.fps,
+  });
+  const factor = event.deltaY > 0 ? 0.9 : 1.1;
+  setTimelineZoom(normalized.zoom * factor);
+}
+
+function syncTimelineRulerScroll() {
+  if (!playerEls.timeRuler || !playerEls.timelineBody) return;
+  playerEls.timeRuler.style.transform = `translateX(${-playerEls.timelineBody.scrollLeft}px)`;
 }
 
 // More-menu (kebab) ------------------------------------------------------
@@ -535,77 +632,471 @@ function renderAnimationTimeline() {
     playerEls.autokeyPill.classList.toggle("is-active", autokey);
   }
 
-  // Properties Panel
-  playerEls.propertyList.innerHTML = tracks.length === 0 
-    ? `<li class="animation-timeline-empty" style="padding:0 8px; font-size:10px; color:var(--text-muted)">No properties</li>`
-    : tracks.map((track) => renderPropertyCard(track, graph, selectedPropertyTrackId)).join("");
+  updateTimelineChrome(normalized);
 
-  // Timeline Lane
-  const activeTrack = tracks.find(t => t.id === selectedPropertyTrackId) || (tracks.length > 0 ? tracks[0] : null);
+  const selectedId = tracks.some((track) => track.id === normalized.selectedPropertyId)
+    ? normalized.selectedPropertyId
+    : selectedPropertyTrackId;
+  const activeTrack = tracks.find((track) => track.id === selectedId) || (tracks.length > 0 ? tracks[0] : null);
   if (activeTrack && selectedPropertyTrackId !== activeTrack.id) {
     selectedPropertyTrackId = activeTrack.id;
   }
+  const activeId = activeTrack?.id ?? null;
+  const expandedIds = new Set(normalized.expandedTrackIds ?? []);
+  const visibleTracks = tracks.filter((track) => expandedIds.has(track.id));
 
-  if (tracks.length === 0 || !activeTrack) {
+  playerEls.propertyList.innerHTML = tracks.length === 0
+    ? `<li class="animation-timeline-empty">No properties</li>`
+    : tracks
+        .map((track) =>
+          renderPropertyCard(track, {
+            graph,
+            timeline: normalized,
+            playback,
+            source,
+            activeId,
+            expandedIds,
+          })
+        )
+        .join("");
+
+  if (!playerEls.laneHost || !playerEls.emptyState) return;
+  renderTimeRuler(duration, fps, normalized.durationUnit, normalized.zoom);
+  const selected = getSelectedTimelineKeyframe(normalized);
+
+  if (tracks.length === 0) {
     playerEls.laneHost.innerHTML = "";
+    playerEls.emptyState.textContent = "Add your first keyframe from the properties panel.";
     playerEls.emptyState.classList.remove("hidden");
-    playerEls.timeRuler.innerHTML = "";
+  } else if (normalized.viewMode === "graph") {
+    const graphTrack = pickGraphTrack(activeTrack, visibleTracks);
+    if (!graphTrack) {
+      playerEls.laneHost.innerHTML = "";
+      playerEls.emptyState.textContent = "Select a property to edit its curve.";
+      playerEls.emptyState.classList.remove("hidden");
+    } else {
+      playerEls.laneHost.innerHTML = renderGraphEditor(graphTrack, duration, fps, selected, graph, playback);
+      playerEls.emptyState.classList.add("hidden");
+    }
+  } else if (visibleTracks.length === 0) {
+    playerEls.laneHost.innerHTML = "";
+    playerEls.emptyState.textContent = "Open property lanes with the chevrons.";
+    playerEls.emptyState.classList.remove("hidden");
   } else {
     playerEls.emptyState.classList.add("hidden");
-    const selected = getSelectedTimelineKeyframe(normalized);
-    playerEls.laneHost.innerHTML = renderAnimationLane(activeTrack, duration, fps, selected);
-    renderTimeRuler(duration);
+    playerEls.laneHost.innerHTML = visibleTracks
+      .map((track) => renderAnimationLane(track, duration, fps, selected, graph))
+      .join("");
   }
-  
+
   updateAnimationPlayhead(playback, duration);
 }
 
-function renderPropertyCard(track, graph, selectedId) {
-  const node = graph.nodes.find((item) => item.id === track.nodeId);
-  const nodeLabel = node?.label ?? track.nodeId;
-  const paramLabel = formatParamLabel(track.binding?.key ?? "value");
-  const family = node?.type?.split('-')[0] || "utility";
-  
-  const isActive = track.id === selectedId;
+function updateTimelineChrome(timeline) {
+  const effectiveZoom = getEffectiveTimelineZoom(timeline);
+  const contentWidth = `${effectiveZoom * 100}%`;
+  const timelinePane = playerEls.timelinePane ?? playerEls.playerCard;
+  if (timelinePane) {
+    timelinePane.style.setProperty("--timeline-content-width", contentWidth);
+    timelinePane.style.setProperty("--timeline-zoom", String(effectiveZoom));
+    timelinePane.classList.toggle("is-graph-mode", timeline.viewMode === "graph");
+  }
+  for (const button of playerEls.viewButtons ?? []) {
+    const active = button.dataset.timelineView === timeline.viewMode;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  if (playerEls.zoomReadout) {
+    playerEls.zoomReadout.textContent = `${Math.round(timeline.zoom * 100)}%`;
+  }
+}
+
+function renderPropertyCard(track, context) {
+  const { graph, timeline, playback, source, activeId, expandedIds } = context;
+  const meta = getTrackDisplayMeta(track, graph);
+  const baseValue = getTrackBaseValue(track, meta.node);
+  const currentValue = getTimelineTrackValue(
+    timeline,
+    track.id,
+    playback.currentTime,
+    baseValue,
+    { duration: source.duration, fps: source.fps }
+  );
+  const valueLabel = formatPropertyValue(currentValue);
+  const isActive = track.id === activeId;
+  const isExpanded = expandedIds.has(track.id);
+
   return `
-    <li class="property-card ${isActive ? "is-active" : ""}" data-track-id="${escapeHtml(track.id)}">
-      <div class="property-color" style="background: var(--family-${family}, var(--accent))"></div>
-      <span class="property-name" title="${escapeHtml(nodeLabel)} · ${escapeHtml(paramLabel)}">
-        ${escapeHtml(nodeLabel)} · ${escapeHtml(paramLabel)}
+    <li
+      class="property-card ${isActive ? "is-active" : ""} ${isExpanded ? "is-expanded" : ""}"
+      data-track-id="${escapeHtml(track.id)}"
+      aria-selected="${isActive ? "true" : "false"}"
+    >
+      <button
+        class="property-chevron"
+        type="button"
+        data-track-toggle="${escapeHtml(track.id)}"
+        aria-label="Toggle ${escapeHtml(meta.label)} lane"
+        aria-expanded="${isExpanded ? "true" : "false"}"
+      >
+        <span aria-hidden="true">›</span>
+      </button>
+      <div class="property-color" style="background: var(--family-${meta.family}, var(--accent))"></div>
+      <span class="property-copy" title="${escapeHtml(meta.nodeLabel)} · ${escapeHtml(meta.paramLabel)}">
+        <span class="property-name">${escapeHtml(meta.paramLabel)}</span>
+        <span class="property-node">${escapeHtml(meta.nodeLabel)}</span>
       </span>
+      <span class="property-value" title="${escapeHtml(valueLabel)}">${escapeHtml(valueLabel)}</span>
     </li>
   `;
 }
 
-function renderTimeRuler(duration) {
+function renderTimeRuler(duration, fps, unit, zoom) {
   if (!playerEls.timeRuler) return;
   if (duration <= 0) {
     playerEls.timeRuler.innerHTML = "";
     return;
   }
+  const totalFrames = durationToFrames(duration, fps);
+  const targetTicks = clamp(Math.round(8 * getEffectiveTimelineZoom({ zoom })), 8, 28);
+  const stepFrames = niceFrameStep(Math.max(1, Math.ceil(totalFrames / targetTicks)));
+  const frames = [];
+  for (let frame = 0; frame <= totalFrames; frame += stepFrames) frames.push(frame);
+  if (frames[frames.length - 1] !== totalFrames) frames.push(totalFrames);
+
   let html = "";
-  let step = Math.max(1, Math.round(duration / 10)); // e.g. 10 ticks
-  for(let t=0; t<=duration; t+=step) {
-    const pct = (t / duration) * 100;
+  for (const frame of frames) {
+    const pct = (frame / totalFrames) * 100;
+    const label = unit === "second" ? formatRulerSecond(frame / fps) : `F${frame}`;
     html += `
       <div class="time-tick" style="left: ${pct}%">
-        <span class="time-tick-label">${t.toFixed(1)}</span>
+        <span class="time-tick-label">${label}</span>
       </div>
     `;
   }
   playerEls.timeRuler.innerHTML = html;
+  syncTimelineRulerScroll();
 }
 
-function renderAnimationLane(track, duration, fps, selected) {
+function renderAnimationLane(track, duration, fps, selected, graph) {
+  const meta = getTrackDisplayMeta(track, graph);
+  const selectedHere = selected && selected.track.id === track.id;
   const laneHtml = `
-    <div class="animation-track-lane" data-timeline-lane="${escapeHtml(track.id)}">
-      ${track.keyframes
-          .map((keyframe) => renderKeyframe(keyframe, track, duration, fps, selected))
-          .join("")}
+    <div class="animation-lane-row ${selectedHere ? "is-active" : ""}">
+      <div
+        class="animation-track-lane"
+        data-timeline-lane="${escapeHtml(track.id)}"
+        title="${escapeHtml(meta.nodeLabel)} · ${escapeHtml(meta.paramLabel)}"
+      >
+        ${track.keyframes
+            .map((keyframe) => renderKeyframe(keyframe, track, duration, fps, selected))
+            .join("")}
+      </div>
     </div>
   `;
   const panelHtml = selected && selected.track.id === track.id ? renderSelectedKeyframePanel(selected) : "";
   return laneHtml + panelHtml;
+}
+
+function renderGraphPlaceholder(tracks) {
+  const keyframeCount = tracks.reduce((total, track) => total + track.keyframes.length, 0);
+  return `
+    <div class="timeline-graph-placeholder">
+      <span class="timeline-graph-title">Graph</span>
+      <span>${tracks.length} properties · ${keyframeCount} keyframes</span>
+    </div>
+  `;
+}
+
+function pickGraphTrack(activeTrack, visibleTracks) {
+  if (activeTrack && isNumericTimelineTrack(activeTrack)) return activeTrack;
+  return visibleTracks.find(isNumericTimelineTrack) ?? activeTrack ?? visibleTracks[0] ?? null;
+}
+
+function renderGraphEditor(track, duration, fps, selected, graph, playback) {
+  const meta = getTrackDisplayMeta(track, graph);
+  const model = createGraphCurveModel(track, duration);
+  if (!model) {
+    return `
+      <div class="timeline-graph-placeholder">
+        <span class="timeline-graph-title">${escapeHtml(meta.paramLabel)}</span>
+        <span>Graph mode supports numeric keyframes first.</span>
+      </div>
+    `;
+  }
+
+  const currentTime = clamp(playback.currentTime, 0, duration);
+  const currentValue = sampleGraphTrackValue(track, currentTime);
+  const currentPoint = graphPoint(model, currentTime, currentValue);
+
+  return `
+    <div class="timeline-graph-editor" data-graph-track-id="${escapeHtml(track.id)}">
+      <div class="timeline-graph-meta">
+        <span>${escapeHtml(meta.nodeLabel)} · ${escapeHtml(meta.paramLabel)}</span>
+        <span>${escapeHtml(formatPropertyValue(model.min))} – ${escapeHtml(formatPropertyValue(model.max))}</span>
+      </div>
+      <div class="animation-track-lane animation-graph-lane" data-timeline-lane="${escapeHtml(track.id)}">
+        <svg
+          class="timeline-graph-svg"
+          viewBox="0 0 ${GRAPH_EDITOR_WIDTH} ${GRAPH_EDITOR_HEIGHT}"
+          preserveAspectRatio="none"
+          data-graph-track-id="${escapeHtml(track.id)}"
+          data-graph-min="${model.min}"
+          data-graph-max="${model.max}"
+          data-graph-duration="${duration}"
+          aria-label="${escapeHtml(meta.label)} curve"
+        >
+          ${renderGraphGrid(model)}
+          ${renderGraphPath(track, model)}
+          <line class="timeline-graph-playhead" x1="${currentPoint.x}" x2="${currentPoint.x}" y1="0" y2="${GRAPH_EDITOR_HEIGHT}" />
+          ${renderGraphTangents(track, model, selected)}
+          ${renderGraphKeyframes(track, model, fps)}
+        </svg>
+      </div>
+    </div>
+  `;
+}
+
+function renderGraphGrid(model) {
+  const rows = [0.25, 0.5, 0.75];
+  const cols = [0.25, 0.5, 0.75];
+  return `
+    <g class="timeline-graph-grid" aria-hidden="true">
+      ${rows.map((ratio) => `<line x1="0" x2="${GRAPH_EDITOR_WIDTH}" y1="${ratio * GRAPH_EDITOR_HEIGHT}" y2="${ratio * GRAPH_EDITOR_HEIGHT}" />`).join("")}
+      ${cols.map((ratio) => `<line x1="${ratio * GRAPH_EDITOR_WIDTH}" x2="${ratio * GRAPH_EDITOR_WIDTH}" y1="0" y2="${GRAPH_EDITOR_HEIGHT}" />`).join("")}
+      <line x1="0" x2="${GRAPH_EDITOR_WIDTH}" y1="${model.zeroY}" y2="${model.zeroY}" class="timeline-graph-zero" />
+    </g>
+  `;
+}
+
+function renderGraphPath(track, model) {
+  const keyframes = track.keyframes.filter((keyframe) => typeof keyframe.value === "number");
+  if (keyframes.length === 0) return "";
+  let d = "";
+  for (let index = 0; index < keyframes.length; index++) {
+    const keyframe = keyframes[index];
+    const point = graphPoint(model, keyframe.time, keyframe.value);
+    if (index === 0) {
+      d = `M ${point.x.toFixed(3)} ${point.y.toFixed(3)}`;
+      continue;
+    }
+    const previous = keyframes[index - 1];
+    const interpolation = getSegmentInterpolation(previous, track);
+    if (interpolation === "hold") {
+      d += ` H ${point.x.toFixed(3)} V ${point.y.toFixed(3)}`;
+    } else if (interpolation === "bezier") {
+      const out = resolveGraphTangent(track, track.keyframes.indexOf(previous), "out");
+      const inn = resolveGraphTangent(track, track.keyframes.indexOf(keyframe), "in");
+      const c1 = graphPoint(model, previous.time + out.dt, previous.value + out.dv);
+      const c2 = graphPoint(model, keyframe.time + inn.dt, keyframe.value + inn.dv);
+      d += ` C ${c1.x.toFixed(3)} ${c1.y.toFixed(3)} ${c2.x.toFixed(3)} ${c2.y.toFixed(3)} ${point.x.toFixed(3)} ${point.y.toFixed(3)}`;
+    } else {
+      d += ` L ${point.x.toFixed(3)} ${point.y.toFixed(3)}`;
+    }
+  }
+  return `<path class="timeline-graph-curve" d="${d}" />`;
+}
+
+function renderGraphTangents(track, model, selected) {
+  const pieces = [];
+  for (let index = 0; index < track.keyframes.length; index++) {
+    const keyframe = track.keyframes[index];
+    if (typeof keyframe.value !== "number") continue;
+    const keyPoint = graphPoint(model, keyframe.time, keyframe.value);
+    const active = selected?.track.id === track.id && selected?.keyframe.id === keyframe.id;
+    if (index > 0 && getSegmentInterpolation(track.keyframes[index - 1], track) === "bezier") {
+      pieces.push(renderGraphTangentHandle(track, keyframe, index, "in", keyPoint, model, active));
+    }
+    if (index < track.keyframes.length - 1 && getSegmentInterpolation(keyframe, track) === "bezier") {
+      pieces.push(renderGraphTangentHandle(track, keyframe, index, "out", keyPoint, model, active));
+    }
+  }
+  return `<g class="timeline-graph-tangents">${pieces.join("")}</g>`;
+}
+
+function renderGraphTangentHandle(track, keyframe, index, side, keyPoint, model, active) {
+  const tangent = resolveGraphTangent(track, index, side);
+  const handlePoint = graphPoint(model, keyframe.time + tangent.dt, keyframe.value + tangent.dv);
+  const isAuto = keyframe[side === "in" ? "inTangent" : "outTangent"] === null;
+  return `
+    <g class="timeline-tangent ${active ? "is-active" : ""} ${isAuto ? "is-auto" : ""}">
+      <line class="timeline-tangent-line" x1="${keyPoint.x}" y1="${keyPoint.y}" x2="${handlePoint.x}" y2="${handlePoint.y}" />
+      <circle
+        class="timeline-tangent-handle"
+        cx="${handlePoint.x}"
+        cy="${handlePoint.y}"
+        r="5"
+        data-tangent-handle="${side}"
+        data-timeline-track-id="${escapeHtml(track.id)}"
+        data-timeline-keyframe-id="${escapeHtml(keyframe.id)}"
+      />
+    </g>
+  `;
+}
+
+function renderGraphKeyframes(track, model, fps) {
+  return track.keyframes
+    .filter((keyframe) => typeof keyframe.value === "number")
+    .map((keyframe) => {
+      const point = graphPoint(model, keyframe.time, keyframe.value);
+      const active = isKeyframeSelected(track.id, keyframe.id);
+      return `
+        <circle
+          class="animation-graph-keyframe ${active ? "is-selected" : ""}"
+          cx="${point.x}"
+          cy="${point.y}"
+          r="5.5"
+          data-timeline-track-id="${escapeHtml(track.id)}"
+          data-timeline-keyframe-id="${escapeHtml(keyframe.id)}"
+          data-timeline-time="${Number(keyframe.time) || 0}"
+        >
+          <title>F${timeToFrame(keyframe.time, fps)} · ${escapeHtml(formatPropertyValue(keyframe.value))}</title>
+        </circle>
+      `;
+    })
+    .join("");
+}
+
+function createGraphCurveModel(track, duration) {
+  const numericKeyframes = track.keyframes.filter((keyframe) => typeof keyframe.value === "number");
+  if (numericKeyframes.length === 0 || duration <= 0) return null;
+  const values = [];
+  for (let index = 0; index < track.keyframes.length; index++) {
+    const keyframe = track.keyframes[index];
+    if (typeof keyframe.value !== "number") continue;
+    values.push(keyframe.value);
+    if (index > 0 && getSegmentInterpolation(track.keyframes[index - 1], track) === "bezier") {
+      const tangent = resolveGraphTangent(track, index, "in");
+      values.push(keyframe.value + tangent.dv);
+    }
+    if (index < track.keyframes.length - 1 && getSegmentInterpolation(keyframe, track) === "bezier") {
+      const tangent = resolveGraphTangent(track, index, "out");
+      values.push(keyframe.value + tangent.dv);
+    }
+  }
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  const span = Math.max(GRAPH_MIN_VALUE_RANGE, max - min);
+  if (max - min < GRAPH_MIN_VALUE_RANGE) {
+    const center = (min + max) / 2;
+    min = center - GRAPH_MIN_VALUE_RANGE / 2;
+    max = center + GRAPH_MIN_VALUE_RANGE / 2;
+  } else {
+    min -= span * 0.12;
+    max += span * 0.12;
+  }
+  return {
+    duration,
+    min,
+    max,
+    valueSpan: max - min,
+    zeroY: graphPoint({ duration, min, max, valueSpan: max - min }, 0, 0).y,
+  };
+}
+
+function graphPoint(model, time, value) {
+  const safeDuration = Math.max(1 / 120, model.duration);
+  const x = clamp(time / safeDuration, 0, 1) * GRAPH_EDITOR_WIDTH;
+  const ratio = (value - model.min) / Math.max(GRAPH_MIN_VALUE_RANGE, model.valueSpan ?? model.max - model.min);
+  const y = GRAPH_EDITOR_PADDING
+    + (1 - clamp(ratio, 0, 1)) * (GRAPH_EDITOR_HEIGHT - GRAPH_EDITOR_PADDING * 2);
+  return { x, y };
+}
+
+function graphValueFromY(model, y) {
+  const ratio = 1 - clamp((y - GRAPH_EDITOR_PADDING) / (GRAPH_EDITOR_HEIGHT - GRAPH_EDITOR_PADDING * 2), 0, 1);
+  return model.min + ratio * model.valueSpan;
+}
+
+function sampleGraphTrackValue(track, time) {
+  if (track.keyframes.length === 0) return 0;
+  const cloneTrack = { ...track, keyframes: track.keyframes.map((keyframe) => ({ ...keyframe })) };
+  const last = track.keyframes[track.keyframes.length - 1];
+  const timeline = {
+    duration: Math.max(time, last?.time ?? 0),
+    fps: 30,
+    loop: false,
+    tracks: [cloneTrack],
+  };
+  return getTimelineTrackValue(timeline, track.id, time, track.keyframes[0].value);
+}
+
+function isNumericTimelineTrack(track) {
+  return Boolean(track?.keyframes?.some((keyframe) => typeof keyframe.value === "number"));
+}
+
+function getSegmentInterpolation(keyframe, track) {
+  if (keyframe?.interpolation === "hold" || keyframe?.easing === "hold") return "hold";
+  if (keyframe?.interpolation === "bezier" || keyframe?.easing === "custom-bezier") return "bezier";
+  if (keyframe?.easing === "ease-in" || keyframe?.easing === "ease-out" || keyframe?.easing === "ease-in-out") {
+    return "bezier";
+  }
+  if (track?.interpolation === "bezier") return "bezier";
+  return "linear";
+}
+
+function resolveGraphTangent(track, index, side) {
+  const keyframe = track.keyframes[index];
+  const key = side === "in" ? "inTangent" : "outTangent";
+  const explicit = normalizeGraphTangent(keyframe?.[key]);
+  if (explicit) return explicit;
+  return createAutoGraphTangent(track, index, side);
+}
+
+function createAutoGraphTangent(track, index, side) {
+  const keyframe = track.keyframes[index];
+  const previous = track.keyframes[index - 1];
+  const next = track.keyframes[index + 1];
+  const neighbor = side === "in" ? previous : next;
+  if (!keyframe || !neighbor || typeof keyframe.value !== "number" || typeof neighbor.value !== "number") {
+    return { dt: 0, dv: 0 };
+  }
+  const windowStart = previous ?? keyframe;
+  const windowEnd = next ?? keyframe;
+  const windowSpan = Math.max(1 / 1200, windowEnd.time - windowStart.time);
+  const slope =
+    typeof windowStart.value === "number" && typeof windowEnd.value === "number"
+      ? (windowEnd.value - windowStart.value) / windowSpan
+      : 0;
+  const segmentSpan = Math.max(1 / 1200, Math.abs(neighbor.time - keyframe.time));
+  const dt = (side === "in" ? -1 : 1) * segmentSpan * 0.33;
+  return { dt, dv: slope * dt };
+}
+
+function normalizeGraphTangent(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const dt = Number(raw.dt);
+  const dv = Number(raw.dv);
+  if (!Number.isFinite(dt) || !Number.isFinite(dv)) return null;
+  return { dt, dv };
+}
+
+function getTrackDisplayMeta(track, graph) {
+  const node = graph.nodes.find((item) => item.id === track.nodeId);
+  const definition = getNodeDefinition(node?.type);
+  const nodeLabel = node?.label ?? definition?.label ?? track.nodeId;
+  const paramLabel = formatParamLabel(track.binding?.key ?? "value");
+  const family = normalizeFamilyName(definition?.family ?? node?.type);
+  return {
+    node,
+    nodeLabel,
+    paramLabel,
+    label: `${nodeLabel} · ${paramLabel}`,
+    family,
+  };
+}
+
+function getTrackBaseValue(track, node) {
+  const key = track.binding?.key;
+  if (!key || !node) return undefined;
+  if (track.binding?.type === TIMELINE_BINDING_NODE_PROPERTY) return node[key];
+  if (track.binding?.type === TIMELINE_BINDING_NODE_PARAM) return node.params?.[key];
+  return node.params?.[key] ?? node[key];
+}
+
+function normalizeFamilyName(value) {
+  const normalized = String(value ?? "utility").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return normalized || "utility";
 }
 
 function renderKeyframe(keyframe, track, duration, fps, _selected) {
@@ -668,16 +1159,62 @@ function renderSelectedKeyframePanel(selected) {
           data-keyframe-track-id="${escapeHtml(track.id)}"
           data-keyframe-id="${escapeHtml(keyframe.id)}"
         >
-          ${renderEasingOptions(keyframe.easing)}
+          ${renderEasingOptions(keyframe.easing, keyframe.interpolation)}
         </select>
       </label>
       <button class="btn animation-keyframe-delete" type="button" data-keyframe-action="delete">Delete</button>
     </div>
+    ${renderTangentInputs(track, keyframe)}
+  `;
+}
+
+function renderTangentInputs(track, keyframe) {
+  const isBezier = keyframe.interpolation === "bezier" || keyframe.easing === "custom-bezier";
+  if (!isBezier || typeof keyframe.value !== "number") return "";
+  const index = track.keyframes.findIndex((item) => item.id === keyframe.id);
+  const inn = resolveGraphTangent(track, index, "in");
+  const out = resolveGraphTangent(track, index, "out");
+  return `
+    <div class="animation-tangent-panel">
+      ${renderTangentInput("inTangent.dt", "In dt", inn.dt, track.id, keyframe.id)}
+      ${renderTangentInput("inTangent.dv", "In dv", inn.dv, track.id, keyframe.id)}
+      ${renderTangentInput("outTangent.dt", "Out dt", out.dt, track.id, keyframe.id)}
+      ${renderTangentInput("outTangent.dv", "Out dv", out.dv, track.id, keyframe.id)}
+      <button class="btn animation-tangent-reset" type="button" data-keyframe-action="reset-tangents">Auto</button>
+    </div>
+  `;
+}
+
+function renderTangentInput(field, label, value, trackId, keyframeId) {
+  return `
+    <label>
+      <span>${label}</span>
+      <input
+        type="number"
+        step="0.01"
+        value="${formatNumericInputValue(value)}"
+        data-keyframe-field="${field}"
+        data-keyframe-track-id="${escapeHtml(trackId)}"
+        data-keyframe-id="${escapeHtml(keyframeId)}"
+      />
+    </label>
   `;
 }
 
 function onAnimationTimelinePointerDown(event) {
-  const keyframe = event.target.closest(".animation-keyframe[data-timeline-keyframe-id]");
+  const tangentHandle = event.target.closest("[data-tangent-handle]");
+  if (tangentHandle) {
+    if (event.metaKey || event.ctrlKey) {
+      resetTangentHandle(tangentHandle, event);
+    } else {
+      startTangentDrag(tangentHandle, event);
+    }
+    return;
+  }
+
+  const keyframe = event.target.closest(
+    ".animation-keyframe[data-timeline-keyframe-id], .animation-graph-keyframe[data-timeline-keyframe-id]"
+  );
   if (!keyframe) {
     // No keyframe under the pointer — try starting a marquee selection if
     // the pointer is on a lane background.
@@ -768,6 +1305,115 @@ function onAnimationTimelinePointerUp() {
   document.removeEventListener("pointercancel", onAnimationTimelinePointerUp);
 }
 
+function startTangentDrag(handle, event) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const trackId = handle.dataset.timelineTrackId;
+  const keyframeId = handle.dataset.timelineKeyframeId;
+  const side = handle.dataset.tangentHandle === "in" ? "in" : "out";
+  const { source, timeline } = getState();
+  const normalized = normalizeTimeline(timeline, {
+    duration: source.duration,
+    fps: source.fps,
+  });
+  const found = getTimelineKeyframe(normalized, trackId, keyframeId);
+  if (!found || typeof found.keyframe.value !== "number") return;
+
+  const graphSvg = handle.closest(".timeline-graph-svg");
+  const model = createGraphCurveModel(found.track, resolveTimelineDuration(normalized, source));
+  if (!graphSvg || !model) return;
+
+  const index = found.track.keyframes.findIndex((keyframe) => keyframe.id === keyframeId);
+  tangentDrag = {
+    trackId,
+    keyframeId,
+    side,
+    keyframeTime: found.keyframe.time,
+    keyframeValue: found.keyframe.value,
+    initial: resolveGraphTangent(found.track, index, side),
+    bounds: getTangentDtBounds(found.track, index, side, normalized.fps, model.duration),
+    model,
+    rect: graphSvg.getBoundingClientRect(),
+  };
+  setSoleSelection(trackId, keyframeId);
+
+  document.body.classList.add("dragging-tangent");
+  document.addEventListener("pointermove", onTangentPointerMove);
+  document.addEventListener("pointerup", onTangentPointerUp);
+  document.addEventListener("pointercancel", onTangentPointerUp);
+  renderAnimationTimeline();
+}
+
+function onTangentPointerMove(event) {
+  if (!tangentDrag) return;
+  const ratioX = clamp((event.clientX - tangentDrag.rect.left) / tangentDrag.rect.width, 0, 1);
+  const svgY = clamp((event.clientY - tangentDrag.rect.top) / tangentDrag.rect.height, 0, 1) * GRAPH_EDITOR_HEIGHT;
+  const handleTime = ratioX * tangentDrag.model.duration;
+  const handleValue = graphValueFromY(tangentDrag.model, svgY);
+  const rawDt = event.shiftKey ? tangentDrag.initial.dt : handleTime - tangentDrag.keyframeTime;
+  const dt = clamp(rawDt, tangentDrag.bounds.min, tangentDrag.bounds.max);
+  const dv = handleValue - tangentDrag.keyframeValue;
+  const tangentKey = tangentDrag.side === "in" ? "inTangent" : "outTangent";
+
+  dispatch(
+    "timeline",
+    updateTimelineKeyframe(getState().timeline, {
+      trackId: tangentDrag.trackId,
+      keyframeId: tangentDrag.keyframeId,
+      patch: {
+        easing: "custom-bezier",
+        interpolation: "bezier",
+        [tangentKey]: { dt, dv },
+      },
+    })
+  );
+}
+
+function onTangentPointerUp() {
+  if (!tangentDrag) return;
+  tangentDrag = null;
+  document.body.classList.remove("dragging-tangent");
+  document.removeEventListener("pointermove", onTangentPointerMove);
+  document.removeEventListener("pointerup", onTangentPointerUp);
+  document.removeEventListener("pointercancel", onTangentPointerUp);
+}
+
+function resetTangentHandle(handle, event) {
+  event.preventDefault();
+  event.stopPropagation();
+  const trackId = handle.dataset.timelineTrackId;
+  const keyframeId = handle.dataset.timelineKeyframeId;
+  const side = handle.dataset.tangentHandle === "in" ? "in" : "out";
+  const tangentKey = side === "in" ? "inTangent" : "outTangent";
+  dispatch(
+    "timeline",
+    updateTimelineKeyframe(getState().timeline, {
+      trackId,
+      keyframeId,
+      patch: {
+        easing: "custom-bezier",
+        interpolation: "bezier",
+        [tangentKey]: null,
+      },
+    })
+  );
+}
+
+function getTangentDtBounds(track, index, side, fps, duration) {
+  const oneFrame = 1 / Math.max(1, fps);
+  const keyframe = track.keyframes[index];
+  if (!keyframe) return { min: -duration, max: duration };
+  if (side === "in") {
+    const previous = track.keyframes[index - 1];
+    const min = previous ? previous.time - keyframe.time : -duration;
+    return { min: Math.min(-oneFrame, min), max: -oneFrame };
+  }
+  const next = track.keyframes[index + 1];
+  const max = next ? next.time - keyframe.time : duration;
+  return { min: oneFrame, max: Math.max(oneFrame, max) };
+}
+
 // ---------- Marquee selection (Faz 2.c) ----------
 //
 // Drag-select on a lane's empty area. The marquee element lives inside the
@@ -827,7 +1473,7 @@ function onMarqueePointerMove(event) {
   // diamonds centred on their time, so `center.x` between [x1, x2] is the
   // intuitive hit test.
   const next = new Set(marqueeDrag.initial);
-  for (const k of marqueeDrag.lane.querySelectorAll(".animation-keyframe")) {
+  for (const k of marqueeDrag.lane.querySelectorAll(".animation-keyframe, .animation-graph-keyframe")) {
     const kr = k.getBoundingClientRect();
     const cx = kr.left + kr.width / 2;
     if (cx >= x1 && cx <= x2) {
@@ -880,7 +1526,7 @@ function applySelectionSet(next) {
   } else if (!selectedTimelineKeyframe && selectedKeyframes.size) {
     selectedTimelineKeyframe = parseSelectionKey([...selectedKeyframes].pop());
   }
-  for (const k of document.querySelectorAll(".animation-keyframe")) {
+  for (const k of document.querySelectorAll(".animation-keyframe, .animation-graph-keyframe")) {
     const key = selectionKey(k.dataset.timelineTrackId, k.dataset.timelineKeyframeId);
     k.classList.toggle("is-selected", selectedKeyframes.has(key));
   }
@@ -915,16 +1561,82 @@ function onAnimationTimelineChange(event) {
     return;
   }
 
-  if (field === "easing") {
+  if (field.startsWith("inTangent.") || field.startsWith("outTangent.")) {
+    const [sideKey, axis] = field.split(".");
+    const normalized = normalizeTimeline(timeline, {
+      duration: getState().source.duration,
+      fps: getState().source.fps,
+    });
+    const found = getTimelineKeyframe(normalized, trackId, keyframeId);
+    if (!found) return;
+    const index = found.track.keyframes.findIndex((item) => item.id === keyframeId);
+    const side = sideKey === "inTangent" ? "in" : "out";
+    const current = normalizeGraphTangent(found.keyframe[sideKey])
+      ?? resolveGraphTangent(found.track, index, side);
+    const next = {
+      ...current,
+      [axis]: Number(control.value) || 0,
+    };
     dispatch(
       "timeline",
       updateTimelineKeyframe(timeline, {
         trackId,
         keyframeId,
-        patch: { easing: control.value },
+        patch: {
+          easing: "custom-bezier",
+          interpolation: "bezier",
+          [sideKey]: next,
+        },
+      })
+    );
+    return;
+  }
+
+  if (field === "easing") {
+    const patch = createEasingPatch(control.value);
+    dispatch(
+      "timeline",
+      updateTimelineKeyframe(timeline, {
+        trackId,
+        keyframeId,
+        patch,
       })
     );
   }
+}
+
+function createEasingPatch(easing) {
+  if (easing === "custom-bezier") {
+    return { easing, interpolation: "bezier" };
+  }
+  if (easing === "hold") {
+    return { easing, interpolation: "hold", inTangent: null, outTangent: null };
+  }
+  if (easing === "ease-in" || easing === "ease-out" || easing === "ease-in-out") {
+    return { easing, interpolation: "bezier", inTangent: null, outTangent: null };
+  }
+  return { easing: "linear", interpolation: "linear", inTangent: null, outTangent: null };
+}
+
+function resetSelectedKeyframeTangents(button) {
+  const panel = button.closest(".animation-tangent-panel");
+  const anyInput = panel?.querySelector("[data-keyframe-track-id][data-keyframe-id]");
+  const trackId = anyInput?.dataset.keyframeTrackId;
+  const keyframeId = anyInput?.dataset.keyframeId;
+  if (!trackId || !keyframeId) return;
+  dispatch(
+    "timeline",
+    updateTimelineKeyframe(getState().timeline, {
+      trackId,
+      keyframeId,
+      patch: {
+        easing: "custom-bezier",
+        interpolation: "bezier",
+        inTangent: null,
+        outTangent: null,
+      },
+    })
+  );
 }
 
 // Public form, used by the Inspector "Delete" button and by the Faz 2.b
@@ -1004,14 +1716,17 @@ function getSelectedTimelineKeyframe(timeline = getState().timeline) {
   return selected;
 }
 
-function renderEasingOptions(value) {
-  const current = String(value ?? "linear");
+function renderEasingOptions(value, interpolation = "linear") {
+  const current = interpolation === "bezier" && value === "linear"
+    ? "custom-bezier"
+    : String(value ?? "linear");
   return [
     ["linear", "Linear"],
     ["ease-in", "Ease In"],
     ["ease-out", "Ease Out"],
     ["ease-in-out", "Ease In Out"],
     ["hold", "Hold"],
+    ["custom-bezier", "Custom Bezier"],
   ]
     .map(([optionValue, label]) => `
       <option value="${optionValue}" ${optionValue === current ? "selected" : ""}>${label}</option>
@@ -1022,11 +1737,15 @@ function renderEasingOptions(value) {
 function updateAnimationPlayhead(playback, sourceDuration) {
   if (!playerEls.playerCard) return;
   const { source, timeline } = getState();
-  const fps = timelineFrameRate(timeline, source.fps);
-  const duration = resolveTimelineDuration(timeline, { duration: sourceDuration });
+  const normalized = normalizeTimeline(timeline, {
+    duration: sourceDuration,
+    fps: source.fps,
+  });
+  const fps = timelineFrameRate(normalized, source.fps);
+  const duration = resolveTimelineDuration(normalized, { duration: sourceDuration });
   const playhead = playerEls.playerCard.querySelector(".playhead");
   if (!playhead) return;
-  const left = timeToTimelinePercent(playback.currentTime, duration, fps);
+  const left = timeToTimelinePercent(playback.currentTime, duration, fps) * getEffectiveTimelineZoom(normalized);
   playhead.style.left = `${left}%`;
 }
 
@@ -1072,6 +1791,47 @@ function formatKeyframeValue(value) {
   } catch {
     return String(value);
   }
+}
+
+function formatPropertyValue(value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return "—";
+    return Number.isInteger(value)
+      ? String(value)
+      : value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+  }
+  if (typeof value === "boolean") return value ? "On" : "Off";
+  if (Array.isArray(value)) return `[${value.map(formatPropertyValue).join(", ")}]`;
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function formatRulerSecond(seconds) {
+  if (Math.abs(seconds - Math.round(seconds)) < 0.001) return `${Math.round(seconds)}s`;
+  return `${seconds.toFixed(1)}s`;
+}
+
+function niceFrameStep(raw) {
+  const value = Math.max(1, Math.ceil(raw));
+  const exponent = Math.floor(Math.log10(value));
+  const base = Math.pow(10, exponent);
+  for (const multiplier of [1, 2, 5, 10]) {
+    const candidate = multiplier * base;
+    if (candidate >= value) return candidate;
+  }
+  return 10 * base;
+}
+
+function getEffectiveTimelineZoom(timeline) {
+  const zoom = Number(timeline?.zoom);
+  return Math.max(0.25, Number.isFinite(zoom) ? zoom : 1);
 }
 
 function escapeHtml(value) {
