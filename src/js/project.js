@@ -7,6 +7,7 @@ import {
 } from "./graph.js";
 import { clearSource, openSourcePath, pausePlayback, seek, setFps } from "./source.js";
 import { applyCustomPalettes, serializeCustomPalettes } from "./palettes.js";
+import { createDefaultTimeline, serializeTimeline } from "./timeline.js";
 
 let currentProjectPath = "";
 
@@ -23,6 +24,7 @@ export async function newProject() {
     trimEnd: 0,
     loopEnabled: true,
   });
+  dispatch("timeline", createDefaultTimeline());
   dispatch("graphView", { ...DEFAULT_GRAPH_VIEW });
 }
 
@@ -146,6 +148,7 @@ function buildProjectPayload() {
       panY: state.graphView.panY,
     },
     graph: serializeGraph(state.graph),
+    timeline: serializeTimeline(state.timeline),
     customPalettes: serializeCustomPalettes(),
   };
 }
@@ -185,6 +188,13 @@ async function applyProject(project) {
   });
 
   applyCustomPalettes(project?.customPalettes ?? []);
+  dispatch(
+    "timeline",
+    createDefaultTimeline(project?.timeline ?? {
+      duration: getState().source.duration,
+      fps: getState().source.fps,
+    })
+  );
   replaceGraph(project?.graph);
   if (getState().source.loaded) {
     setFps(

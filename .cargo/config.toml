@@ -1,0 +1,4 @@
+[build]
+# Keep Rust build output outside the project and Desktop trees so editors and
+# AI indexers do not scan multi-GB Cargo artifacts.
+target-dir = "../../Library/Caches/dither-lab/cargo-target"

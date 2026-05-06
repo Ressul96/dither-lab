@@ -1,5 +1,18 @@
 import { runAlgorithm } from "./dither/index.js";
 import { getPalette } from "./palettes.js";
+import {
+  applyAsciiGpu,
+  applyBloomGpu,
+  applyChromaticAberrationGpu,
+  applyCrtGpu,
+  applyHalationGpu,
+  applyHalftoneGpu,
+  applyPatternDitherGpu,
+  applyPixelateGpu,
+  applyPosterizeGpu,
+  applyThresholdGpu,
+  applyVhsGpu,
+} from "./gpu-effects.js";
 
 let supportsCanvasBlurFilter = null;
 
@@ -83,6 +96,36 @@ export function applyAdjustNode(input, params) {
   return output;
 }
 
+export function applySourceNode(input, params = {}) {
+  if (!input?.width || !input?.height) return null;
+
+  let output = input;
+  const pushStep = (next) => {
+    if (!next || next === output) return;
+    if (output !== input) releaseBuffer(output);
+    output = next;
+  };
+
+  pushStep(applyAdjustNode(output, params));
+  pushStep(applyHsvNode(output, {
+    hue: params.hue ?? 0,
+    saturation: params.hsvSaturation ?? 100,
+    value: params.value ?? 100,
+  }));
+
+  const bwMode = String(params.bwMode ?? "off");
+  if (bwMode !== "off") {
+    pushStep(applyRgbToBwNode(output, { mode: bwMode }));
+  }
+
+  const invert = String(params.invert ?? "off") === "on";
+  if (invert) {
+    pushStep(applyInvertNode(output, { channels: params.invertChannels ?? "rgb" }));
+  }
+
+  return output;
+}
+
 export function applyBlurNode(input, params) {
   if (!input?.width || !input?.height) return null;
   const radius = Math.max(0, Number(params.radius ?? 0));
@@ -100,6 +143,21 @@ export function applyBlurNode(input, params) {
 export function applyGlareNode(input, params) {
   if (!input?.width || !input?.height) return null;
   const type = String(params.type ?? "streaks");
+
+  // GPU bloom path — replaces the standalone Bloom node. We map Glow's 0-255
+  // threshold and 0-400 mix down to the bloom shader's 0-100 / 0-400 ranges
+  // so the inspector keeps a single consistent set of sliders across types.
+  if (type === "bloom-gpu") {
+    return applyBloomGpu(input, {
+      opacity: 100,
+      saturation: Number(params.saturation ?? 100),
+      threshold: clamp(Number(params.threshold ?? 180) / 2.55, 0, 100),
+      knee: Number(params.knee ?? 20),
+      intensity: Number(params.mix ?? 100),
+      radius: clamp(Number(params.size ?? 16), 0, 64),
+    });
+  }
+
   const threshold = clamp(Math.round(Number(params.threshold ?? 180)), 0, 255);
   const mix = clamp(Number(params.mix ?? 100) / 100, 0, 4);
   const saturation = clamp(Number(params.saturation ?? 100) / 100, 0, 4);
@@ -316,22 +374,63 @@ function renderStreaks(brightCanvas, streakCount, angleOffset, iterations, fade)
 }
 
 // Posterize — reduce smooth gradients to N discrete color levels per channel.
-// Even-distributed across [0, 255] so highlights still reach white.
+// Tries the GPU shader first (supports per-channel steps, gamma, luma mode);
+// falls back to the legacy CPU path for old saves on machines without WebGL2.
 export function applyPosterizeNode(input, params) {
   if (!input?.width || !input?.height) return null;
-  const steps = clamp(Math.round(Number(params.steps ?? 8)), 2, 64);
+  const gpuOutput = applyPosterizeGpu(input, params);
+  if (gpuOutput) return gpuOutput;
+  return applyPosterizeCpu(input, params);
+}
+
+function applyPosterizeCpu(input, params) {
+  const stepsR = clamp(Math.round(Number(params.steps ?? 8)), 2, 64);
+  const rawG = Number(params.stepsG ?? 0);
+  const rawB = Number(params.stepsB ?? 0);
+  const stepsG = rawG > 0 ? clamp(Math.round(rawG), 2, 64) : stepsR;
+  const stepsB = rawB > 0 ? clamp(Math.round(rawB), 2, 64) : stepsR;
+  const gamma = String(params.gamma ?? "linear").toLowerCase() === "srgb";
+  const lumaMode = String(params.lumaMode ?? "rgb").toLowerCase() === "luma";
+  const opacity = clamp(Number(params.opacity ?? 100) / 100, 0, 1);
+  if (opacity <= 0) return input;
+
   const output = createBuffer(input.width, input.height);
   const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
   ctx.drawImage(input, 0, 0);
   const imageData = ctx.getImageData(0, 0, output.width, output.height);
   const data = imageData.data;
-  const denom = steps - 1;
-  const lutScale = denom / 255;
-  const lutBack = 255 / denom;
+  const levelR = stepsR - 1;
+  const levelG = stepsG - 1;
+  const levelB = stepsB - 1;
   for (let i = 0; i < data.length; i += 4) {
-    data[i] = Math.round(Math.round(data[i] * lutScale) * lutBack);
-    data[i + 1] = Math.round(Math.round(data[i + 1] * lutScale) * lutBack);
-    data[i + 2] = Math.round(Math.round(data[i + 2] * lutScale) * lutBack);
+    const srcR = data[i] / 255;
+    const srcG = data[i + 1] / 255;
+    const srcB = data[i + 2] / 255;
+    const workR = gamma ? toLinear(srcR) : srcR;
+    const workG = gamma ? toLinear(srcG) : srcG;
+    const workB = gamma ? toLinear(srcB) : srcB;
+
+    let outR;
+    let outG;
+    let outB;
+    if (lumaMode) {
+      const luma = workR * 0.299 + workG * 0.587 + workB * 0.114;
+      const quantizedLuma = Math.floor(luma * levelR + 0.5) / levelR;
+      outR = quantizedLuma + (workR - luma);
+      outG = quantizedLuma + (workG - luma);
+      outB = quantizedLuma + (workB - luma);
+    } else {
+      outR = Math.floor(clamp01(workR) * levelR + 0.5) / levelR;
+      outG = Math.floor(clamp01(workG) * levelG + 0.5) / levelG;
+      outB = Math.floor(clamp01(workB) * levelB + 0.5) / levelB;
+    }
+
+    const finalR = gamma ? toSrgb(clamp01(outR)) : clamp01(outR);
+    const finalG = gamma ? toSrgb(clamp01(outG)) : clamp01(outG);
+    const finalB = gamma ? toSrgb(clamp01(outB)) : clamp01(outB);
+    data[i] = mixByte(data[i], finalR * 255, opacity);
+    data[i + 1] = mixByte(data[i + 1], finalG * 255, opacity);
+    data[i + 2] = mixByte(data[i + 2], finalB * 255, opacity);
   }
   ctx.putImageData(imageData, 0, 0);
   return output;
@@ -457,18 +556,28 @@ export function applyRgbCurvesNode(input, params) {
 // Pixelate — collapse NxN blocks of source pixels into a single color so the
 // downstream chain (especially dither) operates on a chunky low-resolution
 // version of the image without changing canvas dimensions.
+//
+// GPU shader is the primary path (supports separate X/Y aspect, circle
+// pixels, edge softness). Legacy CPU path stays available as a fallback
+// when WebGL2 is missing — it runs canvas downscale + nearest upscale
+// which is the cheapest box-average we can do with the 2D API.
 export function applyPixelateNode(input, params) {
   if (!input?.width || !input?.height) return null;
-  const size = clamp(Math.round(Number(params.size ?? 8)), 1, 256);
-  if (size <= 1) return input;
+  const sizeX = clamp(Math.round(Number(params.size ?? 8)), 1, 256);
+  const rawY = Number(params.sizeY ?? 0);
+  const sizeY = rawY > 0 ? clamp(Math.round(rawY), 1, 256) : sizeX;
+  if (sizeX <= 1 && sizeY <= 1) return input;
+  const gpuOutput = applyPixelateGpu(input, params);
+  if (gpuOutput) return gpuOutput;
+  return applyPixelateCpu(input, params, sizeX, sizeY);
+}
+
+function applyPixelateCpu(input, params, sizeX, sizeY) {
   const width = input.width;
   const height = input.height;
 
-  // Two-step downscale + nearest-neighbor upscale via the canvas API is much
-  // faster than walking the pixel grid and averaging in JS, and gives the
-  // same visual result for an integer block size.
-  const blockW = Math.max(1, Math.floor(width / size));
-  const blockH = Math.max(1, Math.floor(height / size));
+  const blockW = Math.max(1, Math.floor(width / sizeX));
+  const blockH = Math.max(1, Math.floor(height / sizeY));
   const small = createBuffer(blockW, blockH);
   const smallCtx = small.getContext("2d", { alpha: false, willReadFrequently: false });
   smallCtx.imageSmoothingEnabled = true;
@@ -479,6 +588,51 @@ export function applyPixelateNode(input, params) {
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(small, 0, 0, blockW, blockH, 0, 0, width, height);
   releaseBuffer(small);
+
+  const shape = String(params.shape ?? "square").toLowerCase();
+  const smoothing = clamp(Number(params.smoothing ?? 0) / 100, 0, 1);
+  const opacity = clamp(Number(params.opacity ?? 100) / 100, 0, 1);
+  if (shape !== "circle" && smoothing <= 0.001 && opacity >= 0.999) {
+    return output;
+  }
+
+  const srcBuf = createBuffer(width, height);
+  const srcCtx = srcBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+  srcCtx.drawImage(input, 0, 0);
+  const src = srcCtx.getImageData(0, 0, width, height).data;
+  releaseBuffer(srcBuf);
+
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      let mask = 1;
+      const localX = ((x + 0.5) % sizeX) / sizeX;
+      const localY = ((y + 0.5) % sizeY) / sizeY;
+
+      if (shape === "circle") {
+        const dist = Math.hypot((localX - 0.5) * 2, (localY - 0.5) * 2);
+        const aa = Math.max(smoothing * 0.6 + 0.05, 0.05);
+        mask = 1 - smoothstep(1 - aa, 1, dist);
+        data[index] *= mask;
+        data[index + 1] *= mask;
+        data[index + 2] *= mask;
+      } else if (smoothing > 0.001) {
+        const minEdge = Math.min(localX, 1 - localX, localY, 1 - localY);
+        const edgeMask = smoothstep(0, smoothing * 0.5 + 0.001, minEdge);
+        data[index] *= 0.6 + edgeMask * 0.4;
+        data[index + 1] *= 0.6 + edgeMask * 0.4;
+        data[index + 2] *= 0.6 + edgeMask * 0.4;
+      }
+
+      data[index] = mixByte(src[index], data[index], opacity);
+      data[index + 1] = mixByte(src[index + 1], data[index + 1], opacity);
+      data[index + 2] = mixByte(src[index + 2], data[index + 2], opacity);
+      data[index + 3] = 255;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
   return output;
 }
 
@@ -516,12 +670,49 @@ export function applyTransformNode(input, params) {
   const translateX = Number(params.translateX ?? 0);
   const translateY = Number(params.translateY ?? 0);
   const rotation = Number(params.rotation ?? 0);
-  const scale = clamp(Number(params.scale ?? 100) / 100, 0.01, 10);
+  const scaleParam = params.scale !== undefined ? Number(params.scale) : null;
+  const scaleX = clamp(Number(scaleParam ?? params.x ?? 100) / 100, 0.01, 10);
+  const scaleY = clamp(Number(scaleParam ?? params.y ?? 100) / 100, 0.01, 10);
+  const horizontal = Boolean(params.horizontal);
+  const vertical = Boolean(params.vertical);
+  const left = clamp(Number(params.left ?? 0), 0, 95);
+  const right = clamp(Number(params.right ?? 0), 0, 95);
+  const top = clamp(Number(params.top ?? 0), 0, 95);
+  const bottom = clamp(Number(params.bottom ?? 0), 0, 95);
+  const cropMode = String(params.cropMode ?? params.mode ?? "mask");
   const filter = params.filter === "nearest" ? false : true;
-  if (translateX === 0 && translateY === 0 && rotation === 0 && scale === 1) return input;
+  const hasCrop = left !== 0 || right !== 0 || top !== 0 || bottom !== 0;
+  const identity =
+    translateX === 0 &&
+    translateY === 0 &&
+    rotation === 0 &&
+    scaleX === 1 &&
+    scaleY === 1 &&
+    !horizontal &&
+    !vertical &&
+    !hasCrop;
+  if (identity) return input;
 
   const width = input.width;
   const height = input.height;
+  let source = input;
+  if (hasCrop) {
+    source = createBuffer(width, height);
+    const cropCtx = source.getContext("2d", { alpha: false, willReadFrequently: false });
+    cropCtx.fillStyle = "#000";
+    cropCtx.fillRect(0, 0, width, height);
+    const sx = Math.round((left / 100) * width);
+    const sy = Math.round((top / 100) * height);
+    const sw = Math.max(1, Math.round(width - sx - (right / 100) * width));
+    const sh = Math.max(1, Math.round(height - sy - (bottom / 100) * height));
+    cropCtx.imageSmoothingEnabled = filter;
+    if (cropMode === "fit") {
+      cropCtx.drawImage(input, sx, sy, sw, sh, 0, 0, width, height);
+    } else {
+      cropCtx.drawImage(input, sx, sy, sw, sh, sx, sy, sw, sh);
+    }
+  }
+
   const output = createBuffer(width, height);
   const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
   ctx.fillStyle = "#000";
@@ -530,9 +721,10 @@ export function applyTransformNode(input, params) {
   ctx.save();
   ctx.translate(width / 2 + (translateX / 100) * width, height / 2 + (translateY / 100) * height);
   ctx.rotate((rotation / 180) * Math.PI);
-  ctx.scale(scale, scale);
-  ctx.drawImage(input, -width / 2, -height / 2, width, height);
+  ctx.scale(horizontal ? -scaleX : scaleX, vertical ? -scaleY : scaleY);
+  ctx.drawImage(source, -width / 2, -height / 2, width, height);
   ctx.restore();
+  if (source !== input) releaseBuffer(source);
   return output;
 }
 
@@ -736,6 +928,201 @@ export function applyLensDistortNode(input, params) {
   return output;
 }
 
+export function applyHalftoneNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  // Halftone is GPU-only for now; if WebGL2 is unavailable we'd rather
+  // pass-through the source than burn CPU time on a slow software fallback
+  // (the dot grid math is significantly more expensive per-pixel than the
+  // chromatic aberration shader).
+  const gpuOutput = applyHalftoneGpu(input, params);
+  return gpuOutput ?? input;
+}
+
+export function applyVhsNode(input, params, context) {
+  if (!input?.width || !input?.height) return null;
+  // VHS is GPU-only — the shader does multi-tap chroma blur, scrolling
+  // tracking bands, and per-frame noise; a CPU port would be unusable in
+  // realtime. Fall through to the input frame when WebGL2 is missing so
+  // the rest of the chain still renders.
+  const gpuOutput = applyVhsGpu(input, params, context);
+  return gpuOutput ?? input;
+}
+
+export function applyCrtNode(input, params, context) {
+  if (!input?.width || !input?.height) return null;
+  // CRT is GPU-only for the same reason as VHS: barrel distortion plus a
+  // 5-tap glow blur per pixel and a per-pixel mask lookup blow up CPU cost
+  // very quickly. Pass-through to the input frame when WebGL2 is missing.
+  const gpuOutput = applyCrtGpu(input, params, context);
+  return gpuOutput ?? input;
+}
+
+export function applyAnalogNode(input, params, context) {
+  if (!input?.width || !input?.height) return null;
+  const mode = String(params?.mode ?? "vhs");
+  if (mode === "crt") {
+    return applyCrtNode(input, params, context);
+  }
+  if (mode === "vhs-crt") {
+    const vhs = applyVhsNode(input, params, context);
+    const crt = applyCrtNode(vhs, params, context);
+    if (vhs && vhs !== input && vhs !== crt) releaseBuffer(vhs);
+    return crt;
+  }
+  return applyVhsNode(input, params, context);
+}
+
+export function applyBloomNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  // Bloom is GPU-only — the single-pass shader does 24 disk-distributed
+  // texture taps per output pixel (golden-spiral sampling), which is wildly
+  // out of reach for a CPU implementation at preview resolutions. Fall
+  // through to the input frame when WebGL2 is missing.
+  const gpuOutput = applyBloomGpu(input, params);
+  return gpuOutput ?? input;
+}
+
+export function applyHalationNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  // Halation shares Bloom's per-pixel cost profile — same 24-tap golden
+  // spiral, so it's GPU-only too. Pass-through fallback when WebGL2 is
+  // missing keeps the graph rendering rather than producing a black frame.
+  const gpuOutput = applyHalationGpu(input, params);
+  return gpuOutput ?? input;
+}
+
+export function applyAsciiNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  // ASCII relies on a glyph atlas texture sampled per output pixel — the
+  // CPU equivalent would mean per-cell font rasterization on every frame,
+  // which is impractical. GPU-only with input pass-through when WebGL2 is
+  // missing.
+  const gpuOutput = applyAsciiGpu(input, params);
+  return gpuOutput ?? input;
+}
+
+export function applyPatternDitherNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  // Pattern Dither is GPU-only and intentionally lives alongside the CPU
+  // Dither node — it covers the embarrassingly-parallel ordered/threshold
+  // patterns at full preview speed for video, while the CPU node owns the
+  // serial error-diffusion catalog plus discrete palette matching.
+  const gpuOutput = applyPatternDitherGpu(input, params);
+  return gpuOutput ?? input;
+}
+
+export function applyThresholdNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  // Threshold is a brand-new standalone node (the existing Dither node
+  // exposes a "Simple Threshold" algorithm but only as part of its larger
+  // palette/error-diffusion config). GPU-only with input pass-through —
+  // a single-channel mask comparison is cheap enough that the CPU fallback
+  // can keep WebGL2-disabled browsers visually consistent.
+  const gpuOutput = applyThresholdGpu(input, params);
+  return gpuOutput ?? applyThresholdCpu(input, params);
+}
+
+function applyThresholdCpu(input, params) {
+  const threshold = clamp(Number(params.threshold ?? 50) / 100, 0, 1);
+  const softness = clamp(Number(params.softness ?? 0) / 100, 0, 0.5);
+  const channel = String(params.channel ?? "luma").toLowerCase();
+  const invert = String(params.invert ?? "off").toLowerCase() === "on";
+  const sourceMode = String(params.mode ?? "bw").toLowerCase() === "source";
+  const opacity = clamp(Number(params.opacity ?? 100) / 100, 0, 1);
+  if (opacity <= 0) return input;
+
+  const output = createBuffer(input.width, input.height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  ctx.drawImage(input, 0, 0);
+  const imageData = ctx.getImageData(0, 0, output.width, output.height);
+  const data = imageData.data;
+  const low = Math.max(threshold - softness, 0);
+  const high = threshold + softness + 0.001;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const srcR = data[i];
+    const srcG = data[i + 1];
+    const srcB = data[i + 2];
+    const value = thresholdChannelValue(srcR / 255, srcG / 255, srcB / 255, channel);
+    let mask = smoothstep(low, high, value);
+    if (invert) mask = 1 - mask;
+
+    const outR = sourceMode ? srcR * mask : mask * 255;
+    const outG = sourceMode ? srcG * mask : mask * 255;
+    const outB = sourceMode ? srcB * mask : mask * 255;
+    data[i] = mixByte(srcR, outR, opacity);
+    data[i + 1] = mixByte(srcG, outG, opacity);
+    data[i + 2] = mixByte(srcB, outB, opacity);
+    data[i + 3] = 255;
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+export function applyChromaticAberrationNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const strength = clamp(Number(params.strength ?? 4), 0, 96);
+  if (strength === 0) return input;
+
+  const gpuOutput = applyChromaticAberrationGpu(input, {
+    ...params,
+    strength,
+  });
+  if (gpuOutput) return gpuOutput;
+
+  return applyChromaticAberrationCpu(input, {
+    ...params,
+    strength,
+  });
+}
+
+function applyChromaticAberrationCpu(input, params) {
+  const width = input.width;
+  const height = input.height;
+  const strength = clamp(Number(params.strength ?? 4), 0, 96);
+  const angle = (Number(params.angle ?? 0) / 180) * Math.PI;
+  const radial = String(params.mode ?? "directional") === "radial";
+  const centerX = clamp(Number(params.centerX ?? 50) / 100, 0, 1) * width;
+  const centerY = clamp(Number(params.centerY ?? 50) / 100, 0, 1) * height;
+  const linearDx = Math.cos(angle) * strength;
+  const linearDy = Math.sin(angle) * strength;
+
+  const srcBuf = createBuffer(width, height);
+  const srcCtx = srcBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+  srcCtx.drawImage(input, 0, 0);
+  const src = srcCtx.getImageData(0, 0, width, height).data;
+  releaseBuffer(srcBuf);
+
+  const output = createBuffer(width, height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  const imageData = ctx.createImageData(width, height);
+  const out = imageData.data;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const index = (y * width + x) * 4;
+      let dx = linearDx;
+      let dy = linearDy;
+      if (radial) {
+        const vx = x + 0.5 - centerX;
+        const vy = y + 0.5 - centerY;
+        const length = Math.max(0.0001, Math.hypot(vx, vy));
+        dx = (vx / length) * strength;
+        dy = (vy / length) * strength;
+      }
+
+      out[index] = sampleBilinearChannel(src, width, height, x + dx, y + dy, 0);
+      out[index + 1] = src[index + 1];
+      out[index + 2] = sampleBilinearChannel(src, width, height, x - dx, y - dy, 2);
+      out[index + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
 export function applyDisplaceNode(input, mapInput, params) {
   if (!input?.width || !input?.height) return null;
   const xAmount = Number(params.xAmount ?? 0);
@@ -795,6 +1182,130 @@ export function applyDisplaceNode(input, mapInput, params) {
   }
 
   ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+// Combines two masks (read as luma) via boolean ops. Output is a grayscale
+// mask — opacity blends back toward maskA so partial intensity feels natural
+// when the user wires this into an Apply downstream.
+export function applyMaskCombineNode(maskA, maskB, params) {
+  if (!maskA?.width || !maskA?.height) {
+    // No A — pass through B (or null) so downstream nodes still see *something*.
+    return maskB ?? null;
+  }
+  if (!maskB?.width || !maskB?.height) return maskA;
+
+  const width = maskA.width;
+  const height = maskA.height;
+  const operation = String(params?.operation ?? "intersect").toLowerCase();
+  const invertA = String(params?.invertA ?? "off").toLowerCase() === "on";
+  const invertB = String(params?.invertB ?? "off").toLowerCase() === "on";
+  const opacity = clamp(Number(params?.opacity ?? 100) / 100, 0, 1);
+
+  const aBuf = createBuffer(width, height);
+  const aCtx = aBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+  aCtx.drawImage(maskA, 0, 0);
+  const aData = aCtx.getImageData(0, 0, width, height).data;
+
+  const bBuf = createBuffer(width, height);
+  const bCtx = bBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+  bCtx.drawImage(maskB, 0, 0, width, height);
+  const bData = bCtx.getImageData(0, 0, width, height).data;
+  releaseBuffer(bBuf);
+
+  const output = createBuffer(width, height);
+  const outCtx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  const imageData = outCtx.createImageData(width, height);
+  const out = imageData.data;
+
+  for (let i = 0; i < aData.length; i += 4) {
+    let aLuma = luminance8(aData[i], aData[i + 1], aData[i + 2]) / 255;
+    let bLuma = luminance8(bData[i], bData[i + 1], bData[i + 2]) / 255;
+    if (invertA) aLuma = 1 - aLuma;
+    if (invertB) bLuma = 1 - bLuma;
+    let combined;
+    switch (operation) {
+      case "union":
+        combined = Math.max(aLuma, bLuma);
+        break;
+      case "difference":
+        combined = Math.abs(aLuma - bLuma);
+        break;
+      case "subtract":
+        combined = Math.max(0, aLuma - bLuma);
+        break;
+      case "intersect":
+      default:
+        combined = Math.min(aLuma, bLuma);
+        break;
+    }
+    // Opacity blends back to A's luma so a lower opacity feels like a partial
+    // mix into A rather than fading toward black.
+    const finalLuma = aLuma + (combined - aLuma) * opacity;
+    const byte = clamp(Math.round(finalLuma * 255), 0, 255);
+    out[i] = byte;
+    out[i + 1] = byte;
+    out[i + 2] = byte;
+    out[i + 3] = 255;
+  }
+
+  releaseBuffer(aBuf);
+  outCtx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+// Multiplies the input image by a mask (read as luma) so dark mask regions
+// black out the image. Optional feather softens the mask edges via a cheap
+// box blur. Opacity blends back to the original image.
+export function applyMaskApplyNode(input, mask, params) {
+  if (!input?.width || !input?.height) return null;
+  if (!mask?.width || !mask?.height) return input;
+
+  const width = input.width;
+  const height = input.height;
+  const invert = String(params?.invert ?? "off").toLowerCase() === "on";
+  const opacity = clamp(Number(params?.opacity ?? 100) / 100, 0, 1);
+  const feather = Math.max(0, Math.round(Number(params?.feather ?? 0)));
+
+  const srcBuf = createBuffer(width, height);
+  const srcCtx = srcBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+  srcCtx.drawImage(input, 0, 0);
+  const srcData = srcCtx.getImageData(0, 0, width, height).data;
+  releaseBuffer(srcBuf);
+
+  const maskBuf = createBuffer(width, height);
+  const maskCtx = maskBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+  // Native canvas blur for feather — falls back to a no-op if unsupported,
+  // which is fine: feather=0 is the most common case anyway.
+  if (feather > 0 && supportsBlurFilter()) {
+    maskCtx.filter = `blur(${feather}px)`;
+  }
+  maskCtx.drawImage(mask, 0, 0, width, height);
+  maskCtx.filter = "none";
+  const maskData = maskCtx.getImageData(0, 0, width, height).data;
+  releaseBuffer(maskBuf);
+
+  const output = createBuffer(width, height);
+  const outCtx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  const imageData = outCtx.createImageData(width, height);
+  const out = imageData.data;
+
+  for (let i = 0; i < srcData.length; i += 4) {
+    let m = luminance8(maskData[i], maskData[i + 1], maskData[i + 2]) / 255;
+    if (invert) m = 1 - m;
+    // Multiplied output: where mask=0 → black, mask=1 → source.
+    // Opacity blends from full source (opacity=0) to fully masked (opacity=1).
+    const r = srcData[i];
+    const g = srcData[i + 1];
+    const b = srcData[i + 2];
+    const masked = (channel) => channel * m;
+    out[i] = clamp(Math.round(r + (masked(r) - r) * opacity), 0, 255);
+    out[i + 1] = clamp(Math.round(g + (masked(g) - g) * opacity), 0, 255);
+    out[i + 2] = clamp(Math.round(b + (masked(b) - b) * opacity), 0, 255);
+    out[i + 3] = 255;
+  }
+
+  outCtx.putImageData(imageData, 0, 0);
   return output;
 }
 
@@ -1321,4 +1832,40 @@ function clamp01(value) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function mixByte(a, b, amount) {
+  return Math.round(a * (1 - amount) + b * amount);
+}
+
+function smoothstep(edge0, edge1, value) {
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function toLinear(value) {
+  return Math.pow(clamp01(value), 2.2);
+}
+
+function toSrgb(value) {
+  return Math.pow(clamp01(value), 1 / 2.2);
+}
+
+function thresholdChannelValue(r, g, b, channel) {
+  switch (channel) {
+    case "r":
+    case "red":
+      return r;
+    case "g":
+    case "green":
+      return g;
+    case "b":
+    case "blue":
+      return b;
+    case "max":
+      return Math.max(r, g, b);
+    case "luma":
+    default:
+      return r * 0.299 + g * 0.587 + b * 0.114;
+  }
 }

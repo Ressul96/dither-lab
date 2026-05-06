@@ -8,12 +8,24 @@ const NODE_INSERT_GAP_X = Math.round(NODE_WIDTH * 0.2);
 
 const NODE_DEFINITIONS = Object.freeze({
   source: {
-    label: "Source",
+    label: "Video Source",
     family: "Input",
-    description: "Resolves the current frame from the active source provider.",
+    description: "Resolves the current frame from the active source provider and applies source-level corrections.",
     inputs: [],
     outputs: [{ name: "image", label: "Image", type: "image" }],
-    defaultParams: {},
+    defaultParams: {
+      brightness: 0,
+      contrast: 100,
+      saturation: 100,
+      gamma: 100,
+      exposure: 0,
+      hue: 0,
+      hsvSaturation: 100,
+      value: 100,
+      bwMode: "off",
+      invert: "off",
+      invertChannels: "rgb",
+    },
   },
   adjust: {
     label: "Adjust",
@@ -32,10 +44,17 @@ const NODE_DEFINITIONS = Object.freeze({
   posterize: {
     label: "Posterize",
     family: "Color",
-    description: "Quantizes each channel into N discrete levels for hard tonal banding.",
+    description: "Quantizes each channel into N discrete levels for hard tonal banding. Optional per-channel step counts, sRGB-aware quantization, and a luma-only mode that preserves chroma direction.",
     inputs: [{ name: "image", label: "Image", type: "image" }],
     outputs: [{ name: "image", label: "Image", type: "image" }],
-    defaultParams: { steps: 8 },
+    defaultParams: {
+      steps: 8,
+      stepsG: 0, // 0 sentinel = link to steps; old saves with only `steps` keep their look
+      stepsB: 0,
+      gamma: "linear",
+      lumaMode: "rgb",
+      opacity: 100,
+    },
   },
   invert: {
     label: "Invert",
@@ -98,10 +117,16 @@ const NODE_DEFINITIONS = Object.freeze({
   pixelate: {
     label: "Pixelate",
     family: "Process",
-    description: "Collapses NxN blocks into single colors for chunky low-res looks.",
+    description: "Collapses NxN blocks into single colors for chunky low-res looks. Optional non-square aspect (sizeY), circle pixels, and edge softness.",
     inputs: [{ name: "image", label: "Image", type: "image" }],
     outputs: [{ name: "image", label: "Image", type: "image" }],
-    defaultParams: { size: 8 },
+    defaultParams: {
+      size: 8,
+      sizeY: 0, // 0 sentinel = link to size; old saves with only `size` keep their square cells
+      shape: "square",
+      smoothing: 0,
+      opacity: 100,
+    },
   },
   scale: {
     label: "Scale",
@@ -114,10 +139,24 @@ const NODE_DEFINITIONS = Object.freeze({
   transform: {
     label: "Transform",
     family: "Process",
-    description: "Translates, rotates, and scales the image inside the original frame.",
+    description: "Transforms source content in one place: crop, translate, rotate, scale, and flip inside the original frame.",
     inputs: [{ name: "image", label: "Image", type: "image" }],
     outputs: [{ name: "image", label: "Image", type: "image" }],
-    defaultParams: { translateX: 0, translateY: 0, rotation: 0, scale: 100, filter: "linear" },
+    defaultParams: {
+      translateX: 0,
+      translateY: 0,
+      rotation: 0,
+      x: 100,
+      y: 100,
+      horizontal: false,
+      vertical: false,
+      cropMode: "mask",
+      left: 0,
+      right: 0,
+      top: 0,
+      bottom: 0,
+      filter: "linear",
+    },
   },
   crop: {
     label: "Crop",
@@ -152,6 +191,68 @@ const NODE_DEFINITIONS = Object.freeze({
       serpentine: true,
     },
   },
+  "pattern-dither": {
+    label: "Pattern Dither",
+    family: "Process",
+    description: "GPU-only ordered/noise dither with color-depth quantization. Bayer 2/4/8, blue noise, white noise, optional sRGB-aware quantization. Sibling to the CPU Dither node — palette-less, video-fast.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      opacity: 100,
+      saturation: 100,
+      pattern: "bayer-4x4",
+      scale: 1,
+      strength: 100,
+      depth: 4,
+      gamma: "srgb",
+    },
+  },
+  threshold: {
+    label: "Threshold",
+    family: "Mask",
+    description: "Binary mask from a per-pixel channel comparison. Channel selectable (luma / R / G / B / max), optional soft knee, BW or source-mask output.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      opacity: 100,
+      threshold: 50,
+      softness: 0,
+      channel: "luma",
+      invert: "off",
+      mode: "bw",
+    },
+  },
+  "mask-combine": {
+    label: "Mask Combine",
+    family: "Mask",
+    description: "Combines two masks via boolean ops (intersect, union, difference, subtract). Reads luma per pixel, supports per-input invert.",
+    inputs: [
+      { name: "mask_a", label: "Mask A", type: "image" },
+      { name: "mask_b", label: "Mask B", type: "image" },
+    ],
+    outputs: [{ name: "image", label: "Mask", type: "image" }],
+    defaultParams: {
+      operation: "intersect",
+      invertA: "off",
+      invertB: "off",
+      opacity: 100,
+    },
+  },
+  "mask-apply": {
+    label: "Mask Apply",
+    family: "Mask",
+    description: "Multiplies the input image by a mask — black where mask is zero, source where mask is white. Optional feather and opacity blend.",
+    inputs: [
+      { name: "image", label: "Image", type: "image" },
+      { name: "mask", label: "Mask", type: "image" },
+    ],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      invert: "off",
+      feather: 0,
+      opacity: 100,
+    },
+  },
   blur: {
     label: "Blur",
     family: "Process",
@@ -161,14 +262,14 @@ const NODE_DEFINITIONS = Object.freeze({
     defaultParams: { radius: 4 },
   },
   glare: {
-    label: "Glare",
+    label: "Bloom / Glare",
     family: "Effect",
-    description: "Bloom, anamorphic streaks, or fog glow around bright pixels.",
+    description: "Soft glow on bright pixels — GPU bloom (fast, single-pass), anamorphic streaks, fog glow, or legacy CPU bloom. Replaces the standalone Bloom node.",
     inputs: [{ name: "image", label: "Image", type: "image" }],
     outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
-      type: "streaks",
-      threshold: 200,
+      type: "bloom-gpu",
+      threshold: 180,
       mix: 100,
       saturation: 100,
       blend: "screen",
@@ -180,6 +281,32 @@ const NODE_DEFINITIONS = Object.freeze({
       angle: 45,
       iterations: 5,
       fade: 85,
+      knee: 20, // bloom-gpu only — soft luminance threshold knee
+    },
+  },
+  analog: {
+    label: "Analog",
+    family: "Effect",
+    description: "Combined VHS and CRT surface with tape noise, scanlines, tube curvature, phosphor glow, and screen mask controls.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      mode: "vhs",
+      opacity: 100,
+      brightness: 110,
+      saturation: 110,
+      chroma: 6,
+      bleed: 50,
+      noise: 35,
+      scanlines: 60,
+      tracking: 35,
+      wave: 4,
+      curvature: 25,
+      mask: "aperture",
+      maskStrength: 35,
+      glow: 25,
+      vignette: 40,
+      rolling: 0,
     },
   },
   "lens-distort": {
@@ -196,6 +323,121 @@ const NODE_DEFINITIONS = Object.freeze({
       centerY: 50,
       vignette: 0,
       fit: false,
+    },
+  },
+  "chromatic-aberration": {
+    label: "Chromatic Aberration",
+    family: "Effect",
+    description: "Splits red and blue samples in a directional or radial offset for RGB fringe effects.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      strength: 4,
+      angle: 0,
+      mode: "directional",
+      centerX: 50,
+      centerY: 50,
+    },
+  },
+  vhs: {
+    label: "VHS",
+    family: "Effect",
+    description: "Magnetic-tape look: chroma bleed, RGB shift, scrolling tracking bands, noise, scanlines, vignette. Animation driven by playhead time.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      opacity: 100,
+      chroma: 6,
+      bleed: 50,
+      noise: 35,
+      scanlines: 60,
+      tracking: 35,
+      wave: 4,
+      vignette: 40,
+      saturation: 110,
+    },
+  },
+  crt: {
+    label: "CRT",
+    family: "Effect",
+    description: "CRT screen: barrel curvature, RGB aperture/slot mask, scanlines, glow, vignette, optional rolling sync band. Time-driven.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      opacity: 100,
+      brightness: 110,
+      saturation: 110,
+      curvature: 25,
+      scanlines: 60,
+      mask: "aperture",
+      maskStrength: 35,
+      glow: 25,
+      vignette: 35,
+      rolling: 0,
+    },
+  },
+  bloom: {
+    label: "Bloom",
+    family: "Effect",
+    description: "Soft glow on bright pixels — luminance threshold with a soft knee, single-pass golden-spiral 24-tap blur, additive add-back at intensity.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      opacity: 100,
+      saturation: 100,
+      threshold: 70,
+      knee: 20,
+      intensity: 100,
+      radius: 16,
+    },
+  },
+  halation: {
+    label: "Halation",
+    family: "Effect",
+    description: "Tinted glow on bright areas — film/CRT halation. Same disk-blur as Bloom but the halo is monochrome and gets multiplied by an RGB tint (default warm orange).",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      opacity: 100,
+      saturation: 100,
+      threshold: 70,
+      knee: 20,
+      intensity: 120,
+      radius: 24,
+      tintR: 255,
+      tintG: 120,
+      tintB: 60,
+    },
+  },
+  ascii: {
+    label: "ASCII",
+    family: "Effect",
+    description: "Replace cells of the input with characters from a luminance-mapped ramp — uses a cached glyph atlas texture so any cell size renders in a single shader pass.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      opacity: 100,
+      cellSize: 8,
+      ramp: "standard",
+      invert: "off",
+      colorMode: "source",
+    },
+  },
+  halftone: {
+    label: "Halftone",
+    family: "Effect",
+    description: "Print-style halftone screen — choose dot/square/diamond shape, mono or CMY/CMYK plates, with hue, saturation, and opacity pre-mix.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      colorMode: "cmyk",
+      shape: "circle",
+      spacing: 5,
+      angle: 15,
+      dotScale: 100,
+      opacity: 100,
+      hue: 0,
+      saturation: 100,
     },
   },
   mix: {
@@ -275,16 +517,38 @@ const TYPE_ORDER = {
   crop: 12,
   flip: 13,
   dither: 14,
-  glare: 15,
-  "lens-distort": 16,
-  displace: 17,
-  mix: 18,
-  value: 19,
-  math: 20,
-  "viewer-output": 21,
+  "pattern-dither": 15,
+  threshold: 16,
+  "mask-combine": 17,
+  "mask-apply": 18,
+  glare: 19,
+  "lens-distort": 20,
+  "chromatic-aberration": 21,
+  analog: 22,
+  vhs: 23,
+  crt: 24,
+  bloom: 25,
+  halation: 26,
+  ascii: 27,
+  halftone: 28,
+  displace: 29,
+  mix: 30,
+  value: 31,
+  math: 32,
+  "viewer-output": 33,
 };
 
 const NODE_PARAM_BOUNDS = Object.freeze({
+  source: {
+    brightness: { min: -100, max: 100 },
+    contrast: { min: 0, max: 200 },
+    saturation: { min: 0, max: 200 },
+    gamma: { min: 10, max: 400 },
+    exposure: { min: -400, max: 400 },
+    hue: { min: -180, max: 180 },
+    hsvSaturation: { min: 0, max: 400 },
+    value: { min: 0, max: 400 },
+  },
   adjust: {
     brightness: { min: -100, max: 100 },
     contrast: { min: 0, max: 200 },
@@ -292,7 +556,12 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     gamma: { min: 10, max: 400 },
     exposure: { min: -400, max: 400 },
   },
-  posterize: { steps: { min: 2, max: 64 } },
+  posterize: {
+    steps: { min: 2, max: 64 },
+    stepsG: { min: 0, max: 64 }, // 0 sentinel allowed = link to R
+    stepsB: { min: 0, max: 64 },
+    opacity: { min: 0, max: 100 },
+  },
   "rgb-to-bw": {},
   "tone-map": {
     intensity: { min: 10, max: 1000 },
@@ -317,7 +586,12 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     blueMid: { min: 0, max: 255 },
     blueHigh: { min: 0, max: 255 },
   },
-  pixelate: { size: { min: 1, max: 64 } },
+  pixelate: {
+    size: { min: 1, max: 64 },
+    sizeY: { min: 0, max: 64 }, // 0 sentinel allowed = link to size
+    smoothing: { min: 0, max: 100 },
+    opacity: { min: 0, max: 100 },
+  },
   scale: {
     x: { min: 10, max: 400 },
     y: { min: 10, max: 400 },
@@ -327,6 +601,12 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     translateY: { min: -100, max: 100 },
     rotation: { min: -180, max: 180 },
     scale: { min: 1, max: 400 },
+    x: { min: 10, max: 400 },
+    y: { min: 10, max: 400 },
+    left: { min: 0, max: 95 },
+    right: { min: 0, max: 95 },
+    top: { min: 0, max: 95 },
+    bottom: { min: 0, max: 95 },
   },
   crop: {
     left: { min: 0, max: 95 },
@@ -339,6 +619,25 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     scale: { min: 10, max: 100 },
     blurRadius: { min: 0, max: 20 },
     errorStrength: { min: 0, max: 100 },
+  },
+  "pattern-dither": {
+    opacity: { min: 0, max: 100 },
+    saturation: { min: 0, max: 200 },
+    scale: { min: 1, max: 8 },
+    strength: { min: 0, max: 200 },
+    depth: { min: 1, max: 8 },
+  },
+  threshold: {
+    opacity: { min: 0, max: 100 },
+    threshold: { min: 0, max: 100 },
+    softness: { min: 0, max: 50 },
+  },
+  "mask-combine": {
+    opacity: { min: 0, max: 100 },
+  },
+  "mask-apply": {
+    opacity: { min: 0, max: 100 },
+    feather: { min: 0, max: 50 },
   },
   blur: { radius: { min: 0, max: 40 } },
   glare: {
@@ -353,6 +652,7 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     quality: { min: 1, max: 4 },
     tintAmount: { min: 0, max: 100 },
     tintHue: { min: 0, max: 360 },
+    knee: { min: 0, max: 50 },
   },
   "lens-distort": {
     distortion: { min: -100, max: 100 },
@@ -360,6 +660,81 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     centerX: { min: 0, max: 100 },
     centerY: { min: 0, max: 100 },
     vignette: { min: 0, max: 100 },
+  },
+  "chromatic-aberration": {
+    strength: { min: 0, max: 96 },
+    angle: { min: -180, max: 180 },
+    centerX: { min: 0, max: 100 },
+    centerY: { min: 0, max: 100 },
+  },
+  halftone: {
+    spacing: { min: 2, max: 64 },
+    angle: { min: -90, max: 90 },
+    dotScale: { min: 10, max: 250 },
+    opacity: { min: 0, max: 100 },
+    hue: { min: -180, max: 180 },
+    saturation: { min: 0, max: 200 },
+  },
+  analog: {
+    opacity: { min: 0, max: 100 },
+    brightness: { min: 0, max: 300 },
+    saturation: { min: 0, max: 200 },
+    chroma: { min: 0, max: 32 },
+    bleed: { min: 0, max: 100 },
+    noise: { min: 0, max: 100 },
+    scanlines: { min: 0, max: 100 },
+    tracking: { min: 0, max: 100 },
+    wave: { min: 0, max: 32 },
+    curvature: { min: 0, max: 100 },
+    maskStrength: { min: 0, max: 100 },
+    glow: { min: 0, max: 100 },
+    vignette: { min: 0, max: 100 },
+    rolling: { min: 0, max: 100 },
+  },
+  vhs: {
+    opacity: { min: 0, max: 100 },
+    chroma: { min: 0, max: 32 },
+    bleed: { min: 0, max: 100 },
+    noise: { min: 0, max: 100 },
+    scanlines: { min: 0, max: 100 },
+    tracking: { min: 0, max: 100 },
+    wave: { min: 0, max: 32 },
+    vignette: { min: 0, max: 100 },
+    saturation: { min: 0, max: 200 },
+  },
+  crt: {
+    opacity: { min: 0, max: 100 },
+    brightness: { min: 0, max: 300 },
+    saturation: { min: 0, max: 200 },
+    curvature: { min: 0, max: 100 },
+    scanlines: { min: 0, max: 100 },
+    maskStrength: { min: 0, max: 100 },
+    glow: { min: 0, max: 100 },
+    vignette: { min: 0, max: 100 },
+    rolling: { min: 0, max: 100 },
+  },
+  bloom: {
+    opacity: { min: 0, max: 100 },
+    saturation: { min: 0, max: 200 },
+    threshold: { min: 0, max: 100 },
+    knee: { min: 0, max: 50 },
+    intensity: { min: 0, max: 400 },
+    radius: { min: 0, max: 64 },
+  },
+  halation: {
+    opacity: { min: 0, max: 100 },
+    saturation: { min: 0, max: 200 },
+    threshold: { min: 0, max: 100 },
+    knee: { min: 0, max: 50 },
+    intensity: { min: 0, max: 400 },
+    radius: { min: 0, max: 96 },
+    tintR: { min: 0, max: 255 },
+    tintG: { min: 0, max: 255 },
+    tintB: { min: 0, max: 255 },
+  },
+  ascii: {
+    opacity: { min: 0, max: 100 },
+    cellSize: { min: 4, max: 32 },
   },
   displace: {
     xAmount: { min: -200, max: 200 },
@@ -903,6 +1278,16 @@ export function setParamExposed(nodeId, paramKey, exposed, config = null) {
 
   const nextNodes = graph.nodes.map((node) => {
     if (node.id !== nodeId) return node;
+    // Refuse to expose a param that already has an explicit input socket on the
+    // node — the existing socket is the real input, and exposing the param too
+    // would render a second pin on the canvas.
+    if (
+      exposed &&
+      Array.isArray(node.inputs) &&
+      node.inputs.some((socket) => socket.name === paramKey)
+    ) {
+      return node;
+    }
     const list = Array.isArray(node.exposedParams) ? [...node.exposedParams] : [];
     const nextConfig = { ...(node.exposedParamConfig ?? {}) };
     const has = list.includes(paramKey);
@@ -1095,6 +1480,7 @@ function normalizeGraph(graph) {
 function createNode(id, type, options = {}) {
   const definition = getNodeDefinition(type);
   if (!definition) throw new Error(`Unknown node type: ${type}`);
+  const explicitInputs = new Set(definition.inputs.map((socket) => socket.name));
 
   return {
     id,
@@ -1104,13 +1490,25 @@ function createNode(id, type, options = {}) {
     y: options.y ?? NODE_BASE_Y,
     inputs: definition.inputs.map((socket) => ({ ...socket })),
     outputs: definition.outputs.map((socket) => ({ ...socket })),
-    params: {
-      ...clone(definition.defaultParams),
-      ...clone(options.params),
-    },
-    exposedParams: Array.isArray(options.exposedParams) ? [...options.exposedParams] : [],
+    params: normalizeNodeParams(type, definition.defaultParams, options.params),
+    exposedParams: Array.isArray(options.exposedParams)
+      ? options.exposedParams.filter((paramKey) => !explicitInputs.has(paramKey))
+      : [],
     exposedParamConfig: clone(options.exposedParamConfig),
     bypassed: Boolean(options.bypassed),
+  };
+}
+
+function normalizeNodeParams(type, defaultParams, incomingParams) {
+  const incoming = clone(incomingParams);
+  if (type === "transform" && incoming && incoming.scale !== undefined) {
+    if (incoming.x === undefined) incoming.x = incoming.scale;
+    if (incoming.y === undefined) incoming.y = incoming.scale;
+    delete incoming.scale;
+  }
+  return {
+    ...clone(defaultParams),
+    ...incoming,
   };
 }
 

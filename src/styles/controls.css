@@ -95,6 +95,40 @@
   background: rgba(131, 196, 255, 0.7);
   box-shadow: 0 0 0 3px rgba(131, 196, 255, 0.13);
 }
+
+.param-socket-toggle.is-fixed {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.param-keyframe-toggle {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  flex: 0 0 12px;
+  cursor: pointer;
+}
+
+.param-keyframe-toggle::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  transform: rotate(45deg);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.param-keyframe-toggle:hover::before,
+.param-keyframe-toggle.is-animated::before {
+  border-color: rgba(240, 181, 95, 0.9);
+}
+
+.param-keyframe-toggle.is-keyed::before {
+  border-color: rgba(240, 181, 95, 1);
+  background: rgba(240, 181, 95, 0.9);
+  box-shadow: 0 0 0 3px rgba(240, 181, 95, 0.12);
+}
 .field .num {
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);

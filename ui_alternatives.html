@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dither Lab - Dark Elegant UI Components</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-main: #0c0c0e;
+      --bg-surface: #141416;
+      --bg-elevated: #1a1a1d;
+      --bg-inset: #09090b;
+      --border-subtle: #27272a;
+      --border-strong: #3f3f46;
+      --text-primary: #f4f4f5;
+      --text-secondary: #a1a1aa;
+      --text-muted: #71717a;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --accent-glow: rgba(99, 102, 241, 0.4);
+      --radius-xs: 3px;
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --radius-xl: 16px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background-color: var(--bg-main); color: var(--text-primary); padding: 40px; }
+    body::before { content: ''; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-image: url('data:image/svg+xml;utf8,%3Csvg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"%3E%3Cfilter id="noiseFilter"%3E%3CfeTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/%3E%3C/filter%3E%3Crect width="100%25" height="100%25" filter="url(%23noiseFilter)" opacity="0.015"/%3E%3C/svg%3E'); pointer-events: none; z-index: 9999; }
+
+    .header { text-align: center; margin-bottom: 50px; }
+    .header h1 { font-size: 32px; font-weight: 500; letter-spacing: -0.5px; margin-bottom: 12px; }
+    .header p { color: var(--text-secondary); font-size: 15px; max-width: 600px; margin: 0 auto; }
+    .section-title { font-size: 18px; font-weight: 500; margin: 60px auto 24px; color: var(--text-primary); border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; max-width: 1500px; display: flex; align-items: center; gap: 12px; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 32px; max-width: 1500px; margin: 0 auto; }
+    .card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 32px; display: flex; flex-direction: column; gap: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+    .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; }
+    .component-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); display: flex; justify-content: space-between; align-items: center; }
+    .component-label span.value { color: var(--text-primary); font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 400; }
+
+    /* =========================================
+       FULLY FUNCTIONAL AESTHETIC CURVES
+       ========================================= */
+    .curve-wrapper {
+        width: 100%; aspect-ratio: 1; background: var(--bg-main);
+        border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+        position: relative; overflow: hidden; box-shadow: inset 0 2px 20px rgba(0,0,0,0.5);
+    }
+
+    .curve-grid {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+                          linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+        background-size: 25% 25%; pointer-events: none;
+    }
+    /* Sub-grid for precision */
+    .curve-grid::after {
+        content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        background-image: linear-gradient(rgba(255,255,255,0.01) 1px, transparent 1px),
+                          linear-gradient(90deg, rgba(255,255,255,0.01) 1px, transparent 1px);
+        background-size: 6.25% 6.25%; pointer-events: none;
+    }
+
+    /* Baseline diagonal */
+    .curve-baseline { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+    .curve-baseline line { stroke: rgba(255,255,255,0.1); stroke-width: 1; stroke-dasharray: 4 4; }
+
+    .curve-svg { width: 100%; height: 100%; display: block; overflow: visible; position: relative; z-index: 2; }
+
+    .curve-fill { opacity: 0.15; pointer-events: none; }
+    .curve-line { fill: none; stroke: var(--accent); stroke-width: 2.5; filter: drop-shadow(0 0 6px var(--accent-glow)); pointer-events: none; }
+
+    .curve-node { fill: var(--bg-surface); stroke: #fff; stroke-width: 2; cursor: grab; transition: transform 0.1s; }
+    .curve-node:hover { transform: scale(1.3); transform-origin: center; box-shadow: 0 0 10px #fff; }
+    .curve-node.dragging { cursor: grabbing; fill: var(--accent); stroke: var(--accent); transform: scale(1.5); }
+
+    /* RGB Split Styles */
+    .rgb-r { stroke: #ef4444; filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.5)); mix-blend-mode: screen; }
+    .rgb-g { stroke: #22c55e; filter: drop-shadow(0 0 6px rgba(34, 197, 94, 0.5)); mix-blend-mode: screen; }
+    .rgb-b { stroke: #3b82f6; filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.5)); mix-blend-mode: screen; }
+
+    /* Sparkline Spline Wrapper */
+    .spline-wrapper { height: 120px; aspect-ratio: auto; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>Dark Elegant UI</h1>
+    <p>Premium, functional, and aesthetically perfected interactive curves.</p>
+  </div>
+
+  <div class="section-title">10. Functional & Aesthetic Curve Editors</div>
+
+  <div class="grid">
+    <!-- 1. MASTER LUMINANCE CURVE -->
+    <div class="card">
+      <div class="card-title">Master Luma Curve (Interactive)</div>
+      <div class="component-label"><span>Drag the nodes</span> <span class="value" id="val-luma">Y: 50%</span></div>
+
+      <div class="curve-wrapper">
+        <div class="curve-grid"></div>
+        <svg class="curve-baseline" viewBox="0 0 100 100" preserveAspectRatio="none"><line x1="0" y1="100" x2="100" y2="0"/></svg>
+
+        <svg class="curve-svg" id="svg-luma" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="luma-grad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="var(--accent)" />
+              <stop offset="100%" stop-color="transparent" />
+            </linearGradient>
+          </defs>
+
+          <path id="path-fill-luma" class="curve-fill" fill="url(#luma-grad)" d="M 0 100 Q 50 50, 100 0 L 100 100 L 0 100 Z" />
+          <path id="path-line-luma" class="curve-line" d="M 0 100 Q 50 50, 100 0" />
+
+          <!-- Nodes -->
+          <circle cx="0" cy="100" r="3.5" class="curve-node" id="node-l-start" data-x="0" data-y="100" />
+          <circle cx="50" cy="50" r="4.5" class="curve-node" id="node-l-mid" data-x="50" data-y="50" />
+          <circle cx="100" cy="0" r="3.5" class="curve-node" id="node-l-end" data-x="100" data-y="0" />
+        </svg>
+      </div>
+    </div>
+
+    <!-- 2. RGB PARADE SPLIT CURVES -->
+    <div class="card">
+      <div class="card-title">RGB Channel Split (Interactive)</div>
+      <div class="component-label"><span>Color Grade Simulation</span></div>
+
+      <div class="curve-wrapper">
+        <div class="curve-grid"></div>
+        <svg class="curve-baseline" viewBox="0 0 100 100" preserveAspectRatio="none"><line x1="0" y1="100" x2="100" y2="0"/></svg>
+
+        <svg class="curve-svg" id="svg-rgb" viewBox="0 0 100 100" preserveAspectRatio="none" style="mix-blend-mode: screen;">
+          <!-- Red -->
+          <path id="path-r" class="curve-line rgb-r" d="M 0 100 Q 40 60, 100 0" />
+          <circle cx="40" cy="60" r="3" class="curve-node" id="node-r" data-x="40" data-y="60" style="stroke: #ef4444;" />
+
+          <!-- Green -->
+          <path id="path-g" class="curve-line rgb-g" d="M 0 100 Q 50 50, 100 0" />
+          <circle cx="50" cy="50" r="3" class="curve-node" id="node-g" data-x="50" data-y="50" style="stroke: #22c55e;" />
+
+          <!-- Blue -->
+          <path id="path-b" class="curve-line rgb-b" d="M 0 100 Q 60 40, 100 0" />
+          <circle cx="60" cy="40" r="3" class="curve-node" id="node-b" data-x="60" data-y="40" style="stroke: #3b82f6;" />
+        </svg>
+      </div>
+    </div>
+
+    <!-- 3. MULTI-NODE AUTOMATION SPLINE -->
+    <div class="card" style="grid-column: 1 / -1;">
+      <div class="card-title">Automation Spline (Interactive)</div>
+      <div class="component-label"><span>Envelope / LFO Control</span> <span class="value">Time</span></div>
+
+      <div class="curve-wrapper spline-wrapper">
+        <!-- Horizontal Grid Only -->
+        <div class="curve-grid" style="background-image: linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px); background-size: 100% 25%;"></div>
+
+        <svg class="curve-svg" id="svg-spline" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="spline-grad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#fff" stop-opacity="0.3" />
+              <stop offset="100%" stop-color="transparent" />
+            </linearGradient>
+          </defs>
+
+          <path id="path-fill-spline" class="curve-fill" fill="url(#spline-grad)" d="M 0 50 C 20 10, 40 90, 60 50 S 80 10, 100 50 L 100 100 L 0 100 Z" />
+          <path id="path-line-spline" class="curve-line" style="stroke: #fff;" d="M 0 50 C 20 10, 40 90, 60 50 S 80 10, 100 50" />
+
+          <circle cx="0" cy="50" r="3" class="curve-node" id="node-s1" data-x="0" data-y="50" />
+          <circle cx="20" cy="10" r="4" class="curve-node" id="node-s2" data-x="20" data-y="10" />
+          <circle cx="40" cy="90" r="4" class="curve-node" id="node-s3" data-x="40" data-y="90" />
+          <circle cx="60" cy="50" r="4" class="curve-node" id="node-s4" data-x="60" data-y="50" />
+          <circle cx="100" cy="50" r="3" class="curve-node" id="node-s5" data-x="100" data-y="50" />
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // General Draggable Node Logic for SVG Curves
+    function initCurve(svgId, pathId, fillId, updateFn) {
+      const svg = document.getElementById(svgId);
+      if(!svg) return;
+
+      let draggedNode = null;
+
+      // Handle drag
+      const onMove = (e) => {
+        if(!draggedNode) return;
+
+        // Calculate relative coordinates in SVG (0-100)
+        const rect = svg.getBoundingClientRect();
+        let x = ((e.clientX - rect.left) / rect.width) * 100;
+        let y = ((e.clientY - rect.top) / rect.height) * 100;
+
+        // Constrain X bounds if needed (don't let nodes cross each other)
+        if(draggedNode.id.includes('start')) x = 0;
+        if(draggedNode.id.includes('end')) x = 100;
+
+        x = Math.max(0, Math.min(x, 100));
+        y = Math.max(0, Math.min(y, 100));
+
+        // Update DOM Node
+        draggedNode.setAttribute('cx', x);
+        draggedNode.setAttribute('cy', y);
+        draggedNode.setAttribute('data-x', x);
+        draggedNode.setAttribute('data-y', y);
+
+        // Call specific path redraw logic
+        updateFn();
+      };
+
+      const onUp = () => {
+        if(draggedNode) draggedNode.classList.remove('dragging');
+        draggedNode = null;
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+
+      svg.addEventListener('mousedown', (e) => {
+        if(e.target.classList.contains('curve-node')) {
+          draggedNode = e.target;
+          draggedNode.classList.add('dragging');
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        }
+      });
+    }
+
+    // 1. Luma Curve Logic (Quadratic Bezier)
+    function updateLuma() {
+      const p1 = document.getElementById('node-l-start');
+      const p2 = document.getElementById('node-l-mid');
+      const p3 = document.getElementById('node-l-end');
+
+      const d = `M ${p1.getAttribute('cx')} ${p1.getAttribute('cy')} Q ${p2.getAttribute('cx')} ${p2.getAttribute('cy')}, ${p3.getAttribute('cx')} ${p3.getAttribute('cy')}`;
+
+      document.getElementById('path-line-luma').setAttribute('d', d);
+      document.getElementById('path-fill-luma').setAttribute('d', `${d} L 100 100 L 0 100 Z`);
+
+      // Update label
+      document.getElementById('val-luma').textContent = `Mid Y: ${Math.round(100 - p2.getAttribute('cy'))}%`;
+    }
+    initCurve('svg-luma', 'path-line-luma', 'path-fill-luma', updateLuma);
+
+    // 2. RGB Spline Logic (3 independent lines)
+    function updateRGB() {
+      const nr = document.getElementById('node-r');
+      document.getElementById('path-r').setAttribute('d', `M 0 100 Q ${nr.getAttribute('cx')} ${nr.getAttribute('cy')}, 100 0`);
+
+      const ng = document.getElementById('node-g');
+      document.getElementById('path-g').setAttribute('d', `M 0 100 Q ${ng.getAttribute('cx')} ${ng.getAttribute('cy')}, 100 0`);
+
+      const nb = document.getElementById('node-b');
+      document.getElementById('path-b').setAttribute('d', `M 0 100 Q ${nb.getAttribute('cx')} ${nb.getAttribute('cy')}, 100 0`);
+    }
+    initCurve('svg-rgb', null, null, updateRGB);
+
+    // 3. Multi-Node Spline Logic (Cubic & Smooth Curves)
+    function updateSpline() {
+      const s1 = document.getElementById('node-s1');
+      const s2 = document.getElementById('node-s2');
+      const s3 = document.getElementById('node-s3');
+      const s4 = document.getElementById('node-s4');
+      const s5 = document.getElementById('node-s5');
+
+      // A simple curve sequence: M -> C -> S
+      const d = `M 0 ${s1.getAttribute('cy')}
+                 C ${s2.getAttribute('cx')} ${s2.getAttribute('cy')},
+                   ${s3.getAttribute('cx')} ${s3.getAttribute('cy')},
+                   ${s4.getAttribute('cx')} ${s4.getAttribute('cy')}
+                 S 80 ${s5.getAttribute('cy')},
+                   100 ${s5.getAttribute('cy')}`;
+
+      document.getElementById('path-line-spline').setAttribute('d', d);
+      document.getElementById('path-fill-spline').setAttribute('d', `${d} L 100 100 L 0 100 Z`);
+    }
+    initCurve('svg-spline', 'path-line-spline', 'path-fill-spline', updateSpline);
+
+  </script>
+</body>
+</html>

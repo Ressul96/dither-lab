@@ -1,0 +1,2232 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dither Lab - Component Playground</title>
+  <style>
+    :root {
+      --bg: #090a0d;
+      --surface: #111217;
+      --surface-2: #171a21;
+      --surface-3: #20242c;
+      --input: #0c0d11;
+      --line: #272b35;
+      --line-strong: #3a404d;
+      --text: #f1f3f7;
+      --text-soft: #a5adba;
+      --text-muted: #6f7785;
+      --blue: #4a9eff;
+      --cyan: #40c7d8;
+      --green: #7ddf95;
+      --pink: #f07ab6;
+      --amber: #f0b55f;
+      --violet: #a78bfa;
+      --red: #f86f6f;
+      --radius: 8px;
+      --radius-sm: 6px;
+      --shadow: 0 16px 34px rgba(0, 0, 0, 0.32);
+      color-scheme: dark;
+      font-family:
+        Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+      font-feature-settings: "tnum" 1, "cv11" 1;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+        var(--bg);
+      background-size: 34px 34px;
+      color: var(--text);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+    }
+
+    .board {
+      width: min(1520px, 100%);
+      margin: 0 auto;
+      padding: 18px 20px 40px;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 14px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+      background: rgba(9, 10, 13, 0.88);
+      backdrop-filter: blur(18px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(135deg, rgba(74, 158, 255, 0.22), transparent 42%),
+        conic-gradient(from 90deg, var(--cyan), var(--pink), var(--amber), var(--green), var(--cyan));
+      box-shadow: inset 0 0 0 8px rgba(9, 10, 13, 0.72);
+      flex: 0 0 auto;
+    }
+
+    .eyebrow {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 2px 0 0;
+      font-size: 20px;
+      line-height: 1.1;
+      font-weight: 680;
+    }
+
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .tabs a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 30px;
+      padding: 0 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-sm);
+      color: var(--text-soft);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 620;
+      white-space: nowrap;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .tabs a:hover {
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.055);
+    }
+
+    .band {
+      padding: 24px 0 30px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    }
+
+    .section-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.1;
+      font-weight: 700;
+    }
+
+    .section-count {
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 680;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .component-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+      gap: 14px;
+    }
+
+    .component-grid.wide {
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+    }
+
+    .specimen {
+      --family: var(--blue);
+      position: relative;
+      min-width: 0;
+      min-height: 214px;
+      padding: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 42%),
+        rgba(17, 18, 23, 0.96);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .specimen::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 3px;
+      background: var(--family);
+      opacity: 0.9;
+    }
+
+    .specimen[data-family="color"] {
+      --family: var(--cyan);
+    }
+
+    .specimen[data-family="process"] {
+      --family: var(--green);
+    }
+
+    .specimen[data-family="dither"] {
+      --family: var(--pink);
+    }
+
+    .specimen[data-family="effect"] {
+      --family: var(--amber);
+    }
+
+    .specimen[data-family="compose"] {
+      --family: var(--violet);
+    }
+
+    .specimen-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .specimen-title {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .index {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 22px;
+      border-radius: var(--radius-sm);
+      background: color-mix(in srgb, var(--family) 16%, transparent);
+      color: color-mix(in srgb, var(--family) 82%, white 10%);
+      border: 1px solid color-mix(in srgb, var(--family) 24%, transparent);
+      font-size: 10px;
+      font-weight: 760;
+    }
+
+    .specimen strong {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .readout {
+      color: var(--text);
+      font-family:
+        "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 11px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .label {
+      color: var(--text-soft);
+      font-size: 11px;
+      font-weight: 650;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tiny {
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .icon-button {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-soft);
+      cursor: pointer;
+    }
+
+    .icon-button:hover,
+    .icon-button[aria-pressed="true"] {
+      color: var(--text);
+      border-color: color-mix(in srgb, var(--family) 58%, white 8%);
+      background: color-mix(in srgb, var(--family) 15%, transparent);
+    }
+
+    .dot-icon,
+    .diamond-icon,
+    .wave-icon {
+      display: block;
+      width: 9px;
+      height: 9px;
+    }
+
+    .dot-icon {
+      border-radius: 50%;
+      border: 1.5px solid currentColor;
+    }
+
+    .diamond-icon {
+      border: 1.5px solid currentColor;
+      transform: rotate(45deg);
+    }
+
+    .wave-icon {
+      width: 13px;
+      height: 8px;
+      border-bottom: 1.5px solid currentColor;
+      border-radius: 50%;
+      transform: rotate(-8deg);
+    }
+
+    .field-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .slider-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 66px;
+      align-items: center;
+      gap: 10px;
+    }
+
+    input[type="range"] {
+      --pct: 50%;
+      appearance: none;
+      -webkit-appearance: none;
+      width: 100%;
+      height: 14px;
+      margin: 0;
+      cursor: pointer;
+      background: transparent;
+    }
+
+    input[type="range"]::-webkit-slider-runnable-track {
+      height: 4px;
+      border-radius: 999px;
+      background:
+        linear-gradient(90deg, var(--family) 0 var(--pct), var(--line-strong) var(--pct) 100%);
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      margin-top: -5px;
+      border: 2px solid #08090c;
+      border-radius: 50%;
+      background: var(--text);
+      box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--family) 68%, white 8%),
+        0 0 16px color-mix(in srgb, var(--family) 28%, transparent);
+    }
+
+    input[type="range"]::-moz-range-track {
+      height: 4px;
+      border-radius: 999px;
+      background:
+        linear-gradient(90deg, var(--family) 0 var(--pct), var(--line-strong) var(--pct) 100%);
+    }
+
+    input[type="range"]::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border: 2px solid #08090c;
+      border-radius: 50%;
+      background: var(--text);
+    }
+
+    input[type="number"] {
+      width: 100%;
+      height: 26px;
+      padding: 0 7px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-sm);
+      background: var(--input);
+      color: var(--text);
+      font-size: 12px;
+      text-align: right;
+      outline: none;
+      appearance: textfield;
+    }
+
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button {
+      appearance: none;
+      margin: 0;
+    }
+
+    input[type="number"]:focus {
+      border-color: color-mix(in srgb, var(--family) 70%, white 8%);
+    }
+
+    .mini-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex: 0 0 auto;
+    }
+
+    .histogram {
+      display: grid;
+      grid-template-columns: repeat(28, 1fr);
+      align-items: end;
+      gap: 2px;
+      height: 42px;
+      padding: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: var(--radius-sm);
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .histogram span {
+      height: calc(var(--h) * 1%);
+      min-height: 4px;
+      border-radius: 2px 2px 0 0;
+      background: color-mix(in srgb, var(--family) 50%, var(--text-soft));
+      opacity: 0.8;
+    }
+
+    .dual-slider {
+      --lo: 22%;
+      --hi: 76%;
+      position: relative;
+      height: 42px;
+      display: flex;
+      align-items: center;
+    }
+
+    .dual-slider::before,
+    .dual-slider::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      height: 5px;
+      transform: translateY(-50%);
+      border-radius: 999px;
+    }
+
+    .dual-slider::before {
+      background: var(--line-strong);
+    }
+
+    .dual-slider::after {
+      left: var(--lo);
+      right: calc(100% - var(--hi));
+      background: linear-gradient(90deg, var(--cyan), var(--pink), var(--amber));
+      box-shadow: 0 0 18px color-mix(in srgb, var(--family) 20%, transparent);
+    }
+
+    .dual-slider input {
+      position: absolute;
+      left: 0;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .dual-slider input::-webkit-slider-runnable-track {
+      background: transparent;
+    }
+
+    .dual-slider input::-webkit-slider-thumb {
+      pointer-events: auto;
+    }
+
+    .dual-slider input::-moz-range-track {
+      background: transparent;
+    }
+
+    .dual-slider input::-moz-range-thumb {
+      pointer-events: auto;
+    }
+
+    .fader-bank {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(44px, 1fr));
+      gap: 10px;
+      align-items: end;
+      min-height: 172px;
+    }
+
+    .fader {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .fader input[type="range"] {
+      width: 18px;
+      height: 126px;
+      writing-mode: vertical-lr;
+      direction: rtl;
+    }
+
+    .fader input[type="range"]::-webkit-slider-runnable-track {
+      width: 4px;
+      height: 126px;
+      background: var(--line-strong);
+    }
+
+    .fader input[type="range"]::-webkit-slider-thumb {
+      margin-top: 0;
+      margin-left: -5px;
+    }
+
+    .fader b {
+      color: var(--text);
+      font-size: 10px;
+      font-weight: 720;
+    }
+
+    .fader span {
+      color: var(--text-muted);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .step-slider {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .step-buttons {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 5px;
+    }
+
+    .step-buttons button {
+      height: 28px;
+      padding: 0 4px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--text-soft);
+      font-size: 11px;
+      font-weight: 680;
+      cursor: pointer;
+    }
+
+    .step-buttons button.is-active {
+      color: #08090c;
+      border-color: var(--family);
+      background: var(--family);
+    }
+
+    .arc-slider {
+      display: grid;
+      grid-template-columns: 132px minmax(0, 1fr);
+      gap: 16px;
+      align-items: center;
+    }
+
+    .arc-face {
+      width: 132px;
+      aspect-ratio: 1;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: var(--radius);
+      background: rgba(0, 0, 0, 0.18);
+    }
+
+    .arc-face svg {
+      width: 108px;
+      height: 108px;
+      overflow: visible;
+    }
+
+    .arc-bg,
+    .arc-value {
+      fill: none;
+      stroke-width: 9;
+      stroke-linecap: round;
+    }
+
+    .arc-bg {
+      stroke: var(--line-strong);
+    }
+
+    .arc-value {
+      stroke: var(--family);
+      stroke-dasharray: 50 100;
+      filter: drop-shadow(0 0 12px color-mix(in srgb, var(--family) 36%, transparent));
+    }
+
+    .arc-value-text {
+      font-family:
+        "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 14px;
+      font-weight: 760;
+      fill: var(--text);
+    }
+
+    .texture-strip {
+      width: 100%;
+      height: 36px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: var(--radius-sm);
+      background:
+        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0 1px, transparent 1px 7px),
+        linear-gradient(90deg, rgba(64, 199, 216, 0.28), rgba(240, 122, 182, 0.24), rgba(240, 181, 95, 0.26));
+      overflow: hidden;
+    }
+
+    .curve-canvas {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1;
+      min-height: 210px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+        #07080b;
+      background-size: 25% 25%;
+      overflow: hidden;
+    }
+
+    .curve-canvas.curve-wide {
+      aspect-ratio: 3.3 / 1;
+      min-height: 126px;
+    }
+
+    .curve-canvas.curve-mini {
+      aspect-ratio: 2 / 1;
+      min-height: 128px;
+    }
+
+    .curve-canvas svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+      cursor: crosshair;
+    }
+
+    .curve-base {
+      stroke: rgba(255, 255, 255, 0.18);
+      stroke-width: 0.7;
+      stroke-dasharray: 4 4;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .curve-fill {
+      fill: color-mix(in srgb, var(--series-color, var(--family)) 20%, transparent);
+      opacity: 0.72;
+      pointer-events: none;
+    }
+
+    .curve-line {
+      fill: none;
+      stroke: var(--series-color, var(--family));
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+      filter: drop-shadow(0 0 8px color-mix(in srgb, var(--series-color, var(--family)) 40%, transparent));
+    }
+
+    .curve-point {
+      fill: #090a0d;
+      stroke: var(--series-color, var(--family));
+      stroke-width: 2;
+      cursor: grab;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .curve-point:hover,
+    .curve-point.is-dragging {
+      fill: var(--text);
+    }
+
+    .curve-series.is-hidden {
+      opacity: 0.12;
+    }
+
+    .channel-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    .channel-row button {
+      height: 24px;
+      padding: 0 8px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-soft);
+      font-size: 11px;
+      font-weight: 720;
+      cursor: pointer;
+    }
+
+    .channel-row button[aria-pressed="true"] {
+      color: #08090c;
+      border-color: var(--channel);
+      background: var(--channel);
+    }
+
+    .curve-readouts,
+    .xy-readouts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .meter-box {
+      min-width: 0;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 9px;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--text-soft);
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .meter-box b {
+      color: var(--text);
+      font-family:
+        "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .xy-pad {
+      --x-pos: 58%;
+      --y-pos: 42%;
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1;
+      min-height: 210px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius);
+      overflow: hidden;
+      cursor: crosshair;
+      touch-action: none;
+      background:
+        linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+        #07080b;
+      background-size: 20% 20%;
+    }
+
+    .xy-pad::before,
+    .xy-pad::after {
+      content: "";
+      position: absolute;
+      pointer-events: none;
+      background: color-mix(in srgb, var(--family) 72%, white 8%);
+      opacity: 0.55;
+    }
+
+    .xy-pad::before {
+      left: var(--x-pos);
+      top: 0;
+      bottom: 0;
+      width: 1px;
+    }
+
+    .xy-pad::after {
+      left: 0;
+      right: 0;
+      top: calc(100% - var(--y-pos));
+      height: 1px;
+    }
+
+    .xy-handle {
+      position: absolute;
+      left: var(--x-pos);
+      top: calc(100% - var(--y-pos));
+      z-index: 3;
+      width: 22px;
+      height: 22px;
+      border: 2px solid #08090c;
+      border-radius: 50%;
+      background: var(--text);
+      box-shadow:
+        0 0 0 1px var(--family),
+        0 0 20px color-mix(in srgb, var(--family) 38%, transparent);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+
+    .xy-field {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .xy-field--anchor {
+      background:
+        radial-gradient(circle at var(--x-pos) calc(100% - var(--y-pos)), color-mix(in srgb, var(--family) 34%, transparent), transparent 24%),
+        linear-gradient(135deg, rgba(64, 199, 216, 0.14), rgba(240, 181, 95, 0.08) 50%, rgba(240, 122, 182, 0.14));
+    }
+
+    .xy-field--vectors {
+      background:
+        repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.06) 0 1px, transparent 1px 15px),
+        repeating-linear-gradient(-45deg, rgba(125, 223, 149, 0.08) 0 1px, transparent 1px 21px);
+    }
+
+    .xy-field--color {
+      background:
+        linear-gradient(90deg, rgba(64, 199, 216, 0.28), transparent 48%, rgba(240, 122, 182, 0.25)),
+        linear-gradient(0deg, rgba(74, 158, 255, 0.22), transparent 44%, rgba(240, 181, 95, 0.25));
+    }
+
+    .xy-field--blocks {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      grid-template-rows: repeat(8, 1fr);
+      gap: 1px;
+      background: rgba(0, 0, 0, 0.38);
+      padding: 1px;
+    }
+
+    .xy-field--blocks span {
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.05), transparent),
+        color-mix(in srgb, var(--family) var(--tone, 28%), #111217);
+    }
+
+    .xy-axis-label {
+      position: absolute;
+      z-index: 2;
+      color: rgba(255, 255, 255, 0.45);
+      font-size: 10px;
+      font-weight: 760;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
+    .xy-axis-label.x {
+      right: 10px;
+      bottom: 8px;
+    }
+
+    .xy-axis-label.y {
+      left: 10px;
+      top: 8px;
+    }
+
+    .blocks-layout {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+      gap: 14px;
+      align-items: start;
+    }
+
+    .block-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .node-block {
+      --family: var(--blue);
+      position: relative;
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.085);
+      border-radius: var(--radius);
+      background: rgba(15, 16, 20, 0.96);
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24);
+      overflow: hidden;
+      cursor: pointer;
+    }
+
+    .node-block::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 3px;
+      background: var(--family);
+      opacity: 0.92;
+    }
+
+    .node-block[data-family="color"] {
+      --family: var(--cyan);
+    }
+
+    .node-block[data-family="process"] {
+      --family: var(--green);
+    }
+
+    .node-block[data-family="dither"] {
+      --family: var(--pink);
+    }
+
+    .node-block[data-family="effect"] {
+      --family: var(--amber);
+    }
+
+    .node-block[data-family="compose"] {
+      --family: var(--violet);
+    }
+
+    .node-block.is-selected {
+      border-color: color-mix(in srgb, var(--family) 68%, white 10%);
+      box-shadow:
+        0 12px 28px rgba(0, 0, 0, 0.3),
+        0 0 0 1px color-mix(in srgb, var(--family) 35%, transparent),
+        0 0 22px color-mix(in srgb, var(--family) 18%, transparent);
+    }
+
+    .node-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .node-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 730;
+    }
+
+    .node-family {
+      color: color-mix(in srgb, var(--family) 78%, white 8%);
+      font-size: 10px;
+      font-weight: 760;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .socket-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      min-height: 24px;
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 650;
+    }
+
+    .socket-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--family);
+      box-shadow: 0 0 12px color-mix(in srgb, var(--family) 34%, transparent);
+    }
+
+    .socket-dot.out {
+      justify-self: end;
+    }
+
+    .node-row-value {
+      justify-self: end;
+      color: var(--text-soft);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .node-block.compact {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 11px;
+    }
+
+    .block-icon {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border: 1px solid color-mix(in srgb, var(--family) 30%, transparent);
+      border-radius: var(--radius-sm);
+      background: color-mix(in srgb, var(--family) 14%, transparent);
+      color: color-mix(in srgb, var(--family) 82%, white 10%);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .parameter-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .parameter-line {
+      display: grid;
+      grid-template-columns: minmax(72px, 1fr) minmax(90px, 1.4fr) 38px;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .micro-slider {
+      height: 4px;
+      border-radius: 999px;
+      background:
+        linear-gradient(90deg, var(--family) 0 var(--value), var(--line-strong) var(--value) 100%);
+    }
+
+    .block-preview {
+      width: 100%;
+      height: 58px;
+      display: block;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: var(--radius-sm);
+      background: #07080b;
+      margin: 10px 0;
+    }
+
+    .palette-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .palette-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      height: 38px;
+      padding: 0 9px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--text-soft);
+      font-size: 11px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .palette-chip::before {
+      content: "";
+      width: 6px;
+      height: 22px;
+      flex: 0 0 auto;
+      border-radius: 3px;
+      background: var(--chip);
+      box-shadow: 0 0 12px color-mix(in srgb, var(--chip) 30%, transparent);
+    }
+
+    .palette-chip:hover,
+    .palette-chip.is-selected {
+      color: var(--text);
+      border-color: color-mix(in srgb, var(--chip) 54%, white 8%);
+      background: color-mix(in srgb, var(--chip) 12%, transparent);
+    }
+
+    .macro-chain {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .macro-step {
+      display: grid;
+      grid-template-columns: 7px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      min-height: 30px;
+      padding: 0 9px;
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-soft);
+      font-size: 11px;
+      font-weight: 660;
+    }
+
+    .macro-step::before {
+      content: "";
+      width: 7px;
+      height: 18px;
+      border-radius: 3px;
+      background: var(--step);
+    }
+
+    .graph-preview {
+      position: relative;
+      min-height: 260px;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: var(--radius);
+      background:
+        radial-gradient(circle at center, rgba(255, 255, 255, 0.035), transparent 48%),
+        linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        #08090c;
+      background-size: auto, 28px 28px, 28px 28px, auto;
+      overflow: hidden;
+    }
+
+    .graph-preview svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .graph-preview path {
+      fill: none;
+      stroke: rgba(154, 154, 163, 0.46);
+      stroke-width: 3;
+      stroke-linecap: round;
+    }
+
+    .graph-preview .node-block {
+      position: absolute;
+      width: 180px;
+      min-height: 0;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+    }
+
+    .graph-preview .node-block:nth-of-type(1) {
+      left: 24px;
+      top: 34px;
+    }
+
+    .graph-preview .node-block:nth-of-type(2) {
+      left: calc(50% - 90px);
+      top: 112px;
+    }
+
+    .graph-preview .node-block:nth-of-type(3) {
+      right: 24px;
+      top: 54px;
+    }
+
+    @media (max-width: 760px) {
+      .board {
+        padding: 12px 12px 28px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .tabs {
+        width: 100%;
+      }
+
+      .arc-slider {
+        grid-template-columns: 1fr;
+      }
+
+      .arc-face {
+        width: 100%;
+        max-width: 180px;
+      }
+
+      .parameter-line {
+        grid-template-columns: minmax(64px, 1fr) minmax(80px, 1.2fr) 36px;
+      }
+
+      .graph-preview .node-block {
+        width: 154px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="board">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <p class="eyebrow">Dither Lab</p>
+          <h1>Component Playground</h1>
+        </div>
+      </div>
+      <nav class="tabs" aria-label="Component groups">
+        <a href="#sliders">Sliders</a>
+        <a href="#curves">Curve Editors</a>
+        <a href="#xy">XY Maps</a>
+        <a href="#blocks">Blocks</a>
+      </nav>
+    </header>
+
+    <section class="band" id="sliders">
+      <div class="section-head">
+        <h2>Sliders</h2>
+        <span class="section-count">5 variants</span>
+      </div>
+      <div class="component-grid">
+        <article class="specimen" data-family="color">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">S1</span>
+              <strong>Inspector Range</strong>
+            </div>
+            <span class="readout" data-output-for="threshold">0.62</span>
+          </div>
+          <div class="field-stack" data-slider>
+            <div class="row">
+              <span class="label">Threshold</span>
+              <div class="mini-actions">
+                <button class="icon-button" type="button" title="Expose socket">
+                  <span class="dot-icon"></span>
+                </button>
+                <button class="icon-button" type="button" title="Keyframe">
+                  <span class="diamond-icon"></span>
+                </button>
+              </div>
+            </div>
+            <div class="slider-row">
+              <input data-range="threshold" type="range" min="0" max="1" step="0.01" value="0.62" />
+              <input data-number-for="threshold" type="number" min="0" max="1" step="0.01" value="0.62" />
+            </div>
+            <div class="texture-strip" aria-hidden="true"></div>
+          </div>
+        </article>
+
+        <article class="specimen" data-family="dither">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">S2</span>
+              <strong>Histogram Bounds</strong>
+            </div>
+            <span class="readout" data-dual-output>18 to 81</span>
+          </div>
+          <div class="field-stack">
+            <div class="histogram" aria-hidden="true">
+              <span style="--h: 18"></span><span style="--h: 30"></span><span style="--h: 42"></span><span style="--h: 54"></span>
+              <span style="--h: 63"></span><span style="--h: 72"></span><span style="--h: 81"></span><span style="--h: 92"></span>
+              <span style="--h: 80"></span><span style="--h: 68"></span><span style="--h: 61"></span><span style="--h: 52"></span>
+              <span style="--h: 48"></span><span style="--h: 58"></span><span style="--h: 76"></span><span style="--h: 88"></span>
+              <span style="--h: 96"></span><span style="--h: 86"></span><span style="--h: 70"></span><span style="--h: 55"></span>
+              <span style="--h: 44"></span><span style="--h: 36"></span><span style="--h: 30"></span><span style="--h: 25"></span>
+              <span style="--h: 18"></span><span style="--h: 15"></span><span style="--h: 12"></span><span style="--h: 10"></span>
+            </div>
+            <div class="dual-slider" data-dual-slider>
+              <input data-dual-low type="range" min="0" max="100" step="1" value="18" aria-label="Low bound" />
+              <input data-dual-high type="range" min="0" max="100" step="1" value="81" aria-label="High bound" />
+            </div>
+            <div class="row">
+              <span class="tiny">Black point</span>
+              <span class="tiny">White point</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="specimen" data-family="effect">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">S3</span>
+              <strong>Channel Faders</strong>
+            </div>
+            <span class="readout">Mix</span>
+          </div>
+          <div class="fader-bank">
+            <label class="fader" style="--family: var(--red)">
+              <input data-fader type="range" min="0" max="100" value="72" />
+              <b>R</b>
+              <span>72</span>
+            </label>
+            <label class="fader" style="--family: var(--green)">
+              <input data-fader type="range" min="0" max="100" value="58" />
+              <b>G</b>
+              <span>58</span>
+            </label>
+            <label class="fader" style="--family: var(--blue)">
+              <input data-fader type="range" min="0" max="100" value="44" />
+              <b>B</b>
+              <span>44</span>
+            </label>
+            <label class="fader" style="--family: var(--amber)">
+              <input data-fader type="range" min="0" max="100" value="63" />
+              <b>A</b>
+              <span>63</span>
+            </label>
+            <label class="fader" style="--family: var(--violet)">
+              <input data-fader type="range" min="0" max="100" value="35" />
+              <b>N</b>
+              <span>35</span>
+            </label>
+          </div>
+        </article>
+
+        <article class="specimen" data-family="process">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">S4</span>
+              <strong>Stepped Density</strong>
+            </div>
+            <span class="readout" data-output-for="density">6</span>
+          </div>
+          <div class="step-slider" data-stepper>
+            <div class="row">
+              <span class="label">Pixel size</span>
+              <span class="tiny">Snap</span>
+            </div>
+            <input data-range="density" type="range" min="1" max="6" step="1" value="4" />
+            <div class="step-buttons">
+              <button type="button" data-step-value="1">1</button>
+              <button type="button" data-step-value="2">2</button>
+              <button type="button" data-step-value="3">3</button>
+              <button type="button" data-step-value="4">4</button>
+              <button type="button" data-step-value="5">5</button>
+              <button type="button" data-step-value="6">6</button>
+            </div>
+            <canvas class="block-preview" data-pixel-preview="mono" aria-hidden="true"></canvas>
+          </div>
+        </article>
+
+        <article class="specimen" data-family="compose">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">S5</span>
+              <strong>Arc Scrubber</strong>
+            </div>
+            <span class="readout" data-output-for="arc-gain">48</span>
+          </div>
+          <div class="arc-slider" data-arc-slider>
+            <div class="arc-face">
+              <svg viewBox="0 0 120 120" aria-hidden="true">
+                <path class="arc-bg" d="M 22 84 A 42 42 0 1 1 98 84" pathLength="100"></path>
+                <path class="arc-value" d="M 22 84 A 42 42 0 1 1 98 84" pathLength="100"></path>
+                <text class="arc-value-text" x="60" y="70" text-anchor="middle">48</text>
+              </svg>
+            </div>
+            <div class="field-stack">
+              <div class="row">
+                <span class="label">Gain</span>
+                <div class="mini-actions">
+                  <button class="icon-button" type="button" data-nudge="-1" title="Decrease">-</button>
+                  <button class="icon-button" type="button" data-nudge="1" title="Increase">+</button>
+                </div>
+              </div>
+              <input data-range="arc-gain" type="range" min="0" max="100" step="1" value="48" />
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="band" id="curves">
+      <div class="section-head">
+        <h2>Curve Editors</h2>
+        <span class="section-count">4 variants</span>
+      </div>
+      <div class="component-grid wide">
+        <article class="specimen" data-family="color">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">C1</span>
+              <strong>Master Luma</strong>
+            </div>
+            <span class="readout" data-curve-readout>50 / 50</span>
+          </div>
+          <div class="curve-canvas" data-curve-widget>
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+              <line class="curve-base" x1="0" y1="100" x2="100" y2="0"></line>
+              <g class="curve-series" style="--series-color: var(--cyan)">
+                <path class="curve-fill"></path>
+                <path class="curve-line"></path>
+                <circle class="curve-point" r="3.7" data-x="0" data-y="100" data-lock-x="1"></circle>
+                <circle class="curve-point" r="4.4" data-x="28" data-y="72"></circle>
+                <circle class="curve-point" r="4.4" data-x="58" data-y="32"></circle>
+                <circle class="curve-point" r="3.7" data-x="100" data-y="0" data-lock-x="1"></circle>
+              </g>
+            </svg>
+          </div>
+          <div class="curve-readouts">
+            <div class="meter-box">Input <b data-curve-x>0.58</b></div>
+            <div class="meter-box">Output <b data-curve-y>0.68</b></div>
+          </div>
+        </article>
+
+        <article class="specimen" data-family="effect">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">C2</span>
+              <strong>RGB Overlay</strong>
+            </div>
+            <span class="readout" data-curve-readout>RGB</span>
+          </div>
+          <div class="channel-row">
+            <button type="button" data-channel-toggle="red" aria-pressed="true" style="--channel: var(--red)">R</button>
+            <button type="button" data-channel-toggle="green" aria-pressed="true" style="--channel: var(--green)">G</button>
+            <button type="button" data-channel-toggle="blue" aria-pressed="true" style="--channel: var(--blue)">B</button>
+          </div>
+          <div class="curve-canvas" data-curve-widget>
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+              <line class="curve-base" x1="0" y1="100" x2="100" y2="0"></line>
+              <g class="curve-series" data-series="red" style="--series-color: var(--red)">
+                <path class="curve-line"></path>
+                <circle class="curve-point" r="3.4" data-x="0" data-y="100" data-lock-x="1"></circle>
+                <circle class="curve-point" r="4" data-x="38" data-y="62"></circle>
+                <circle class="curve-point" r="3.4" data-x="100" data-y="0" data-lock-x="1"></circle>
+              </g>
+              <g class="curve-series" data-series="green" style="--series-color: var(--green)">
+                <path class="curve-line"></path>
+                <circle class="curve-point" r="3.4" data-x="0" data-y="100" data-lock-x="1"></circle>
+                <circle class="curve-point" r="4" data-x="50" data-y="47"></circle>
+                <circle class="curve-point" r="3.4" data-x="100" data-y="0" data-lock-x="1"></circle>
+              </g>
+              <g class="curve-series" data-series="blue" style="--series-color: var(--blue)">
+                <path class="curve-line"></path>
+                <circle class="curve-point" r="3.4" data-x="0" data-y="100" data-lock-x="1"></circle>
+                <circle class="curve-point" r="4" data-x="62" data-y="38"></circle>
+                <circle class="curve-point" r="3.4" data-x="100" data-y="0" data-lock-x="1"></circle>
+              </g>
+            </svg>
+          </div>
+        </article>
+
+        <article class="specimen" data-family="compose">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">C3</span>
+              <strong>Automation Strip</strong>
+            </div>
+            <span class="readout" data-curve-readout>Envelope</span>
+          </div>
+          <div class="curve-canvas curve-wide" data-curve-widget>
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+              <line class="curve-base" x1="0" y1="50" x2="100" y2="50"></line>
+              <g class="curve-series" style="--series-color: var(--violet)">
+                <path class="curve-fill"></path>
+                <path class="curve-line"></path>
+                <circle class="curve-point" r="3.2" data-x="0" data-y="66" data-lock-x="1"></circle>
+                <circle class="curve-point" r="3.8" data-x="16" data-y="18"></circle>
+                <circle class="curve-point" r="3.8" data-x="34" data-y="76"></circle>
+                <circle class="curve-point" r="3.8" data-x="58" data-y="42"></circle>
+                <circle class="curve-point" r="3.8" data-x="78" data-y="24"></circle>
+                <circle class="curve-point" r="3.2" data-x="100" data-y="54" data-lock-x="1"></circle>
+              </g>
+            </svg>
+          </div>
+          <div class="curve-readouts">
+            <div class="meter-box">Time <b data-curve-x>0.78</b></div>
+            <div class="meter-box">Value <b data-curve-y>0.76</b></div>
+          </div>
+        </article>
+
+        <article class="specimen" data-family="process">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">C4</span>
+              <strong>Compact Transfer</strong>
+            </div>
+            <span class="readout" data-curve-readout>Soft clip</span>
+          </div>
+          <div class="curve-canvas curve-mini" data-curve-widget>
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+              <line class="curve-base" x1="0" y1="86" x2="100" y2="14"></line>
+              <g class="curve-series" style="--series-color: var(--green)">
+                <path class="curve-fill"></path>
+                <path class="curve-line"></path>
+                <circle class="curve-point" r="3.4" data-x="0" data-y="86" data-lock-x="1"></circle>
+                <circle class="curve-point" r="3.9" data-x="22" data-y="80"></circle>
+                <circle class="curve-point" r="3.9" data-x="50" data-y="50"></circle>
+                <circle class="curve-point" r="3.9" data-x="78" data-y="20"></circle>
+                <circle class="curve-point" r="3.4" data-x="100" data-y="14" data-lock-x="1"></circle>
+              </g>
+            </svg>
+          </div>
+          <div class="field-stack" style="margin-top: 10px;">
+            <div class="row" data-slider>
+              <span class="label">Knee</span>
+              <span class="readout" data-output-for="knee">0.42</span>
+            </div>
+            <input data-range="knee" type="range" min="0" max="1" step="0.01" value="0.42" />
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="band" id="xy">
+      <div class="section-head">
+        <h2>XY Maps</h2>
+        <span class="section-count">4 variants</span>
+      </div>
+      <div class="component-grid">
+        <article class="specimen" data-family="color">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">X1</span>
+              <strong>Anchor Picker</strong>
+            </div>
+            <span class="readout" data-xy-output>58 / 42</span>
+          </div>
+          <div class="xy-pad" data-xy-pad data-x="58" data-y="42">
+            <div class="xy-field xy-field--anchor"></div>
+            <span class="xy-axis-label y">Y</span>
+            <span class="xy-axis-label x">X</span>
+            <span class="xy-handle"></span>
+          </div>
+          <div class="xy-readouts">
+            <div class="meter-box">X <b data-xy-x>0.58</b></div>
+            <div class="meter-box">Y <b data-xy-y>0.42</b></div>
+          </div>
+        </article>
+
+        <article class="specimen" data-family="process">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">X2</span>
+              <strong>Vector Field</strong>
+            </div>
+            <span class="readout" data-xy-output>31 / 68</span>
+          </div>
+          <div class="xy-pad" data-xy-pad data-x="31" data-y="68">
+            <div class="xy-field xy-field--vectors"></div>
+            <span class="xy-axis-label y">Force</span>
+            <span class="xy-axis-label x">Angle</span>
+            <span class="xy-handle"></span>
+          </div>
+          <div class="xy-readouts">
+            <div class="meter-box">Angle <b data-xy-x>0.31</b></div>
+            <div class="meter-box">Force <b data-xy-y>0.68</b></div>
+          </div>
+        </article>
+
+        <article class="specimen" data-family="effect">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">X3</span>
+              <strong>Color Bias Map</strong>
+            </div>
+            <span class="readout" data-xy-output>64 / 57</span>
+          </div>
+          <div class="xy-pad" data-xy-pad data-x="64" data-y="57">
+            <div class="xy-field xy-field--color"></div>
+            <span class="xy-axis-label y">Warm</span>
+            <span class="xy-axis-label x">Tint</span>
+            <span class="xy-handle"></span>
+          </div>
+          <div class="xy-readouts">
+            <div class="meter-box">Tint <b data-xy-x>0.64</b></div>
+            <div class="meter-box">Warm <b data-xy-y>0.57</b></div>
+          </div>
+        </article>
+
+        <article class="specimen" data-family="dither">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">X4</span>
+              <strong>Block Matrix</strong>
+            </div>
+            <span class="readout" data-xy-output>4 / 6</span>
+          </div>
+          <div class="xy-pad" data-xy-pad data-x="42.86" data-y="71.43" data-snap="8">
+            <div class="xy-field xy-field--blocks" data-pixel-grid></div>
+            <span class="xy-axis-label y">Rows</span>
+            <span class="xy-axis-label x">Cols</span>
+            <span class="xy-handle"></span>
+          </div>
+          <div class="xy-readouts">
+            <div class="meter-box">Col <b data-xy-x>4</b></div>
+            <div class="meter-box">Row <b data-xy-y>6</b></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="band" id="blocks">
+      <div class="section-head">
+        <h2>Blocks</h2>
+        <span class="section-count">5 variants</span>
+      </div>
+      <div class="blocks-layout">
+        <div class="block-stack">
+          <article class="specimen" data-family="color">
+            <div class="specimen-head">
+              <div class="specimen-title">
+                <span class="index">B1</span>
+                <strong>Node Cards</strong>
+              </div>
+              <span class="readout">Full</span>
+            </div>
+            <div class="block-stack">
+              <div class="node-block is-selected" data-selectable-block data-family="color" tabindex="0">
+                <div class="node-head">
+                  <div>
+                    <div class="node-name">RGB Curves</div>
+                    <div class="node-family">Color</div>
+                  </div>
+                  <div class="mini-actions">
+                    <button class="icon-button" type="button" title="Animated">
+                      <span class="wave-icon"></span>
+                    </button>
+                    <button class="icon-button" type="button" title="Bypass">x</button>
+                  </div>
+                </div>
+                <div class="socket-row">
+                  <span class="socket-dot"></span>
+                  <span>image</span>
+                  <span class="node-row-value">image</span>
+                </div>
+                <div class="socket-row">
+                  <span class="socket-dot"></span>
+                  <span>curve.r</span>
+                  <span class="node-row-value">0.68</span>
+                </div>
+                <div class="socket-row">
+                  <span class="socket-dot"></span>
+                  <span>curve.g</span>
+                  <span class="node-row-value">0.51</span>
+                </div>
+              </div>
+
+              <div class="node-block" data-selectable-block data-family="effect" tabindex="0">
+                <div class="node-head">
+                  <div>
+                    <div class="node-name">Chromatic Aberration</div>
+                    <div class="node-family">Effect</div>
+                  </div>
+                  <span class="readout">2.4px</span>
+                </div>
+                <canvas class="block-preview" data-pixel-preview="rgb" aria-hidden="true"></canvas>
+                <div class="socket-row">
+                  <span class="socket-dot"></span>
+                  <span>image</span>
+                  <span class="socket-dot out"></span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="block-stack">
+          <article class="specimen" data-family="process">
+            <div class="specimen-head">
+              <div class="specimen-title">
+                <span class="index">B2</span>
+                <strong>Compact Rows</strong>
+              </div>
+              <span class="readout">Stack</span>
+            </div>
+            <div class="block-stack">
+              <div class="node-block compact" data-selectable-block data-family="process" tabindex="0">
+                <span class="block-icon">PX</span>
+                <div>
+                  <div class="node-name">Pixelate</div>
+                  <div class="node-family">Process</div>
+                </div>
+                <span class="readout">8</span>
+              </div>
+              <div class="node-block compact is-selected" data-selectable-block data-family="dither" tabindex="0">
+                <span class="block-icon">DT</span>
+                <div>
+                  <div class="node-name">Pattern Dither</div>
+                  <div class="node-family">Dither</div>
+                </div>
+                <span class="readout">Bayer</span>
+              </div>
+              <div class="node-block compact" data-selectable-block data-family="compose" tabindex="0">
+                <span class="block-icon">MX</span>
+                <div>
+                  <div class="node-name">Mix</div>
+                  <div class="node-family">Compose</div>
+                </div>
+                <span class="readout">0.72</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="specimen" data-family="dither">
+            <div class="specimen-head">
+              <div class="specimen-title">
+                <span class="index">B3</span>
+                <strong>Palette Blocks</strong>
+              </div>
+              <span class="readout">Insert</span>
+            </div>
+            <div class="palette-grid">
+              <button class="palette-chip is-selected" type="button" style="--chip: var(--cyan)">RGB Curves</button>
+              <button class="palette-chip" type="button" style="--chip: var(--green)">Pixelate</button>
+              <button class="palette-chip" type="button" style="--chip: var(--pink)">Dither</button>
+              <button class="palette-chip" type="button" style="--chip: var(--amber)">Glow</button>
+              <button class="palette-chip" type="button" style="--chip: var(--violet)">Mix</button>
+              <button class="palette-chip" type="button" style="--chip: var(--blue)">Viewer</button>
+            </div>
+          </article>
+        </div>
+
+        <div class="block-stack">
+          <article class="specimen" data-family="compose">
+            <div class="specimen-head">
+              <div class="specimen-title">
+                <span class="index">B4</span>
+                <strong>Macro Block</strong>
+              </div>
+              <span class="readout">Group</span>
+            </div>
+            <div class="node-block is-selected" data-selectable-block data-family="compose" tabindex="0">
+              <div class="node-head">
+                <div>
+                  <div class="node-name">Print Prep Macro</div>
+                  <div class="node-family">4 nodes</div>
+                </div>
+                <span class="readout">Live</span>
+              </div>
+              <div class="macro-chain">
+                <div class="macro-step" style="--step: var(--green)">
+                  <span>Pixelate</span>
+                  <span>6</span>
+                </div>
+                <div class="macro-step" style="--step: var(--cyan)">
+                  <span>Tone Map</span>
+                  <span>0.42</span>
+                </div>
+                <div class="macro-step" style="--step: var(--pink)">
+                  <span>Pattern Dither</span>
+                  <span>8x8</span>
+                </div>
+                <div class="macro-step" style="--step: var(--amber)">
+                  <span>Halation</span>
+                  <span>0.18</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="specimen" data-family="effect">
+            <div class="specimen-head">
+              <div class="specimen-title">
+                <span class="index">B5</span>
+                <strong>Inspector Block</strong>
+              </div>
+              <span class="readout">Params</span>
+            </div>
+            <div class="node-block" data-selectable-block data-family="effect" tabindex="0">
+              <div class="node-head">
+                <div>
+                  <div class="node-name">Lens Distortion</div>
+                  <div class="node-family">Effect</div>
+                </div>
+                <button class="icon-button" type="button" title="Expose socket">
+                  <span class="dot-icon"></span>
+                </button>
+              </div>
+              <div class="parameter-list">
+                <div class="parameter-line">
+                  <span class="label">Amount</span>
+                  <span class="micro-slider" style="--value: 62%"></span>
+                  <span class="readout">0.62</span>
+                </div>
+                <div class="parameter-line">
+                  <span class="label">Zoom</span>
+                  <span class="micro-slider" style="--value: 35%"></span>
+                  <span class="readout">0.35</span>
+                </div>
+                <div class="parameter-line">
+                  <span class="label">Center X</span>
+                  <span class="micro-slider" style="--value: 54%"></span>
+                  <span class="readout">0.54</span>
+                </div>
+                <div class="parameter-line">
+                  <span class="label">Center Y</span>
+                  <span class="micro-slider" style="--value: 46%"></span>
+                  <span class="readout">0.46</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <article class="specimen" data-family="compose">
+          <div class="specimen-head">
+            <div class="specimen-title">
+              <span class="index">B6</span>
+              <strong>Canvas Cluster</strong>
+            </div>
+            <span class="readout">Graph</span>
+          </div>
+          <div class="graph-preview">
+            <svg viewBox="0 0 520 260" preserveAspectRatio="none" aria-hidden="true">
+              <path d="M 150 82 C 230 82, 214 154, 260 154"></path>
+              <path d="M 340 154 C 400 154, 382 92, 448 92"></path>
+            </svg>
+            <div class="node-block compact is-selected" data-selectable-block data-family="color" tabindex="0">
+              <span class="block-icon">IN</span>
+              <div>
+                <div class="node-name">Source</div>
+                <div class="node-family">Input</div>
+              </div>
+              <span class="socket-dot out"></span>
+            </div>
+            <div class="node-block compact" data-selectable-block data-family="dither" tabindex="0">
+              <span class="block-icon">DT</span>
+              <div>
+                <div class="node-name">Dither</div>
+                <div class="node-family">Process</div>
+              </div>
+              <span class="socket-dot out"></span>
+            </div>
+            <div class="node-block compact" data-selectable-block data-family="compose" tabindex="0">
+              <span class="block-icon">VO</span>
+              <div>
+                <div class="node-name">Viewer Output</div>
+                <div class="node-family">Output</div>
+              </div>
+              <span class="readout">Fit</span>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+    const fmt = (value, digits = 2) => Number(value).toFixed(digits);
+
+    function rangePct(input) {
+      const min = Number(input.min || 0);
+      const max = Number(input.max || 100);
+      return ((Number(input.value) - min) / (max - min)) * 100;
+    }
+
+    function renderRange(input) {
+      input.style.setProperty("--pct", `${rangePct(input)}%`);
+      const key = input.dataset.range;
+      if (!key) return;
+
+      const output = document.querySelector(`[data-output-for="${key}"]`);
+      if (output) {
+        const isInteger = Number(input.step || 1) >= 1;
+        output.textContent = isInteger ? String(Math.round(Number(input.value))) : fmt(input.value);
+      }
+
+      const number = document.querySelector(`[data-number-for="${key}"]`);
+      if (number && document.activeElement !== number) {
+        number.value = input.value;
+      }
+    }
+
+    document.querySelectorAll('input[type="range"]').forEach((input) => {
+      renderRange(input);
+      input.addEventListener("input", () => renderRange(input));
+    });
+
+    document.querySelectorAll("[data-number-for]").forEach((number) => {
+      number.addEventListener("input", () => {
+        const input = document.querySelector(`[data-range="${number.dataset.numberFor}"]`);
+        if (!input) return;
+        const min = Number(input.min || 0);
+        const max = Number(input.max || 100);
+        input.value = clamp(Number(number.value), min, max);
+        renderRange(input);
+      });
+    });
+
+    document.querySelectorAll("[data-dual-slider]").forEach((dual) => {
+      const low = dual.querySelector("[data-dual-low]");
+      const high = dual.querySelector("[data-dual-high]");
+      const output = dual.closest(".specimen")?.querySelector("[data-dual-output]");
+
+      const render = (changed) => {
+        let lo = Number(low.value);
+        let hi = Number(high.value);
+        if (lo > hi - 2) {
+          if (changed === low) lo = hi - 2;
+          if (changed === high) hi = lo + 2;
+        }
+        low.value = clamp(lo, Number(low.min), Number(low.max));
+        high.value = clamp(hi, Number(high.min), Number(high.max));
+        dual.style.setProperty("--lo", `${rangePct(low)}%`);
+        dual.style.setProperty("--hi", `${rangePct(high)}%`);
+        if (output) output.textContent = `${Math.round(low.value)} to ${Math.round(high.value)}`;
+      };
+
+      low.addEventListener("input", () => render(low));
+      high.addEventListener("input", () => render(high));
+      render();
+    });
+
+    document.querySelectorAll("[data-fader]").forEach((input) => {
+      const value = input.closest(".fader")?.querySelector("span");
+      const update = () => {
+        renderRange(input);
+        if (value) value.textContent = Math.round(Number(input.value));
+      };
+      input.addEventListener("input", update);
+      update();
+    });
+
+    document.querySelectorAll("[data-stepper]").forEach((stepper) => {
+      const input = stepper.querySelector("[data-range]");
+      const buttons = [...stepper.querySelectorAll("[data-step-value]")];
+      const render = () => {
+        renderRange(input);
+        buttons.forEach((button) => {
+          button.classList.toggle("is-active", Number(button.dataset.stepValue) === Number(input.value));
+        });
+      };
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          input.value = button.dataset.stepValue;
+          render();
+        });
+      });
+      input.addEventListener("input", render);
+      render();
+    });
+
+    document.querySelectorAll("[data-arc-slider]").forEach((arc) => {
+      const input = arc.querySelector("[data-range]");
+      const path = arc.querySelector(".arc-value");
+      const text = arc.querySelector(".arc-value-text");
+      const output = document.querySelector(`[data-output-for="${input.dataset.range}"]`);
+
+      const render = () => {
+        const pct = rangePct(input);
+        path.style.strokeDasharray = `${pct} 100`;
+        text.textContent = Math.round(input.value);
+        if (output) output.textContent = Math.round(input.value);
+        renderRange(input);
+      };
+
+      arc.querySelectorAll("[data-nudge]").forEach((button) => {
+        button.addEventListener("click", () => {
+          input.value = clamp(
+            Number(input.value) + Number(button.dataset.nudge),
+            Number(input.min),
+            Number(input.max)
+          );
+          render();
+        });
+      });
+
+      input.addEventListener("input", render);
+      render();
+    });
+
+    function readCurvePoint(point) {
+      return {
+        el: point,
+        x: Number(point.dataset.x),
+        y: Number(point.dataset.y)
+      };
+    }
+
+    function smoothPath(points) {
+      if (!points.length) return "";
+      if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+
+      let d = `M ${points[0].x} ${points[0].y}`;
+      for (let i = 0; i < points.length - 1; i += 1) {
+        const p0 = points[i - 1] || points[i];
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const p3 = points[i + 2] || p2;
+        const c1x = p1.x + (p2.x - p0.x) / 6;
+        const c1y = p1.y + (p2.y - p0.y) / 6;
+        const c2x = p2.x - (p3.x - p1.x) / 6;
+        const c2y = p2.y - (p3.y - p1.y) / 6;
+        d += ` C ${c1x} ${c1y}, ${c2x} ${c2y}, ${p2.x} ${p2.y}`;
+      }
+      return d;
+    }
+
+    function renderCurveSeries(series) {
+      const points = [...series.querySelectorAll(".curve-point")].map(readCurvePoint);
+      points.forEach((point) => {
+        point.el.setAttribute("cx", point.x);
+        point.el.setAttribute("cy", point.y);
+      });
+
+      const path = smoothPath(points);
+      const line = series.querySelector(".curve-line");
+      const fill = series.querySelector(".curve-fill");
+      if (line) line.setAttribute("d", path);
+      if (fill && points.length > 1) {
+        const first = points[0];
+        const last = points[points.length - 1];
+        fill.setAttribute("d", `${path} L ${last.x} 100 L ${first.x} 100 Z`);
+      }
+    }
+
+    function updateCurveReadout(widget, point) {
+      if (!point) return;
+      const x = Number(point.dataset.x);
+      const y = 100 - Number(point.dataset.y);
+      const output = widget.closest(".specimen")?.querySelector("[data-curve-readout]");
+      const xOut = widget.closest(".specimen")?.querySelector("[data-curve-x]");
+      const yOut = widget.closest(".specimen")?.querySelector("[data-curve-y]");
+      if (output) output.textContent = `${Math.round(x)} / ${Math.round(y)}`;
+      if (xOut) xOut.textContent = fmt(x / 100);
+      if (yOut) yOut.textContent = fmt(y / 100);
+    }
+
+    document.querySelectorAll("[data-curve-widget]").forEach((widget) => {
+      const svg = widget.querySelector("svg");
+      let activePoint = null;
+
+      const renderAll = () => {
+        widget.querySelectorAll(".curve-series").forEach(renderCurveSeries);
+      };
+
+      svg.addEventListener("pointerdown", (event) => {
+        const point = event.target.closest(".curve-point");
+        if (!point) return;
+        activePoint = point;
+        activePoint.classList.add("is-dragging");
+        svg.setPointerCapture(event.pointerId);
+        updateCurveReadout(widget, activePoint);
+      });
+
+      svg.addEventListener("pointermove", (event) => {
+        if (!activePoint) return;
+        const rect = svg.getBoundingClientRect();
+        let x = ((event.clientX - rect.left) / rect.width) * 100;
+        let y = ((event.clientY - rect.top) / rect.height) * 100;
+        const points = [...activePoint.closest(".curve-series").querySelectorAll(".curve-point")];
+        const index = points.indexOf(activePoint);
+        const prev = points[index - 1];
+        const next = points[index + 1];
+
+        if (activePoint.dataset.lockX) {
+          x = Number(activePoint.dataset.x);
+        } else {
+          if (prev) x = Math.max(x, Number(prev.dataset.x) + 2);
+          if (next) x = Math.min(x, Number(next.dataset.x) - 2);
+        }
+
+        activePoint.dataset.x = String(clamp(x, 0, 100));
+        activePoint.dataset.y = String(clamp(y, 0, 100));
+        renderCurveSeries(activePoint.closest(".curve-series"));
+        updateCurveReadout(widget, activePoint);
+      });
+
+      const stopDrag = () => {
+        if (!activePoint) return;
+        activePoint.classList.remove("is-dragging");
+        activePoint = null;
+      };
+
+      svg.addEventListener("pointerup", stopDrag);
+      svg.addEventListener("pointercancel", stopDrag);
+      renderAll();
+
+      const firstFreePoint = widget.querySelector(".curve-point:not([data-lock-x])");
+      updateCurveReadout(widget, firstFreePoint || widget.querySelector(".curve-point"));
+    });
+
+    document.querySelectorAll("[data-channel-toggle]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const specimen = button.closest(".specimen");
+        const series = specimen.querySelector(`[data-series="${button.dataset.channelToggle}"]`);
+        const pressed = button.getAttribute("aria-pressed") !== "true";
+        button.setAttribute("aria-pressed", String(pressed));
+        if (series) series.classList.toggle("is-hidden", !pressed);
+      });
+    });
+
+    function setXY(pad, x, y) {
+      const snap = Number(pad.dataset.snap || 0);
+      if (snap > 1) {
+        const step = 100 / (snap - 1);
+        x = Math.round(x / step) * step;
+        y = Math.round(y / step) * step;
+      }
+
+      x = clamp(x, 0, 100);
+      y = clamp(y, 0, 100);
+      pad.dataset.x = String(x);
+      pad.dataset.y = String(y);
+      pad.style.setProperty("--x-pos", `${x}%`);
+      pad.style.setProperty("--y-pos", `${y}%`);
+
+      const specimen = pad.closest(".specimen");
+      const output = specimen?.querySelector("[data-xy-output]");
+      const xOut = specimen?.querySelector("[data-xy-x]");
+      const yOut = specimen?.querySelector("[data-xy-y]");
+
+      if (snap > 1) {
+        const col = Math.round((x / 100) * (snap - 1)) + 1;
+        const row = Math.round((y / 100) * (snap - 1)) + 1;
+        if (output) output.textContent = `${col} / ${row}`;
+        if (xOut) xOut.textContent = String(col);
+        if (yOut) yOut.textContent = String(row);
+      } else {
+        if (output) output.textContent = `${Math.round(x)} / ${Math.round(y)}`;
+        if (xOut) xOut.textContent = fmt(x / 100);
+        if (yOut) yOut.textContent = fmt(y / 100);
+      }
+    }
+
+    document.querySelectorAll("[data-pixel-grid]").forEach((grid) => {
+      for (let i = 0; i < 64; i += 1) {
+        const cell = document.createElement("span");
+        cell.style.setProperty("--tone", `${18 + ((i * 13) % 58)}%`);
+        grid.appendChild(cell);
+      }
+    });
+
+    document.querySelectorAll("[data-xy-pad]").forEach((pad) => {
+      const move = (event) => {
+        const rect = pad.getBoundingClientRect();
+        const x = ((event.clientX - rect.left) / rect.width) * 100;
+        const y = 100 - ((event.clientY - rect.top) / rect.height) * 100;
+        setXY(pad, x, y);
+      };
+
+      pad.addEventListener("pointerdown", (event) => {
+        pad.setPointerCapture(event.pointerId);
+        move(event);
+      });
+
+      pad.addEventListener("pointermove", (event) => {
+        if (event.buttons !== 1) return;
+        move(event);
+      });
+
+      setXY(pad, Number(pad.dataset.x || 50), Number(pad.dataset.y || 50));
+    });
+
+    document.querySelectorAll("[data-selectable-block], .palette-chip").forEach((block) => {
+      const toggle = () => block.classList.toggle("is-selected");
+      block.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggle();
+      });
+      block.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        toggle();
+      });
+    });
+
+    function drawPixelPreview(canvas, mode) {
+      const scale = window.devicePixelRatio || 1;
+      const cssWidth = Math.max(1, canvas.clientWidth);
+      const cssHeight = Math.max(1, canvas.clientHeight);
+      canvas.width = Math.round(cssWidth * scale);
+      canvas.height = Math.round(cssHeight * scale);
+      const ctx = canvas.getContext("2d");
+      ctx.scale(scale, scale);
+      ctx.fillStyle = "#07080b";
+      ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+      const block = mode === "mono" ? 9 : 6;
+      for (let y = 0; y < cssHeight; y += block) {
+        for (let x = 0; x < cssWidth; x += block) {
+          const value = (x * 3 + y * 7) % 255;
+          if (mode === "rgb") {
+            ctx.fillStyle = `rgb(${value}, ${120 + (x % 90)}, ${210 - (y % 120)})`;
+          } else {
+            ctx.fillStyle = value > 125 ? "#f1f3f7" : "#161a21";
+          }
+          ctx.fillRect(x, y, block - 1, block - 1);
+        }
+      }
+    }
+
+    function renderPixelPreviews() {
+      document.querySelectorAll("[data-pixel-preview]").forEach((canvas) => {
+        drawPixelPreview(canvas, canvas.dataset.pixelPreview);
+      });
+    }
+
+    renderPixelPreviews();
+    window.addEventListener("resize", renderPixelPreviews);
+  </script>
+</body>
+
+</html>

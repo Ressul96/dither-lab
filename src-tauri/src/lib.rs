@@ -1,6 +1,7 @@
 pub mod engine;
 
 use engine::frame::native_render_graph;
+use engine::gpu::GpuRenderState;
 use engine::video_export::{
     ffmpeg_cancel_encode, ffmpeg_check_available, ffmpeg_finish_encode, ffmpeg_start_encode,
     ffmpeg_write_frame, VideoExportState,
@@ -16,6 +17,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .manage(VideoExportState::new())
+        .manage(GpuRenderState::new())
         .setup(|app| {
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;

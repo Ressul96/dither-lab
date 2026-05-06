@@ -27,6 +27,73 @@ Language rules:
 - Code comments are English-only
 - Commit messages are English-only
 
+## AI Working Guidelines
+
+These behavioral guidelines are meant to reduce common LLM coding mistakes. Merge them with the
+project-specific instructions above and below as needed.
+
+Tradeoff: these guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+### Think Before Coding
+
+Do not assume, do not hide confusion, and surface tradeoffs.
+
+Before implementing:
+- State assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them instead of choosing silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop, name what is confusing, and ask.
+
+### Simplicity First
+
+Write the minimum code that solves the problem. Do not add speculative work.
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No flexibility or configurability that was not requested.
+- No error handling for impossible scenarios.
+- If 200 lines could be 50, rewrite it.
+
+Ask: would a senior engineer say this is overcomplicated? If yes, simplify.
+
+### Surgical Changes
+
+Touch only what is necessary. Clean up only your own mess.
+
+When editing existing code:
+- Do not improve adjacent code, comments, or formatting.
+- Do not refactor things that are not broken.
+- Match existing style, even if you would do it differently.
+- If unrelated dead code appears, mention it instead of deleting it.
+
+When your changes create orphans:
+- Remove imports, variables, and functions that your changes made unused.
+- Do not remove pre-existing dead code unless asked.
+
+Every changed line should trace directly to the user's request.
+
+### Goal-Driven Execution
+
+Define success criteria and loop until verified.
+
+Transform tasks into verifiable goals:
+- "Add validation" becomes "Write tests for invalid inputs, then make them pass."
+- "Fix the bug" becomes "Write a test that reproduces it, then make it pass."
+- "Refactor X" becomes "Ensure tests pass before and after."
+
+For multi-step tasks, state a brief plan:
+```text
+1. [Step] -> verify: [check]
+2. [Step] -> verify: [check]
+3. [Step] -> verify: [check]
+```
+
+Strong success criteria allow independent progress. Weak criteria like "make it work" require
+clarification.
+
+These guidelines are working if diffs contain fewer unnecessary changes, rewrites due to
+overcomplication decrease, and clarifying questions happen before implementation mistakes.
+
 ## Stack
 
 - Tauri 2.x with Rust shell/backend pieces

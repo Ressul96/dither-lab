@@ -1,6 +1,7 @@
 import { getState, dispatch, subscribe } from "../state.js";
 import { openExport } from "../export.js";
 import { clearSource, formatTime, openSource, samplePixel } from "../source.js";
+import { timeToFrame, timelineFrameRate } from "../timeline.js";
 
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 
@@ -309,7 +310,7 @@ function syncStagePresentation(stageCanvas, canvas, splitCanvas, splitOverlay, s
 
 function syncPreviewOverlay(previewOverlay, canvas) {
   if (!previewOverlay) return;
-  const { source, playback, view } = getState();
+  const { source, playback, view, timeline } = getState();
   const set = (key, value) => {
     const el = previewOverlay.querySelector(`[data-preview-status="${key}"]`);
     if (el) el.textContent = value;
@@ -322,6 +323,7 @@ function syncPreviewOverlay(previewOverlay, canvas) {
 
   const quality = (view.playbackQuality ?? "auto") === "full" ? "FX Full" : "FX Auto";
   set("quality", quality);
+  set("backend", renderBackendLabel(view.renderBackend));
 
   let zoomLabel = "Fit";
   if (view.fit && canvas?.width) {
@@ -333,9 +335,25 @@ function syncPreviewOverlay(previewOverlay, canvas) {
   }
   set("zoom", zoomLabel);
 
-  const fps = Math.max(1, Math.round(Number(source.fps || source.sourceFps || 30)));
-  const frame = source.loaded ? Math.max(0, Math.round((playback.currentTime || 0) * fps)) : 0;
+  // Reuse the timeline frame grid so the F# readout matches the scrubber and
+  // animation lane (they all snap on timelineFrameRate).
+  const fps = timelineFrameRate(timeline, source.fps || source.sourceFps || 30);
+  const frame = source.loaded ? timeToFrame(playback.currentTime || 0, fps) : 0;
   set("time", `${formatTime(playback.currentTime || 0)} · F${frame}`);
+}
+
+function renderBackendLabel(status) {
+  switch (status) {
+    case "native":
+      return "Native GPU";
+    case "native-pending":
+      return "Native...";
+    case "native-disabled":
+      return "JS fallback";
+    case "js":
+    default:
+      return "JS";
+  }
 }
 
 function syncQualityToggle(qualityToggle) {

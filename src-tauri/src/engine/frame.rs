@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
+use tauri::State;
+
+use super::gpu::GpuRenderState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,23 +49,25 @@ pub struct NativeRenderResponse {
 }
 
 #[derive(Debug, Clone)]
-struct FrameBuffer {
-    width: usize,
-    height: usize,
-    pixels: Vec<u8>,
+pub(crate) struct FrameBuffer {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) pixels: Vec<u8>,
 }
 
 #[tauri::command]
 pub fn native_render_graph(
     request: NativeRenderRequest,
     pixels: Vec<u8>,
+    gpu_state: State<'_, GpuRenderState>,
 ) -> Result<NativeRenderResponse, String> {
-    render_graph(request, pixels).map_err(|error| error.to_string())
+    render_graph(request, pixels, &gpu_state).map_err(|error| error.to_string())
 }
 
 fn render_graph(
     request: NativeRenderRequest,
     pixels: Vec<u8>,
+    gpu_state: &GpuRenderState,
 ) -> Result<NativeRenderResponse, RenderError> {
     let source = FrameBuffer::new(request.width, request.height, pixels)?;
     let order = topological_sort(&request.nodes, &request.edges);
@@ -72,7 +77,7 @@ fn render_graph(
         let Some(node) = request.nodes.iter().find(|item| item.id == node_id) else {
             continue;
         };
-        let output = evaluate_node(node, &request.edges, &results, &source)?;
+        let output = evaluate_node(node, &request.edges, &results, &source, gpu_state)?;
         if let Some(frame) = output {
             results.insert(node.id.clone(), frame);
         }
@@ -99,13 +104,29 @@ fn evaluate_node(
     edges: &[NativeGraphEdge],
     results: &HashMap<String, FrameBuffer>,
     source: &FrameBuffer,
+    gpu_state: &GpuRenderState,
 ) -> Result<Option<FrameBuffer>, RenderError> {
     match node.node_type.as_str() {
         "source" => Ok(Some(source.clone())),
         "adjust" => Ok(resolve_input(node, "image", edges, results)
             .map(|input| apply_adjust(input, &node.params))),
+        "posterize" => Ok(resolve_input(node, "image", edges, results).map(|input| {
+            gpu_state
+                .apply_posterize(input, &node.params)
+                .unwrap_or_else(|_| apply_posterize(input, &node.params))
+        })),
         "blur" => Ok(resolve_input(node, "image", edges, results)
             .map(|input| apply_blur(input, param_f64(&node.params, "radius", 0.0)))),
+        "pixelate" => Ok(resolve_input(node, "image", edges, results).map(|input| {
+            gpu_state
+                .apply_pixelate(input, &node.params)
+                .unwrap_or_else(|_| apply_pixelate(input, &node.params))
+        })),
+        "threshold" => Ok(resolve_input(node, "image", edges, results).map(|input| {
+            gpu_state
+                .apply_threshold(input, &node.params)
+                .unwrap_or_else(|_| apply_threshold(input, &node.params))
+        })),
         "glow" => Ok(resolve_input(node, "image", edges, results)
             .map(|input| apply_glow(input, &node.params))),
         "distort" => Ok(resolve_input(node, "image", edges, results)
@@ -213,6 +234,79 @@ fn apply_adjust(input: &FrameBuffer, params: &Value) -> FrameBuffer {
     output
 }
 
+fn apply_posterize(input: &FrameBuffer, params: &Value) -> FrameBuffer {
+    let steps_r = clamp(param_f64(params, "steps", 8.0).round(), 2.0, 64.0);
+    let raw_g = param_f64(params, "stepsG", 0.0);
+    let raw_b = param_f64(params, "stepsB", 0.0);
+    let steps_g = if raw_g > 0.0 {
+        clamp(raw_g.round(), 2.0, 64.0)
+    } else {
+        steps_r
+    };
+    let steps_b = if raw_b > 0.0 {
+        clamp(raw_b.round(), 2.0, 64.0)
+    } else {
+        steps_r
+    };
+    let gamma = param_str(params, "gamma", "linear") == "srgb";
+    let luma_mode = param_str(params, "lumaMode", "rgb") == "luma";
+    let opacity = clamp(param_f64(params, "opacity", 100.0) / 100.0, 0.0, 1.0);
+    if opacity <= 0.0 {
+        return input.clone();
+    }
+
+    let level_r = steps_r - 1.0;
+    let level_g = steps_g - 1.0;
+    let level_b = steps_b - 1.0;
+    let mut output = input.clone();
+    for pixel in output.pixels.chunks_exact_mut(4) {
+        let src_r = pixel[0] as f64 / 255.0;
+        let src_g = pixel[1] as f64 / 255.0;
+        let src_b = pixel[2] as f64 / 255.0;
+        let work_r = if gamma { to_linear(src_r) } else { src_r };
+        let work_g = if gamma { to_linear(src_g) } else { src_g };
+        let work_b = if gamma { to_linear(src_b) } else { src_b };
+
+        let (out_r, out_g, out_b) = if luma_mode {
+            let luma = work_r * 0.299 + work_g * 0.587 + work_b * 0.114;
+            let quantized_luma = (luma * level_r + 0.5).floor() / level_r;
+            (
+                quantized_luma + (work_r - luma),
+                quantized_luma + (work_g - luma),
+                quantized_luma + (work_b - luma),
+            )
+        } else {
+            (
+                (clamp01(work_r) * level_r + 0.5).floor() / level_r,
+                (clamp01(work_g) * level_g + 0.5).floor() / level_g,
+                (clamp01(work_b) * level_b + 0.5).floor() / level_b,
+            )
+        };
+
+        let final_r = if gamma {
+            to_srgb(clamp01(out_r))
+        } else {
+            clamp01(out_r)
+        };
+        let final_g = if gamma {
+            to_srgb(clamp01(out_g))
+        } else {
+            clamp01(out_g)
+        };
+        let final_b = if gamma {
+            to_srgb(clamp01(out_b))
+        } else {
+            clamp01(out_b)
+        };
+        pixel[0] = to_u8(mix(src_r * 255.0, final_r * 255.0, opacity));
+        pixel[1] = to_u8(mix(src_g * 255.0, final_g * 255.0, opacity));
+        pixel[2] = to_u8(mix(src_b * 255.0, final_b * 255.0, opacity));
+        pixel[3] = 255;
+    }
+
+    output
+}
+
 fn apply_blur(input: &FrameBuffer, radius: f64) -> FrameBuffer {
     let radius = radius.round().max(0.0) as usize;
     if radius == 0 {
@@ -221,6 +315,119 @@ fn apply_blur(input: &FrameBuffer, radius: f64) -> FrameBuffer {
 
     let first = box_blur(input, radius);
     box_blur(&first, radius)
+}
+
+fn apply_threshold(input: &FrameBuffer, params: &Value) -> FrameBuffer {
+    let threshold = clamp(param_f64(params, "threshold", 50.0) / 100.0, 0.0, 1.0);
+    let softness = clamp(param_f64(params, "softness", 0.0) / 100.0, 0.0, 0.5);
+    let channel = param_str(params, "channel", "luma");
+    let invert = param_str(params, "invert", "off") == "on";
+    let source_mode = param_str(params, "mode", "bw") == "source";
+    let opacity = clamp(param_f64(params, "opacity", 100.0) / 100.0, 0.0, 1.0);
+    if opacity <= 0.0 {
+        return input.clone();
+    }
+
+    let low = (threshold - softness).max(0.0);
+    let high = threshold + softness + 0.001;
+    let mut output = input.clone();
+
+    for pixel in output.pixels.chunks_exact_mut(4) {
+        let src_r = pixel[0] as f64;
+        let src_g = pixel[1] as f64;
+        let src_b = pixel[2] as f64;
+        let value = threshold_channel_value(src_r / 255.0, src_g / 255.0, src_b / 255.0, channel);
+        let mut mask = smoothstep(low, high, value);
+        if invert {
+            mask = 1.0 - mask;
+        }
+
+        let out_r = if source_mode {
+            src_r * mask
+        } else {
+            mask * 255.0
+        };
+        let out_g = if source_mode {
+            src_g * mask
+        } else {
+            mask * 255.0
+        };
+        let out_b = if source_mode {
+            src_b * mask
+        } else {
+            mask * 255.0
+        };
+        pixel[0] = to_u8(mix(src_r, out_r, opacity));
+        pixel[1] = to_u8(mix(src_g, out_g, opacity));
+        pixel[2] = to_u8(mix(src_b, out_b, opacity));
+        pixel[3] = 255;
+    }
+
+    output
+}
+
+fn apply_pixelate(input: &FrameBuffer, params: &Value) -> FrameBuffer {
+    let size_x = clamp(param_f64(params, "size", 8.0).round(), 1.0, 256.0);
+    let raw_y = param_f64(params, "sizeY", 0.0);
+    let size_y = if raw_y > 0.0 {
+        clamp(raw_y.round(), 1.0, 256.0)
+    } else {
+        size_x
+    };
+    if size_x <= 1.0 && size_y <= 1.0 {
+        return input.clone();
+    }
+
+    let shape = param_str(params, "shape", "square");
+    let smoothing = clamp(param_f64(params, "smoothing", 0.0) / 100.0, 0.0, 1.0);
+    let opacity = clamp(param_f64(params, "opacity", 100.0) / 100.0, 0.0, 1.0);
+    if opacity <= 0.0 {
+        return input.clone();
+    }
+
+    let mut output = input.blank();
+    let width = input.width as f64;
+    let height = input.height as f64;
+
+    for y in 0..input.height {
+        for x in 0..input.width {
+            let pixel_x = x as f64 + 0.5;
+            let pixel_y = y as f64 + 0.5;
+            let cell_x = (pixel_x / size_x).floor();
+            let cell_y = (pixel_y / size_y).floor();
+            let center_u = ((cell_x + 0.5) * size_x) / width;
+            let center_v = ((cell_y + 0.5) * size_y) / height;
+            let mut cell_color = sample_bilinear(input, center_u, center_v);
+
+            let local_x = (pixel_x - cell_x * size_x) / size_x;
+            let local_y = (pixel_y - cell_y * size_y) / size_y;
+            if shape == "circle" {
+                let dist = ((local_x - 0.5) * 2.0).hypot((local_y - 0.5) * 2.0);
+                let aa = (smoothing * 0.6 + 0.05).max(0.05);
+                let mask = 1.0 - smoothstep(1.0 - aa, 1.0, dist);
+                cell_color[0] *= mask;
+                cell_color[1] *= mask;
+                cell_color[2] *= mask;
+            } else if smoothing > 0.001 {
+                let min_edge = local_x.min(1.0 - local_x).min(local_y).min(1.0 - local_y);
+                let edge_mask = smoothstep(0.0, smoothing * 0.5 + 0.001, min_edge);
+                let mask = 0.6 + edge_mask * 0.4;
+                cell_color[0] *= mask;
+                cell_color[1] *= mask;
+                cell_color[2] *= mask;
+            }
+
+            let index = (y * input.width + x) * 4;
+            output.pixels[index] = to_u8(mix(input.pixels[index] as f64, cell_color[0], opacity));
+            output.pixels[index + 1] =
+                to_u8(mix(input.pixels[index + 1] as f64, cell_color[1], opacity));
+            output.pixels[index + 2] =
+                to_u8(mix(input.pixels[index + 2] as f64, cell_color[2], opacity));
+            output.pixels[index + 3] = 255;
+        }
+    }
+
+    output
 }
 
 fn box_blur(input: &FrameBuffer, radius: usize) -> FrameBuffer {
@@ -434,6 +641,64 @@ fn luminance8(r: u8, g: u8, b: u8) -> f64 {
     0.2126 * r as f64 + 0.7152 * g as f64 + 0.0722 * b as f64
 }
 
+fn to_linear(value: f64) -> f64 {
+    value.powf(2.2)
+}
+
+fn to_srgb(value: f64) -> f64 {
+    value.powf(1.0 / 2.2)
+}
+
+fn threshold_channel_value(r: f64, g: f64, b: f64, channel: &str) -> f64 {
+    match channel {
+        "r" | "red" => r,
+        "g" | "green" => g,
+        "b" | "blue" => b,
+        "max" => r.max(g).max(b),
+        _ => 0.299 * r + 0.587 * g + 0.114 * b,
+    }
+}
+
+fn smoothstep(edge0: f64, edge1: f64, value: f64) -> f64 {
+    let t = clamp((value - edge0) / (edge1 - edge0), 0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn mix(a: f64, b: f64, amount: f64) -> f64 {
+    a * (1.0 - amount) + b * amount
+}
+
+fn sample_bilinear(input: &FrameBuffer, u: f64, v: f64) -> [f64; 3] {
+    let x = clamp(u, 0.0, 1.0) * input.width as f64 - 0.5;
+    let y = clamp(v, 0.0, 1.0) * input.height as f64 - 0.5;
+    let x0 = clamp(x.floor(), 0.0, (input.width - 1) as f64) as usize;
+    let y0 = clamp(y.floor(), 0.0, (input.height - 1) as f64) as usize;
+    let x1 = (x0 + 1).min(input.width - 1);
+    let y1 = (y0 + 1).min(input.height - 1);
+    let tx = clamp(x - x.floor(), 0.0, 1.0);
+    let ty = clamp(y - y.floor(), 0.0, 1.0);
+    let top = mix_rgb(sample_rgb(input, x0, y0), sample_rgb(input, x1, y0), tx);
+    let bottom = mix_rgb(sample_rgb(input, x0, y1), sample_rgb(input, x1, y1), tx);
+    mix_rgb(top, bottom, ty)
+}
+
+fn sample_rgb(input: &FrameBuffer, x: usize, y: usize) -> [f64; 3] {
+    let index = (y * input.width + x) * 4;
+    [
+        input.pixels[index] as f64,
+        input.pixels[index + 1] as f64,
+        input.pixels[index + 2] as f64,
+    ]
+}
+
+fn mix_rgb(a: [f64; 3], b: [f64; 3], amount: f64) -> [f64; 3] {
+    [
+        mix(a[0], b[0], amount),
+        mix(a[1], b[1], amount),
+        mix(a[2], b[2], amount),
+    ]
+}
+
 fn clamp(value: f64, min: f64, max: f64) -> f64 {
     value.max(min).min(max)
 }
@@ -506,5 +771,101 @@ impl RenderError {
 impl std::fmt::Display for RenderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn render_graph_runs_native_supported_effect_chain() {
+        let request = NativeRenderRequest {
+            width: 2,
+            height: 2,
+            nodes: vec![
+                node("source", "source", json!({})),
+                node(
+                    "pixelate",
+                    "pixelate",
+                    json!({
+                        "size": 1.0,
+                        "sizeY": 1.0,
+                        "shape": "square",
+                        "smoothing": 0.0,
+                        "opacity": 100.0
+                    }),
+                ),
+                node(
+                    "posterize",
+                    "posterize",
+                    json!({
+                        "steps": 2.0,
+                        "stepsG": 2.0,
+                        "stepsB": 2.0,
+                        "gamma": "linear",
+                        "lumaMode": "rgb",
+                        "opacity": 0.0
+                    }),
+                ),
+                node(
+                    "threshold",
+                    "threshold",
+                    json!({
+                        "threshold": 50.0,
+                        "softness": 0.0,
+                        "channel": "luma",
+                        "invert": "off",
+                        "mode": "bw",
+                        "opacity": 100.0
+                    }),
+                ),
+                node("viewer", "viewer-output", json!({})),
+            ],
+            edges: vec![
+                edge("source", "image", "pixelate", "image"),
+                edge("pixelate", "image", "posterize", "image"),
+                edge("posterize", "image", "threshold", "image"),
+                edge("threshold", "image", "viewer", "image"),
+            ],
+        };
+        let pixels = vec![
+            0, 0, 0, 255, //
+            255, 255, 255, 255, //
+            255, 0, 0, 255, //
+            0, 255, 0, 255,
+        ];
+
+        let response = render_graph(request, pixels, &GpuRenderState::new()).unwrap();
+
+        assert_eq!(response.viewer_output.width, 2);
+        assert_eq!(response.viewer_output.height, 2);
+        assert_eq!(
+            response.viewer_output.pixels,
+            vec![
+                0, 0, 0, 255, //
+                255, 255, 255, 255, //
+                0, 0, 0, 255, //
+                255, 255, 255, 255,
+            ]
+        );
+    }
+
+    fn node(id: &str, node_type: &str, params: Value) -> NativeGraphNode {
+        NativeGraphNode {
+            id: id.to_string(),
+            node_type: node_type.to_string(),
+            params,
+        }
+    }
+
+    fn edge(from_node: &str, from_socket: &str, to_node: &str, to_socket: &str) -> NativeGraphEdge {
+        NativeGraphEdge {
+            from_node: from_node.to_string(),
+            from_socket: from_socket.to_string(),
+            to_node: to_node.to_string(),
+            to_socket: to_socket.to_string(),
+        }
     }
 }

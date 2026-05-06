@@ -1,0 +1,45 @@
+# Dependencies and package caches
+node_modules/
+.pnpm-store/
+
+# Build output and generated artifacts
+dist/
+dist-ssr/
+build/
+target/
+src-tauri/target/
+src-tauri/gen/
+.dither-lab-cargo-target/
+
+# Rust/Cargo cache noise if it is ever moved back near the project
+debug/
+release/
+incremental/
+
+# Binary media and generated smoke artifacts
+Optical Flares Textures/
+smoke/test-source.mp4
+smoke/__pycache__/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.mp4
+*.mov
+*.ico
+*.icns
+
+# Logs, temp files, and OS/editor noise
+logs/
+*.log
+*.tmp
+*.ditherlab.tmp
+.DS_Store
+.claude/worktrees/
+.claude/settings.local.json
+.vscode/*
+!.vscode/extensions.json
+
+# VCS internals
+.git/

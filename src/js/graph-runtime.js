@@ -1,25 +1,39 @@
 import {
   applyAdjustNode,
+  applyAnalogNode,
+  applyAsciiNode,
+  applyBloomNode,
   applyBlurNode,
+  applyChromaticAberrationNode,
   applyCropNode,
+  applyCrtNode,
   applyDitherNode,
   applyDisplaceNode,
   applyFlipNode,
   applyGlareNode,
+  applyHalationNode,
+  applyHalftoneNode,
+  applyPatternDitherNode,
+  applyThresholdNode,
+  applyVhsNode,
   applyHsvNode,
   applyInvertNode,
   applyLensDistortNode,
+  applyMaskApplyNode,
+  applyMaskCombineNode,
   applyMixNode,
   applyPixelateNode,
   applyPosterizeNode,
   applyRgbCurvesNode,
   applyRgbToBwNode,
   applyScaleNode,
+  applySourceNode,
   applyToneMapNode,
   applyTransformNode,
   releaseBuffer,
 } from "./image-ops.js";
 import { getNodeParamBounds } from "./graph.js";
+import { applyTimelineToGraph } from "./timeline.js";
 
 // Per-node memoization. Each entry pins its output canvas — buffer pool must
 // not reclaim it until the cache invalidates (params/inputs/source change or
@@ -27,6 +41,12 @@ import { getNodeParamBounds } from "./graph.js";
 // re-evaluate the entire effect chain even when only one node actually moved.
 const nodeCache = new Map();
 let versionCounter = 0;
+
+// Node types whose output depends on the current playhead time even when no
+// param is animated (procedural noise, scrolling tracking lines, etc.). The
+// runtime salts the cache key with the current frame so they re-evaluate per
+// frame instead of returning a stale cached canvas.
+const TIME_AWARE_TYPES = new Set(["analog", "vhs", "crt"]);
 
 export function isOutputCached(canvas) {
   if (!canvas) return false;
@@ -64,7 +84,16 @@ export function pruneHiddenGraph(graph) {
 }
 
 export function evaluateGraphOutputs(graph, context) {
-  const scoped = pruneHiddenGraph(graph);
+  const timelineGraph = applyTimelineToGraph(
+    graph,
+    context?.timeline,
+    context?.timeSeconds ?? 0,
+    {
+      duration: context?.durationSeconds,
+      fps: context?.fps,
+    }
+  );
+  const scoped = pruneHiddenGraph(timelineGraph);
   if (!scoped?.nodes?.length) {
     return {
       viewerOutput: null,
@@ -85,9 +114,9 @@ export function evaluateGraphOutputs(graph, context) {
     reachableIds.add(node.id);
 
     if (node.type === "source") {
-      const output = context?.sourceImage ?? null;
+      const output = applySourceNode(context?.sourceImage ?? null, node.params);
       results.set(node.id, output);
-      versions.set(node.id, `source@${sourceVersion}`);
+      versions.set(node.id, `source@${sourceVersion};${hashParams(node.params)}`);
       continue;
     }
 
@@ -106,7 +135,10 @@ export function evaluateGraphOutputs(graph, context) {
     const paramVersions = paramSocketsFor(node).map((socket) =>
       inputVersionKey(node, index, versions, socket)
     );
-    const paramsHash = `${hashParams(effectiveParams)}bypass=${node.bypassed ? 1 : 0};`;
+    const timeSalt = TIME_AWARE_TYPES.has(node.type)
+      ? `;t=${frameSalt(context?.timeSeconds, context?.fps)}`
+      : "";
+    const paramsHash = `${hashParams(effectiveParams)}bypass=${node.bypassed ? 1 : 0}${timeSalt};`;
     const cached = nodeCache.get(node.id);
     if (
       cached &&
@@ -120,7 +152,7 @@ export function evaluateGraphOutputs(graph, context) {
       continue;
     }
 
-    const output = computeNodeOutput({ ...node, params: effectiveParams }, index, results);
+    const output = computeNodeOutput({ ...node, params: effectiveParams }, index, results, context);
     if (output !== null && output !== undefined) {
       // A node may pass its input through unchanged (blur radius=0, lens-
       // distort with no effect, etc.). Caching that buffer would mean the
@@ -220,6 +252,10 @@ function inputSocketsFor(node) {
       return ["image_a", "image_b"];
     case "displace":
       return ["image", "map"];
+    case "mask-combine":
+      return ["mask_a", "mask_b"];
+    case "mask-apply":
+      return ["image", "mask"];
     case "math":
       return ["a", "b"];
     case "value":
@@ -265,6 +301,14 @@ function inputVersionKey(node, index, versions, socket) {
   return `${edge.fromNode}:${upstreamVersion ?? "?"}`;
 }
 
+function frameSalt(timeSeconds, fps) {
+  const seconds = Number(timeSeconds);
+  const frameRate = Number(fps);
+  if (!Number.isFinite(seconds)) return "0";
+  if (!Number.isFinite(frameRate) || frameRate <= 0) return seconds.toFixed(4);
+  return String(Math.round(seconds * frameRate));
+}
+
 function hashParams(params) {
   if (!params || typeof params !== "object") return "";
   const keys = Object.keys(params).sort();
@@ -305,7 +349,7 @@ function releaseIntermediateBuffers(results, keep, context) {
   }
 }
 
-function computeNodeOutput(node, index, results) {
+function computeNodeOutput(node, index, results, context) {
   if (node.bypassed) return computeBypassOutput(node, index, results);
 
   switch (node.type) {
@@ -337,10 +381,42 @@ function computeNodeOutput(node, index, results) {
       return applyFlipNode(resolveInputImage(node, "image", index, results), node.params);
     case "dither":
       return applyDitherNode(resolveInputImage(node, "image", index, results), node.params);
+    case "pattern-dither":
+      return applyPatternDitherNode(resolveInputImage(node, "image", index, results), node.params);
+    case "threshold":
+      return applyThresholdNode(resolveInputImage(node, "image", index, results), node.params);
+    case "mask-combine":
+      return applyMaskCombineNode(
+        resolveInputImage(node, "mask_a", index, results),
+        resolveInputImage(node, "mask_b", index, results),
+        node.params
+      );
+    case "mask-apply":
+      return applyMaskApplyNode(
+        resolveInputImage(node, "image", index, results),
+        resolveInputImage(node, "mask", index, results),
+        node.params
+      );
     case "glare":
       return applyGlareNode(resolveInputImage(node, "image", index, results), node.params);
+    case "analog":
+      return applyAnalogNode(resolveInputImage(node, "image", index, results), node.params, context);
     case "lens-distort":
       return applyLensDistortNode(resolveInputImage(node, "image", index, results), node.params);
+    case "chromatic-aberration":
+      return applyChromaticAberrationNode(resolveInputImage(node, "image", index, results), node.params);
+    case "halftone":
+      return applyHalftoneNode(resolveInputImage(node, "image", index, results), node.params);
+    case "vhs":
+      return applyVhsNode(resolveInputImage(node, "image", index, results), node.params, context);
+    case "crt":
+      return applyCrtNode(resolveInputImage(node, "image", index, results), node.params, context);
+    case "bloom":
+      return applyBloomNode(resolveInputImage(node, "image", index, results), node.params);
+    case "halation":
+      return applyHalationNode(resolveInputImage(node, "image", index, results), node.params);
+    case "ascii":
+      return applyAsciiNode(resolveInputImage(node, "image", index, results), node.params);
     case "displace":
       return applyDisplaceNode(
         resolveInputImage(node, "image", index, results),
@@ -376,6 +452,10 @@ function computeBypassOutput(node, index, results) {
       return resolveInputValue(node, "a", index, results, node.params?.a ?? 0);
     case "mix":
       return resolveInputImage(node, "image_a", index, results);
+    case "mask-combine":
+      // Bypass returns A so downstream still sees a mask.
+      return resolveInputImage(node, "mask_a", index, results)
+        ?? resolveInputImage(node, "mask_b", index, results);
     case "displace":
     default:
       return resolveInputImage(node, "image", index, results) ?? resolveFirstConnectedInput(node, index, results);
@@ -406,8 +486,15 @@ function applyParamEdges(node, index, results) {
     return node.params;
   }
 
+  // Skip exposed entries whose key collides with an explicit input socket
+  // (e.g. math.a, math.b). The explicit socket already drives the value via
+  // resolveInputValue, and exposing it as `param:a` would create a duplicate
+  // pin upstream — the inspector already hides the toggle for these.
+  const explicitInputs = new Set((node.inputs ?? []).map((socket) => socket.name));
+
   let merged = null;
   for (const paramKey of node.exposedParams) {
+    if (explicitInputs.has(paramKey)) continue;
     const edge = index.inputEdgesBySocket.get(inputSocketKey(node.id, `param:${paramKey}`));
     if (!edge) continue;
     const value = results.get(edge.fromNode);

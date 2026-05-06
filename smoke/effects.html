@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Dither Lab Smoke - GPU Effects</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #101012;
+        color: #ddd;
+        font: 12px/1.4 system-ui, sans-serif;
+      }
+      h1 { margin: 0 0 4px; font-size: 15px; }
+      #summary { margin: 0 0 16px; color: #9aa; }
+      #summary.fail { color: #ff7777; }
+      #summary.ok { color: #80d080; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+      .case {
+        border: 1px solid #2a2a30;
+        border-radius: 8px;
+        padding: 10px;
+        background: #18181c;
+      }
+      .case h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; }
+      canvas {
+        width: 100%;
+        aspect-ratio: 3 / 2;
+        display: block;
+        background: #000;
+        image-rendering: pixelated;
+      }
+      .meta { display: block; margin-top: 6px; color: #889; font-size: 11px; }
+      .fail .meta { color: #ff7777; }
+    </style>
+  </head>
+  <body>
+    <h1>GPU Effects Smoke</h1>
+    <p id="summary">running...</p>
+    <div id="cases" class="grid"></div>
+
+    <script type="module">
+      import {
+        applyPixelateNode,
+        applyPosterizeNode,
+        applyThresholdNode,
+        releaseBuffer,
+      } from "../src/js/image-ops.js";
+
+      const WIDTH = 240;
+      const HEIGHT = 160;
+      const CASES = [
+        {
+          name: "Source asset",
+          run: (input) => input,
+          minDiff: 0,
+        },
+        {
+          name: "Pixelate square",
+          run: (input) => applyPixelateNode(input, { size: 12, sizeY: 0, shape: "square", smoothing: 0, opacity: 100 }),
+          minDiff: 3,
+        },
+        {
+          name: "Pixelate circle soft",
+          run: (input) => applyPixelateNode(input, { size: 16, sizeY: 10, shape: "circle", smoothing: 35, opacity: 100 }),
+          minDiff: 8,
+        },
+        {
+          name: "Posterize RGB linked",
+          run: (input) => applyPosterizeNode(input, { steps: 4, stepsG: 0, stepsB: 0, gamma: "linear", lumaMode: "rgb", opacity: 100 }),
+          minDiff: 2,
+        },
+        {
+          name: "Posterize luma sRGB",
+          run: (input) => applyPosterizeNode(input, { steps: 5, stepsG: 0, stepsB: 0, gamma: "srgb", lumaMode: "luma", opacity: 100 }),
+          minDiff: 2,
+        },
+        {
+          name: "Threshold luma BW",
+          run: (input) => applyThresholdNode(input, { threshold: 50, softness: 0, channel: "luma", invert: "off", mode: "bw", opacity: 100 }),
+          minDiff: 25,
+        },
+        {
+          name: "Threshold red source mask",
+          run: (input) => applyThresholdNode(input, { threshold: 45, softness: 15, channel: "r", invert: "off", mode: "source", opacity: 100 }),
+          minDiff: 5,
+        },
+      ];
+
+      function createCanvas(width = WIDTH, height = HEIGHT) {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        return canvas;
+      }
+
+      async function makeSource() {
+        const canvas = createCanvas();
+        const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
+        const gradient = ctx.createLinearGradient(0, 0, WIDTH, HEIGHT);
+        gradient.addColorStop(0, "#0b1020");
+        gradient.addColorStop(0.32, "#e03a3a");
+        gradient.addColorStop(0.62, "#35c871");
+        gradient.addColorStop(1, "#f4f0d8");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+        try {
+          const image = await loadImage("../Optical Flares Textures/Elements/Light_Complex.png");
+          ctx.globalAlpha = 0.72;
+          ctx.drawImage(image, 32, 0, 176, 160);
+          ctx.globalAlpha = 1;
+        } catch (error) {
+          console.warn("[effects-smoke] asset load failed; using synthetic source", error);
+        }
+
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(12, 12, 42, 28);
+        ctx.fillStyle = "#0014ff";
+        ctx.fillRect(58, 34, 42, 42);
+        ctx.fillStyle = "#ffd400";
+        ctx.fillRect(150, 104, 64, 28);
+        return canvas;
+      }
+
+      function loadImage(src) {
+        return new Promise((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => resolve(image);
+          image.onerror = reject;
+          image.src = src;
+        });
+      }
+
+      function drawCanvas(canvas, target) {
+        target.width = canvas.width;
+        target.height = canvas.height;
+        const ctx = target.getContext("2d", { alpha: false });
+        ctx.drawImage(canvas, 0, 0);
+      }
+
+      function meanAbsDiff(a, b) {
+        const dataA = a.getContext("2d", { alpha: false, willReadFrequently: true }).getImageData(0, 0, a.width, a.height).data;
+        const dataB = b.getContext("2d", { alpha: false, willReadFrequently: true }).getImageData(0, 0, b.width, b.height).data;
+        let sum = 0;
+        let count = 0;
+        for (let i = 0; i < dataA.length; i += 4) {
+          sum += Math.abs(dataA[i] - dataB[i]);
+          sum += Math.abs(dataA[i + 1] - dataB[i + 1]);
+          sum += Math.abs(dataA[i + 2] - dataB[i + 2]);
+          count += 3;
+        }
+        return sum / count;
+      }
+
+      async function main() {
+        const summary = document.getElementById("summary");
+        const grid = document.getElementById("cases");
+        const source = await makeSource();
+        const results = [];
+
+        for (const item of CASES) {
+          const card = document.createElement("section");
+          card.className = "case";
+          const title = document.createElement("h2");
+          title.textContent = item.name;
+          const canvas = createCanvas();
+          const meta = document.createElement("span");
+          meta.className = "meta";
+          card.append(title, canvas, meta);
+          grid.appendChild(card);
+
+          let output = null;
+          let diff = 0;
+          let ok = false;
+          try {
+            output = item.run(source);
+            ok = Boolean(output?.width === WIDTH && output?.height === HEIGHT);
+            if (ok) {
+              drawCanvas(output, canvas);
+              diff = meanAbsDiff(source, output);
+              ok = diff >= item.minDiff;
+            }
+            meta.textContent = `diff ${diff.toFixed(2)} / min ${item.minDiff}`;
+          } catch (error) {
+            meta.textContent = error.message;
+            console.error(`[effects-smoke] ${item.name}`, error);
+          } finally {
+            if (output && output !== source) releaseBuffer(output);
+          }
+
+          card.classList.toggle("fail", !ok);
+          results.push({ name: item.name, ok, diff });
+        }
+
+        const failed = results.filter((item) => !item.ok);
+        window.__effectsSmoke = { failed: failed.length, total: results.length, results };
+        summary.className = failed.length ? "fail" : "ok";
+        summary.textContent = failed.length
+          ? `FAIL - ${failed.length}/${results.length} cases failed`
+          : `OK - ${results.length} effect cases passed`;
+      }
+
+      main();
+    </script>
+  </body>
+</html>
