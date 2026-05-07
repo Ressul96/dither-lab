@@ -28,6 +28,25 @@ const NODE_DEFINITIONS = Object.freeze({
       invertChannels: "rgb",
     },
   },
+  "mesh-gradient": {
+    label: "Mesh Gradient",
+    family: "Input",
+    description: "Generates a procedural animated multi-color gradient for source-free grading and dither tests.",
+    inputs: [],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      colorA: "#ff0055",
+      colorB: "#00ff99",
+      colorC: "#0055ff",
+      colorD: "#ffcc00",
+      complexity: 50,
+      warp: 35,
+      speed: 25,
+      zoom: 100,
+      width: 1920,
+      height: 1080,
+    },
+  },
   adjust: {
     label: "Adjust",
     family: "Color",
@@ -581,42 +600,43 @@ const NODE_DEFINITIONS = Object.freeze({
 
 const TYPE_ORDER = {
   source: 0,
-  adjust: 1,
-  posterize: 2,
-  invert: 3,
-  "rgb-to-bw": 4,
-  "tone-map": 5,
-  levels: 6,
-  duotone: 7,
-  "gradient-map": 8,
-  hsv: 9,
-  "rgb-curves": 10,
-  blur: 11,
-  pixelate: 12,
-  scale: 13,
-  transform: 14,
-  crop: 15,
-  flip: 16,
-  dither: 17,
-  "pattern-dither": 18,
-  threshold: 19,
-  "mask-combine": 20,
-  "mask-apply": 21,
-  glare: 22,
-  "lens-distort": 23,
-  "chromatic-aberration": 24,
-  analog: 25,
-  vhs: 26,
-  crt: 27,
-  bloom: 28,
-  halation: 29,
-  ascii: 30,
-  halftone: 31,
-  displace: 32,
-  mix: 33,
-  value: 34,
-  math: 35,
-  "viewer-output": 36,
+  "mesh-gradient": 1,
+  adjust: 2,
+  posterize: 3,
+  invert: 4,
+  "rgb-to-bw": 5,
+  "tone-map": 6,
+  levels: 7,
+  duotone: 8,
+  "gradient-map": 9,
+  hsv: 10,
+  "rgb-curves": 11,
+  blur: 12,
+  pixelate: 13,
+  scale: 14,
+  transform: 15,
+  crop: 16,
+  flip: 17,
+  dither: 18,
+  "pattern-dither": 19,
+  threshold: 20,
+  "mask-combine": 21,
+  "mask-apply": 22,
+  glare: 23,
+  "lens-distort": 24,
+  "chromatic-aberration": 25,
+  analog: 26,
+  vhs: 27,
+  crt: 28,
+  bloom: 29,
+  halation: 30,
+  ascii: 31,
+  halftone: 32,
+  displace: 33,
+  mix: 34,
+  value: 35,
+  math: 36,
+  "viewer-output": 37,
 };
 
 const NODE_PARAM_BOUNDS = Object.freeze({
@@ -629,6 +649,14 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     hue: { min: -180, max: 180 },
     hsvSaturation: { min: 0, max: 400 },
     value: { min: 0, max: 400 },
+  },
+  "mesh-gradient": {
+    complexity: { min: 0, max: 100 },
+    warp: { min: 0, max: 100 },
+    speed: { min: 0, max: 100 },
+    zoom: { min: 25, max: 400 },
+    width: { min: 256, max: 4096 },
+    height: { min: 256, max: 4096 },
   },
   adjust: {
     brightness: { min: -100, max: 100 },
@@ -1095,7 +1123,36 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
   });
   const inputSocket = getPrimaryInputSocket(newNode);
   const outputSocket = newNode.outputs?.[0]?.name;
-  if (!inputSocket || !outputSocket) return null;
+  if (!outputSocket) return null;
+  if (!inputSocket) {
+    if (!socketsCompatible(newNode, outputSocket, toNode, edge.toSocket)) return null;
+
+    const nextEdges = graph.edges
+      .filter((item) => item.id !== edgeId)
+      .map((item) => ({ ...item }));
+
+    nextEdges.push({
+      id: createEdgeId(nodeId, outputSocket, edge.toNode, edge.toSocket),
+      fromNode: nodeId,
+      fromSocket: outputSocket,
+      toNode: edge.toNode,
+      toSocket: edge.toSocket,
+    });
+
+    const nextNodes = [...graph.nodes.map((node) => clone(node)), newNode];
+    if (isPrimaryChainEdge(edge, graph)) {
+      spacePrimaryChainAroundNode(nextNodes, nextEdges, edge.fromNode, nodeId, edge.toNode, {
+        preserveInserted: hasExplicitPosition,
+      });
+    }
+    dispatch("graph", {
+      nodes: nextNodes,
+      edges: nextEdges,
+      selectedNodeId: nodeId,
+    });
+
+    return nodeId;
+  }
   if (!socketsCompatible(fromNode, edge.fromSocket, newNode, inputSocket)) return null;
   if (!socketsCompatible(newNode, outputSocket, toNode, edge.toSocket)) return null;
 
@@ -1164,7 +1221,46 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
 
   const inputSocket = getPrimaryInputSocket(node);
   const outputSocket = getPrimaryOutputSocket(node);
-  if (!inputSocket || !outputSocket) return false;
+  if (!outputSocket) return false;
+  if (!inputSocket) {
+    if (!socketsCompatible(node, outputSocket, toNode, edge.toSocket)) return false;
+
+    const nextNodes = graph.nodes.map((item) => clone(item));
+    const inserted = nextNodes.find((item) => item.id === nodeId);
+    if (!inserted) return false;
+    if (options.position) {
+      inserted.x = options.position.x;
+      inserted.y = options.position.y;
+    }
+
+    const nextEdges = graph.edges
+      .filter((item) => item.id !== edgeId)
+      .filter((item) => !(item.fromNode === nodeId && item.fromSocket === outputSocket))
+      .map((item) => ({ ...item }));
+
+    if (wouldCreateCycle(nodeId, edge.toNode, nextEdges)) return false;
+    nextEdges.push({
+      id: createEdgeId(nodeId, outputSocket, edge.toNode, edge.toSocket),
+      fromNode: nodeId,
+      fromSocket: outputSocket,
+      toNode: edge.toNode,
+      toSocket: edge.toSocket,
+    });
+
+    if (isPrimaryChainEdge(edge, graph)) {
+      spacePrimaryChainAroundNode(nextNodes, nextEdges, edge.fromNode, nodeId, edge.toNode, {
+        preserveInserted: true,
+      });
+    }
+
+    dispatch("graph", {
+      nodes: nextNodes,
+      edges: nextEdges,
+      selectedNodeId: nodeId,
+    });
+
+    return true;
+  }
   if (!socketsCompatible(fromNode, edge.fromSocket, node, inputSocket)) return false;
   if (!socketsCompatible(node, outputSocket, toNode, edge.toSocket)) return false;
 
@@ -1658,6 +1754,12 @@ function normalizeNodeParams(type, defaultParams, incomingParams) {
     );
     delete incoming.shadowColor;
     delete incoming.highlightColor;
+  }
+  if (type === "mesh-gradient") {
+    incoming.colorA = normalizeHex(incoming.colorA, defaultParams.colorA);
+    incoming.colorB = normalizeHex(incoming.colorB, defaultParams.colorB);
+    incoming.colorC = normalizeHex(incoming.colorC, defaultParams.colorC);
+    incoming.colorD = normalizeHex(incoming.colorD, defaultParams.colorD);
   }
   return {
     ...clone(defaultParams),

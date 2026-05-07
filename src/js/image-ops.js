@@ -10,6 +10,7 @@ import {
   applyHalationGpu,
   applyHalftoneGpu,
   applyGradientMapGpu,
+  applyMeshGradientGpu,
   applyPatternDitherGpu,
   applyPixelateGpu,
   applyPosterizeGpu,
@@ -127,6 +128,56 @@ export function applySourceNode(input, params = {}) {
   }
 
   return output;
+}
+
+export function applyMeshGradientNode(params = {}, context = {}) {
+  const gpuOutput = applyMeshGradientGpu(params, context);
+  if (gpuOutput) return gpuOutput;
+  return applyMeshGradientCpu(params, context);
+}
+
+function applyMeshGradientCpu(params = {}, context = {}) {
+  const width = clamp(Math.round(Number(params.width ?? 1920)), 256, 4096);
+  const height = clamp(Math.round(Number(params.height ?? 1080)), 256, 4096);
+  const output = createBuffer(width, height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
+  if (!ctx) return null;
+
+  const colorA = params.colorA ?? "#ff0055";
+  const colorB = params.colorB ?? "#00ff99";
+  const colorC = params.colorC ?? "#0055ff";
+  const colorD = params.colorD ?? "#ffcc00";
+  const time = Number.isFinite(Number(context?.timeSeconds)) ? Number(context.timeSeconds) : 0;
+  const speed = clamp(Number(params.speed ?? 25) / 25, 0, 4);
+  const warp = clamp(Number(params.warp ?? 35) / 100, 0, 1);
+  const t = time * speed;
+
+  const base = ctx.createLinearGradient(0, 0, width, height);
+  base.addColorStop(0, colorA);
+  base.addColorStop(0.45, colorB);
+  base.addColorStop(0.72, colorC);
+  base.addColorStop(1, colorD);
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.globalCompositeOperation = "screen";
+  paintMeshBlob(ctx, width, height, colorB, 0.22 + Math.sin(t * 0.41) * 0.12, 0.25, 0.58 + warp * 0.2);
+  paintMeshBlob(ctx, width, height, colorC, 0.78, 0.3 + Math.cos(t * 0.33) * 0.12, 0.5 + warp * 0.22);
+  ctx.globalCompositeOperation = "multiply";
+  paintMeshBlob(ctx, width, height, colorD, 0.5 + Math.sin(t * 0.19) * 0.18, 0.78, 0.42 + warp * 0.16);
+  ctx.globalCompositeOperation = "source-over";
+  return output;
+}
+
+function paintMeshBlob(ctx, width, height, color, x, y, radius) {
+  const r = Math.max(width, height) * radius;
+  const cx = clamp(x, -0.2, 1.2) * width;
+  const cy = clamp(y, -0.2, 1.2) * height;
+  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  gradient.addColorStop(0, color);
+  gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
 }
 
 export function applyBlurNode(input, params) {

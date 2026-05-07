@@ -1176,6 +1176,10 @@ body.cutting-edges * {
   --node-family: var(--family-color);
 }
 
+.node-palette-group[data-node-family="input"] {
+  --node-family: var(--family-input);
+}
+
 .node-palette-group[data-node-family="process"] {
   --node-family: var(--family-process);
 }

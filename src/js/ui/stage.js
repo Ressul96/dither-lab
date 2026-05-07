@@ -316,9 +316,11 @@ function syncPreviewOverlay(previewOverlay, canvas) {
     if (el) el.textContent = value;
   };
 
-  const resolution = source.loaded && source.videoWidth && source.videoHeight
-    ? `${source.videoWidth} x ${source.videoHeight}`
-    : "No source";
+  const resolution = canvas?.width && canvas?.height
+    ? `${canvas.width} x ${canvas.height}`
+    : source.loaded && source.videoWidth && source.videoHeight
+      ? `${source.videoWidth} x ${source.videoHeight}`
+      : "No source";
   set("resolution", resolution);
 
   const quality = (view.playbackQuality ?? "auto") === "full" ? "FX Full" : "FX Auto";

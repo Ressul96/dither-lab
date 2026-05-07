@@ -24,6 +24,7 @@ import {
   applyLevelsNode,
   applyMaskApplyNode,
   applyMaskCombineNode,
+  applyMeshGradientNode,
   applyMixNode,
   applyPixelateNode,
   applyPosterizeNode,
@@ -49,7 +50,7 @@ let versionCounter = 0;
 // param is animated (procedural noise, scrolling tracking lines, etc.). The
 // runtime salts the cache key with the current frame so they re-evaluate per
 // frame instead of returning a stale cached canvas.
-const TIME_AWARE_TYPES = new Set(["analog", "vhs", "crt"]);
+const TIME_AWARE_TYPES = new Set(["mesh-gradient", "analog", "vhs", "crt"]);
 
 export function isOutputCached(canvas) {
   if (!canvas) return false;
@@ -261,6 +262,7 @@ function inputSocketsFor(node) {
       return ["image", "mask"];
     case "math":
       return ["a", "b"];
+    case "mesh-gradient":
     case "value":
       return [];
     default:
@@ -372,6 +374,8 @@ function computeNodeOutput(node, index, results, context) {
       return applyDuotoneNode(resolveInputImage(node, "image", index, results), node.params);
     case "gradient-map":
       return applyGradientMapNode(resolveInputImage(node, "image", index, results), node.params);
+    case "mesh-gradient":
+      return applyMeshGradientNode(node.params, context);
     case "hsv":
       return applyHsvNode(resolveInputImage(node, "image", index, results), node.params);
     case "rgb-curves":

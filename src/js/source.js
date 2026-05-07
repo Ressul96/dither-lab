@@ -790,7 +790,23 @@ export function samplePixel(u, vCoord) {
 
 function renderCurrentFrame() {
   const { video: v } = ensureEls();
-  if (!v || v.readyState < 2 || !canvas || !ctx) return;
+  const graph = ensureBootGraph();
+  const proceduralSource = findViewerProceduralSource(graph);
+  if (proceduralSource) {
+    renderProceduralFrame(graph, proceduralSource);
+    return;
+  }
+  if (!v || v.readyState < 2 || !canvas || !ctx) {
+    if (!renderProceduralFrame(graph)) {
+      clearCanvas(ctx, canvas);
+      clearSplitCanvas();
+      canvas?.classList.add("hidden");
+      splitCanvas?.classList.add("hidden");
+      document.getElementById("emptyState")?.classList.remove("hidden");
+      dispatch("view", {});
+    }
+    return;
+  }
 
   const currentRenderVersion = ++renderVersion;
   const currentSourceToken = sourceToken;
@@ -822,7 +838,6 @@ function renderCurrentFrame() {
     ? `${baseSourceVersion}@${PLAYBACK_PREVIEW_SCALE}`
     : baseSourceVersion;
 
-  const graph = ensureBootGraph();
   const timelineContext = createTimelineRenderContext(v);
   const nativeRenderGraph = applyTimelineToGraph(
     graph,
@@ -846,6 +861,92 @@ function renderCurrentFrame() {
   recyclePreviewOutput(graphOutputs.ditherOutput);
   presentPreview();
   queueNativePreview(nativeRenderGraph, currentRenderVersion, currentSourceToken);
+}
+
+function renderProceduralFrame(graph = ensureBootGraph(), sourceNode = findViewerProceduralSource(graph)) {
+  if (!sourceNode || !canvas || !ctx) return false;
+
+  renderVersion += 1;
+  const { width, height } = proceduralSourceSize(sourceNode);
+  ensureFrameBuffers(width, height);
+
+  const timelineContext = createProceduralTimelineRenderContext();
+  const graphOutputs = evaluateGraphOutputs(graph, {
+    sourceImage: null,
+    sourceVersion: "procedural",
+    ...timelineContext,
+  }) ?? { viewerOutput: null, ditherOutput: null };
+
+  const graphOutput = graphOutputs.viewerOutput;
+  if (!graphOutput?.width || !graphOutput?.height) return false;
+
+  sourceCtx?.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+  sourceCtx?.drawImage(graphOutput, 0, 0, sourceCanvas.width, sourceCanvas.height);
+  canvas?.classList.remove("hidden");
+  splitCanvas?.classList.remove("hidden");
+  document.getElementById("emptyState")?.classList.add("hidden");
+
+  commitProcessedFrame(graphOutput);
+  commitDitherFrame(graphOutputs.ditherOutput);
+  recyclePreviewOutput(graphOutput);
+  recyclePreviewOutput(graphOutputs.ditherOutput);
+  setNativeRenderStatus("js");
+  presentPreview();
+  dispatch("view", {});
+
+  return true;
+}
+
+function findViewerProceduralSource(graph) {
+  const viewer = graph?.nodes?.find((node) => node.type === "viewer-output");
+  if (!viewer) return null;
+
+  const nodeById = new Map((graph.nodes ?? []).map((node) => [node.id, node]));
+  const incomingBySocket = new Map();
+  for (const edge of graph.edges ?? []) {
+    incomingBySocket.set(`${edge.toNode}\u0000${edge.toSocket}`, edge);
+  }
+
+  const queue = [viewer.id];
+  const visited = new Set();
+  while (queue.length) {
+    const nodeId = queue.shift();
+    if (!nodeId || visited.has(nodeId)) continue;
+    visited.add(nodeId);
+
+    const node = nodeById.get(nodeId);
+    if (node?.type === "mesh-gradient") return node;
+
+    const primarySocket = primaryImageInputSocket(node);
+    if (!primarySocket) continue;
+    const edge = incomingBySocket.get(`${nodeId}\u0000${primarySocket}`);
+    if (edge) queue.push(edge.fromNode);
+  }
+
+  return null;
+}
+
+function primaryImageInputSocket(node) {
+  switch (node?.type) {
+    case "mix":
+      return "image_a";
+    case "mask-combine":
+      return "mask_a";
+    case "math":
+    case "value":
+    case "mesh-gradient":
+    case "source":
+      return null;
+    default:
+      return node?.inputs?.[0]?.name ?? null;
+  }
+}
+
+function proceduralSourceSize(node) {
+  return {
+    width: clamp(Math.round(Number(node?.params?.width ?? 1920)), 256, 4096),
+    height: clamp(Math.round(Number(node?.params?.height ?? 1080)), 256, 4096),
+  };
 }
 
 function recyclePreviewOutput(image) {
@@ -981,6 +1082,17 @@ function createTimelineRenderContext(v) {
       fps
     ),
     durationSeconds: state.source.duration || v?.duration || 0,
+    fps,
+  };
+}
+
+function createProceduralTimelineRenderContext() {
+  const state = getState();
+  const fps = state.timeline.fps || state.source.fps || 30;
+  return {
+    timeline: state.timeline,
+    timeSeconds: normalizePlaybackTime(state.playback.currentTime || 0, fps),
+    durationSeconds: state.timeline.duration || state.source.duration || 0,
     fps,
   };
 }

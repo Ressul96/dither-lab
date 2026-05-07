@@ -1526,6 +1526,8 @@ function renderNodeSpecifics(node) {
   switch (node.type) {
     case "source":
       return renderSourceNode();
+    case "mesh-gradient":
+      return renderMeshGradientNode(node);
     case "adjust":
       return renderAdjustNode(node);
     case "posterize":
@@ -1649,6 +1651,41 @@ function renderSourceNode() {
         ["gb", "Green + Blue"],
         ["rb", "Red + Blue"],
       ])}
+    </section>
+  `;
+}
+
+function renderMeshGradientNode(node) {
+  const params = node.params;
+  const colorA = params.colorA ?? "#ff0055";
+  const colorB = params.colorB ?? "#00ff99";
+  const colorC = params.colorC ?? "#0055ff";
+  const colorD = params.colorD ?? "#ffcc00";
+  const complexity = Number(params.complexity ?? 50);
+  const warp = Number(params.warp ?? 35);
+  const speed = Number(params.speed ?? 25);
+  const zoom = Number(params.zoom ?? 100);
+  const width = Number(params.width ?? 1920);
+  const height = Number(params.height ?? 1080);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Colors</header>
+      ${renderColorField("Color A", "colorA", colorA, { fallback: "#ff0055" })}
+      ${renderColorField("Color B", "colorB", colorB, { fallback: "#00ff99" })}
+      ${renderColorField("Color C", "colorC", colorC, { fallback: "#0055ff" })}
+      ${renderColorField("Color D", "colorD", colorD, { fallback: "#ffcc00" })}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Shape</header>
+      ${renderRangeField("Complexity", "complexity", complexity, 0, 100, `${complexity}%`)}
+      ${renderRangeField("Warp", "warp", warp, 0, 100, `${warp}%`)}
+      ${renderRangeField("Zoom", "zoom", zoom, 25, 400, `${zoom}%`)}
+      ${renderRangeField("Speed", "speed", speed, 0, 100, `${speed}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Output</header>
+      ${renderRangeField("Width", "width", width, 256, 4096, `${width}px`)}
+      ${renderRangeField("Height", "height", height, 256, 4096, `${height}px`)}
     </section>
   `;
 }
@@ -3449,6 +3486,7 @@ function initGraphContextMenu() {
   graphMenuEl = document.createElement("div");
   graphMenuEl.className = "context-menu floating-card hidden";
   graphMenuEl.innerHTML = `
+    <button data-add-node="mesh-gradient">Add Mesh Gradient</button>
     <button data-add-node="posterize">Add Posterize</button>
     <button data-add-node="tone-map">Add Tone Map</button>
     <button data-add-node="levels">Add Levels</button>

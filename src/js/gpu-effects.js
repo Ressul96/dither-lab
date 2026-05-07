@@ -16,6 +16,51 @@ void main() {
 }
 `;
 
+const MESH_GRADIENT_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform vec2 u_resolution;
+uniform float u_time;
+uniform float u_complexity;
+uniform float u_warp;
+uniform float u_zoom;
+uniform vec3 u_colorA;
+uniform vec3 u_colorB;
+uniform vec3 u_colorC;
+uniform vec3 u_colorD;
+
+in vec2 v_uv;
+out vec4 out_color;
+
+float wave(vec2 p, float f, float t) {
+  return sin(p.x * f + t * 0.73) + cos(p.y * f * 1.19 - t * 0.51);
+}
+
+void main() {
+  vec2 aspect = vec2(u_resolution.x / max(u_resolution.y, 1.0), 1.0);
+  vec2 centered = (v_uv - 0.5) * aspect / max(u_zoom, 0.001);
+  float f = max(u_complexity, 0.5);
+  float t = u_time;
+
+  vec2 warpVec = vec2(
+    wave(centered.yx + vec2(0.17, 0.31), f * 3.1, t),
+    wave(centered.xy + vec2(0.43, 0.11), f * 2.7, t * 1.13)
+  );
+  vec2 uv = clamp(v_uv + warpVec * (0.035 + 0.055 * u_warp) * u_warp, 0.0, 1.0);
+
+  vec3 top = mix(u_colorA, u_colorB, smoothstep(0.0, 1.0, uv.x));
+  vec3 bottom = mix(u_colorC, u_colorD, smoothstep(0.0, 1.0, uv.x));
+  vec3 base = mix(top, bottom, smoothstep(0.0, 1.0, uv.y));
+
+  float flow = 0.5 + 0.5 * sin((centered.x + centered.y) * f * 5.0 + t * 0.9);
+  vec3 accent = mix(mix(u_colorD, u_colorC, uv.x), mix(u_colorB, u_colorA, uv.y), flow);
+  float veil = smoothstep(-0.25, 1.0, wave(centered + vec2(flow), f * 1.8, t * 0.4) * 0.5);
+  vec3 color = mix(base, accent, veil * (0.18 + u_warp * 0.22));
+
+  out_color = vec4(clamp(color, 0.0, 1.0), 1.0);
+}
+`;
+
 const CHROMATIC_ABERRATION_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
@@ -983,6 +1028,29 @@ function gradientLutTextureSource(params) {
   return null;
 }
 
+function meshGradientSize(params) {
+  return {
+    width: clamp(Math.round(Number(params?.width ?? 1920)), 256, 4096),
+    height: clamp(Math.round(Number(params?.height ?? 1080)), 256, 4096),
+  };
+}
+
+function meshGradientUniforms(params, context) {
+  const timelineTime = Number(context?.timeSeconds);
+  const time = Number.isFinite(timelineTime) ? timelineTime : 0;
+  const speed = clamp(Number(params?.speed ?? 25) / 25, 0, 4);
+  return {
+    u_time: time * speed,
+    u_complexity: 0.5 + clamp(Number(params?.complexity ?? 50) / 100, 0, 1) * 5.5,
+    u_warp: clamp(Number(params?.warp ?? 35) / 100, 0, 1),
+    u_zoom: clamp(Number(params?.zoom ?? 100) / 100, 0.25, 4),
+    u_colorA: hexToRgb01(params?.colorA ?? "#ff0055", [1, 0, 0.333]),
+    u_colorB: hexToRgb01(params?.colorB ?? "#00ff99", [0, 1, 0.6]),
+    u_colorC: hexToRgb01(params?.colorC ?? "#0055ff", [0, 0.333, 1]),
+    u_colorD: hexToRgb01(params?.colorD ?? "#ffcc00", [1, 0.8, 0]),
+  };
+}
+
 const SHADER_PASSES = Object.freeze({
   "chromatic-aberration": {
     fragment: CHROMATIC_ABERRATION_FRAGMENT_SHADER,
@@ -1250,6 +1318,18 @@ export function applyShaderPass(passId, input, params, context) {
   return activeRenderer.render(pass.fragment, input, uniforms, textures);
 }
 
+export function applyMeshGradientGpu(params, context) {
+  const activeRenderer = getRenderer();
+  if (!activeRenderer) return null;
+  const { width, height } = meshGradientSize(params);
+  return activeRenderer.renderSource(
+    MESH_GRADIENT_FRAGMENT_SHADER,
+    width,
+    height,
+    meshGradientUniforms(params, context)
+  );
+}
+
 export function applyChromaticAberrationGpu(input, params) {
   return applyShaderPass("chromatic-aberration", input, params);
 }
@@ -1398,6 +1478,63 @@ function createRenderer() {
       const output = document.createElement("canvas");
       output.width = input.width;
       output.height = input.height;
+      const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
+      if (!ctx) return null;
+      ctx.drawImage(canvas, 0, 0);
+      return output;
+    },
+    renderSource(fragmentSource, width, height, uniforms, textures) {
+      const w = Math.max(1, Math.round(Number(width) || 0));
+      const h = Math.max(1, Math.round(Number(height) || 0));
+      if (!w || !h) return null;
+
+      const program = getProgram(gl, programs, vertexShader, fragmentSource);
+      if (!program) return null;
+
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+
+      gl.viewport(0, 0, w, h);
+      gl.useProgram(program.handle);
+      gl.bindVertexArray(vao);
+
+      const positionLocation = gl.getAttribLocation(program.handle, "a_position");
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.enableVertexAttribArray(positionLocation);
+      gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+      gl.uniform2f(getUniformLocation(gl, program, "u_resolution"), w, h);
+
+      let unit = 0;
+      if (textures) {
+        for (const [name, source] of Object.entries(textures)) {
+          if (!source) continue;
+          let extraTex = extraTextures.get(name);
+          if (!extraTex) {
+            extraTex = gl.createTexture();
+            extraTextures.set(name, extraTex);
+          }
+          gl.activeTexture(gl.TEXTURE0 + unit);
+          gl.bindTexture(gl.TEXTURE_2D, extraTex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+          gl.uniform1i(getUniformLocation(gl, program, name), unit);
+          unit++;
+        }
+      }
+
+      applyUniforms(gl, program, uniforms);
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      const output = document.createElement("canvas");
+      output.width = w;
+      output.height = h;
       const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
       if (!ctx) return null;
       ctx.drawImage(canvas, 0, 0);
