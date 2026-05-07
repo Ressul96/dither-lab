@@ -44,6 +44,7 @@ import {
   toggleParamKeyframeAtCurrentTime,
   updateParamKeyframeAtCurrentTime,
 } from "../timeline.js";
+import { normalizeHex } from "../color.js";
 
 const NODE_WIDTH = 220;
 const NODE_HEIGHT = 108;
@@ -946,6 +947,15 @@ function onInspectorInput(event) {
     const node = getSelectedNode();
     if (!node) return;
 
+    // The HEX text input fires `input` on every keystroke; while the user
+    // is mid-way through "#fa" we don't want to commit "#000000" through
+    // the normaliser. The matching `change` event (on blur or Enter) will
+    // pick up the final value and commit through this same path.
+    if (control.dataset.inputKind === "color-hex") {
+      inspectorEditing = true;
+      return;
+    }
+
     inspectorEditing = true;
     if (node.type === "viewer-output" && control.dataset.nodeParam === "viewer-fps") {
       setFps(readControlValue(control));
@@ -990,6 +1000,24 @@ function onInspectorChange(event) {
     if (node?.type === "viewer-output" && control.dataset.nodeParam === "viewer-fps") {
       renderInspector();
       return;
+    }
+    // HEX text input doesn't commit on `input` (would normalise mid-typing
+    // back to fallback); commit happens here on blur / Enter instead. The
+    // swatch already committed on `input`, so this branch is a no-op for
+    // it — but running it twice is cheap and keeps the dataflow uniform.
+    if (
+      node &&
+      (control.dataset.inputKind === "color-hex" ||
+        control.dataset.inputKind === "color-swatch")
+    ) {
+      const nodeId = node.id;
+      const paramKey = control.dataset.nodeParam;
+      const value = readControlValue(control);
+      updateNodeParams(nodeId, { [paramKey]: value });
+      if (!commitParamValueToTimeline(nodeId, paramKey, value)) {
+        updateParamKeyframeAtCurrentTime(nodeId, paramKey, value);
+      }
+      syncSiblingControls(control);
     }
     renderInspector();
     return;
@@ -2650,9 +2678,7 @@ function renderHalationNode(node) {
   const knee = Number(params.knee ?? 20);
   const intensity = Number(params.intensity ?? 120);
   const radius = Number(params.radius ?? 24);
-  const tintR = Number(params.tintR ?? 255);
-  const tintG = Number(params.tintG ?? 120);
-  const tintB = Number(params.tintB ?? 60);
+  const tintColor = params.tintColor ?? "#ff783c";
   return `
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">General</header>
@@ -2668,9 +2694,7 @@ function renderHalationNode(node) {
     </section>
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Tint</header>
-      ${renderRangeField("Red", "tintR", tintR, 0, 255, `${tintR}`)}
-      ${renderRangeField("Green", "tintG", tintG, 0, 255, `${tintG}`)}
-      ${renderRangeField("Blue", "tintB", tintB, 0, 255, `${tintB}`)}
+      ${renderColorField("Tint Color", "tintColor", tintColor, { fallback: "#ff783c" })}
     </section>
   `;
 }
@@ -3005,9 +3029,58 @@ function renderCheckboxField(label, key, checked) {
   `;
 }
 
+// HEX color field — native <input type="color"> swatch + uppercase HEX
+// text input. The two siblings share the same data-node-param key so the
+// existing syncSiblingControls keeps them in lockstep. The text input
+// commits on `change` (blur) only; mid-typing input events would normalise
+// "#FF" back to "#000000" and overwrite the user's value.
+function renderColorField(label, key, value, options = {}) {
+  const safeKey = escapeHtml(key);
+  const fallback = options.fallback ?? "#000000";
+  const hex = normalizeHex(value, fallback);
+  return `
+    <div class="field color-field">
+      <label>
+        <span class="field-label-row">
+          ${renderParamSocketDot(safeKey)}
+          ${renderParamKeyframeButton(key)}
+          <span class="field-label-text">${escapeHtml(label)}</span>
+        </span>
+      </label>
+      <div class="color-row">
+        <input
+          type="color"
+          class="color-swatch"
+          value="${escapeHtml(hex)}"
+          data-node-param="${safeKey}"
+          data-input-kind="color-swatch"
+          aria-label="${escapeHtml(label)} color"
+        />
+        <input
+          type="text"
+          class="color-hex"
+          value="${escapeHtml(hex)}"
+          data-node-param="${safeKey}"
+          data-input-kind="color-hex"
+          maxlength="7"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+        />
+      </div>
+    </div>
+  `;
+}
+
 function readControlValue(control) {
   if (control.type === "checkbox") return control.checked;
   if (control.tagName === "SELECT") return control.value;
+  if (
+    control.dataset.inputKind === "color-swatch" ||
+    control.dataset.inputKind === "color-hex"
+  ) {
+    return normalizeHex(control.value, "#000000");
+  }
   return Number(control.value);
 }
 

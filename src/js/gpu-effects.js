@@ -3,6 +3,8 @@
 // the registry entry, uploads the input texture, and copies the output back to
 // a 2D canvas so the rest of the graph can stay agnostic about WebGL.
 
+import { hexToRgb01 } from "./color.js";
+
 const FULLSCREEN_VERTEX_SHADER = `#version 300 es
 in vec2 a_position;
 out vec2 v_uv;
@@ -863,6 +865,16 @@ const SHADER_PASSES = Object.freeze({
   halation: {
     fragment: HALATION_FRAGMENT_SHADER,
     uniforms(params) {
+      // tintColor is the canonical store; tintR/G/B fall through as a
+      // last-resort fallback in case any path hands us an un-normalised
+      // params object (shouldn't happen — graph.js migrates on load).
+      const tint = params?.tintColor
+        ? hexToRgb01(params.tintColor, [1, 0.47, 0.24])
+        : [
+            clamp(Number(params?.tintR ?? 255) / 255, 0, 1),
+            clamp(Number(params?.tintG ?? 120) / 255, 0, 1),
+            clamp(Number(params?.tintB ?? 60) / 255, 0, 1),
+          ];
       return {
         u_opacity: clamp(Number(params?.opacity ?? 100) / 100, 0, 1),
         u_threshold: clamp(Number(params?.threshold ?? 70) / 100, 0, 1),
@@ -870,11 +882,7 @@ const SHADER_PASSES = Object.freeze({
         u_intensity: clamp(Number(params?.intensity ?? 120) / 100, 0, 4),
         u_radius: clamp(Number(params?.radius ?? 24), 0, 96),
         u_saturation: clamp(Number(params?.saturation ?? 100) / 100, 0, 2),
-        u_tint: [
-          clamp(Number(params?.tintR ?? 255) / 255, 0, 1),
-          clamp(Number(params?.tintG ?? 120) / 255, 0, 1),
-          clamp(Number(params?.tintB ?? 60) / 255, 0, 1),
-        ],
+        u_tint: tint,
       };
     },
   },

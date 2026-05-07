@@ -193,6 +193,68 @@
   margin: 0;
 }
 
+/* Color field — pairs a native <input type="color"> swatch with a HEX text
+   input. The two share the same data-node-param key so the inspector's
+   syncSiblingControls keeps them in lockstep when one of them changes. */
+.color-field .color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-field .color-swatch {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  overflow: hidden;
+}
+
+.color-field .color-swatch::-webkit-color-swatch-wrapper {
+  padding: 2px;
+  border: 0;
+}
+
+.color-field .color-swatch::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+}
+
+.color-field .color-swatch::-moz-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+}
+
+.color-field .color-hex {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.color-field .color-hex:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.color-field .color-hex.is-invalid {
+  border-color: var(--error);
+}
+
 .row {
   display: flex;
   align-items: center;

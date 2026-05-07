@@ -1,4 +1,5 @@
 import { getState, dispatch } from "./state.js";
+import { normalizeHex, rgbToHex } from "./color.js";
 
 const NODE_SPACING_X = 252;
 const NODE_BASE_X = 88;
@@ -404,9 +405,7 @@ const NODE_DEFINITIONS = Object.freeze({
       knee: 20,
       intensity: 120,
       radius: 24,
-      tintR: 255,
-      tintG: 120,
-      tintB: 60,
+      tintColor: "#ff783c",
     },
   },
   ascii: {
@@ -728,9 +727,7 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     knee: { min: 0, max: 50 },
     intensity: { min: 0, max: 400 },
     radius: { min: 0, max: 96 },
-    tintR: { min: 0, max: 255 },
-    tintG: { min: 0, max: 255 },
-    tintB: { min: 0, max: 255 },
+    // tintColor is a HEX string — no numeric bounds.
   },
   ascii: {
     opacity: { min: 0, max: 100 },
@@ -1505,6 +1502,29 @@ function normalizeNodeParams(type, defaultParams, incomingParams) {
     if (incoming.x === undefined) incoming.x = incoming.scale;
     if (incoming.y === undefined) incoming.y = incoming.scale;
     delete incoming.scale;
+  }
+  // Halation: legacy projects stored tint as three 0–255 components
+  // (tintR/tintG/tintB). The current model uses a single HEX string
+  // (tintColor). Synthesise it from the legacy fields when no HEX is
+  // present, then drop the old keys so they don't shadow the new one.
+  if (type === "halation" && incoming) {
+    const hasLegacy =
+      incoming.tintR !== undefined ||
+      incoming.tintG !== undefined ||
+      incoming.tintB !== undefined;
+    if (hasLegacy && incoming.tintColor === undefined) {
+      incoming.tintColor = rgbToHex(
+        incoming.tintR ?? 255,
+        incoming.tintG ?? 120,
+        incoming.tintB ?? 60
+      );
+    }
+    if (incoming.tintColor !== undefined) {
+      incoming.tintColor = normalizeHex(incoming.tintColor, "#ff783c");
+    }
+    delete incoming.tintR;
+    delete incoming.tintG;
+    delete incoming.tintB;
   }
   return {
     ...clone(defaultParams),
