@@ -12,6 +12,7 @@ import {
   applyGradientMapGpu,
   applyLedScreenGpu,
   applyMeshGradientGpu,
+  applyModulationGpu,
   applyPatternDitherGpu,
   applyPixelateGpu,
   applyPosterizeGpu,
@@ -1242,6 +1243,14 @@ export function applyLedScreenNode(input, params) {
   // is exactly what the fullscreen shader path is for. Pass-through keeps the
   // graph usable on WebGL2-disabled browsers.
   const gpuOutput = applyLedScreenGpu(input, params);
+  return gpuOutput ?? input;
+}
+
+export function applyModulationNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  // Modulation is GPU-only: phase-modulated line masks are cheap in a shader
+  // but not worth a per-pixel CPU fallback during video playback.
+  const gpuOutput = applyModulationGpu(input, params);
   return gpuOutput ?? input;
 }
 

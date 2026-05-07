@@ -174,6 +174,58 @@ void main() {
 }
 `;
 
+const MODULATION_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform sampler2D u_image;
+uniform vec2 u_resolution;
+uniform float u_frequency;
+uniform float u_sensitivity;
+uniform float u_thickness;
+uniform float u_angle;
+uniform float u_channelMode;
+uniform float u_sourceMix;
+uniform float u_invert;
+uniform float u_opacity;
+
+in vec2 v_uv;
+out vec4 out_color;
+
+const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const float TAU = 6.28318530718;
+
+float lineMask(float phase) {
+  float wave = sin(phase) * 0.5 + 0.5;
+  float threshold = 1.0 - clamp(u_thickness, 0.001, 1.0);
+  float aa = max(fwidth(wave) * 1.5, 0.001);
+  return smoothstep(threshold - aa, threshold + aa, wave);
+}
+
+void main() {
+  vec3 src = texture(u_image, v_uv).rgb;
+  vec2 dir = vec2(cos(u_angle), sin(u_angle));
+  float t = dot(v_uv, dir);
+  float base = t * u_frequency * TAU;
+
+  vec3 signal;
+  if (u_channelMode < 0.5) {
+    float luma = dot(src, LUMA_W);
+    signal = vec3(lineMask(base + luma * u_sensitivity));
+  } else {
+    signal = vec3(
+      lineMask(base + src.r * u_sensitivity),
+      lineMask(base + src.g * u_sensitivity),
+      lineMask(base + src.b * u_sensitivity)
+    );
+  }
+
+  if (u_invert > 0.5) signal = 1.0 - signal;
+  vec3 mixed = mix(signal, src, clamp(u_sourceMix, 0.0, 1.0));
+  vec3 result = mix(src, mixed, clamp(u_opacity, 0.0, 1.0));
+  out_color = vec4(result, 1.0);
+}
+`;
+
 const HALFTONE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
@@ -1169,6 +1221,21 @@ const SHADER_PASSES = Object.freeze({
       };
     },
   },
+  modulation: {
+    fragment: MODULATION_FRAGMENT_SHADER,
+    uniforms(params) {
+      return {
+        u_frequency: clamp(Number(params?.frequency ?? 80), 4, 320),
+        u_sensitivity: clamp(Number(params?.sensitivity ?? 35) / 100, 0, 2) * Math.PI * 2,
+        u_thickness: clamp(Number(params?.thickness ?? 18) / 100, 0.01, 1),
+        u_angle: ((Number(params?.angle ?? 0) / 180) * Math.PI),
+        u_channelMode: modulationChannelModeIndex(params?.channelMode ?? "rgb"),
+        u_sourceMix: clamp(Number(params?.sourceMix ?? 0) / 100, 0, 1),
+        u_invert: String(params?.invert ?? "off").toLowerCase() === "on" ? 1 : 0,
+        u_opacity: clamp(Number(params?.opacity ?? 100) / 100, 0, 1),
+      };
+    },
+  },
   bloom: {
     fragment: BLOOM_FRAGMENT_SHADER,
     uniforms(params) {
@@ -1437,6 +1504,10 @@ export function applyChromaticAberrationGpu(input, params) {
 
 export function applyLedScreenGpu(input, params) {
   return applyShaderPass("led-screen", input, params);
+}
+
+export function applyModulationGpu(input, params) {
+  return applyShaderPass("modulation", input, params);
 }
 
 export function applyHalftoneGpu(input, params) {
@@ -1738,6 +1809,11 @@ function ledShapeIndex(value) {
   if (normalized === "square") return 1;
   if (normalized === "slot") return 2;
   return 0;
+}
+
+function modulationChannelModeIndex(value) {
+  const normalized = String(value ?? "rgb").toLowerCase();
+  return normalized === "luma" ? 0 : 1;
 }
 
 function maskIndex(value) {

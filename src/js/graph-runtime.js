@@ -26,6 +26,7 @@ import {
   applyMaskApplyNode,
   applyMaskCombineNode,
   applyMeshGradientNode,
+  applyModulationNode,
   applyMixNode,
   applyPixelateNode,
   applyPosterizeNode,
@@ -417,6 +418,8 @@ function computeNodeOutput(node, index, results, context) {
       return applyAnalogNode(resolveInputImage(node, "image", index, results), node.params, context);
     case "led-screen":
       return applyLedScreenNode(resolveInputImage(node, "image", index, results), node.params);
+    case "modulation":
+      return applyModulationNode(resolveInputImage(node, "image", index, results), node.params);
     case "lens-distort":
       return applyLensDistortNode(resolveInputImage(node, "image", index, results), node.params);
     case "chromatic-aberration":

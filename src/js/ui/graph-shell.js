@@ -1576,6 +1576,8 @@ function renderNodeSpecifics(node) {
       return renderAnalogNode(node);
     case "led-screen":
       return renderLedScreenNode(node);
+    case "modulation":
+      return renderModulationNode(node);
     case "lens-distort":
       return renderLensDistortNode(node);
     case "chromatic-aberration":
@@ -2779,6 +2781,40 @@ function renderLedScreenNode(node) {
   `;
 }
 
+function renderModulationNode(node) {
+  const params = node.params;
+  const frequency = Number(params.frequency ?? 80);
+  const sensitivity = Number(params.sensitivity ?? 35);
+  const thickness = Number(params.thickness ?? 18);
+  const angle = Number(params.angle ?? 0);
+  const channelMode = String(params.channelMode ?? "rgb");
+  const sourceMix = Number(params.sourceMix ?? 0);
+  const invert = String(params.invert ?? "off");
+  const opacity = Number(params.opacity ?? 100);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Frequency", "frequency", frequency, 4, 320, String(frequency))}
+      ${renderRangeField("Angle", "angle", angle, -180, 180, `${angle}deg`)}
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Signal</header>
+      ${renderSelectField("Channel", "channelMode", channelMode, [
+        ["luma", "Luma"],
+        ["rgb", "RGB"],
+      ])}
+      ${renderRangeField("Sensitivity", "sensitivity", sensitivity, 0, 200, `${sensitivity}%`)}
+      ${renderRangeField("Thickness", "thickness", thickness, 1, 100, `${thickness}%`)}
+      ${renderRangeField("Source Mix", "sourceMix", sourceMix, 0, 100, `${sourceMix}%`)}
+      ${renderSelectField("Invert", "invert", invert, [
+        ["off", "Off"],
+        ["on", "On"],
+      ])}
+    </section>
+  `;
+}
+
 function renderVhsNode(node) {
   const params = node.params;
   const opacity = Number(params.opacity ?? 100);
@@ -3539,6 +3575,7 @@ function initGraphContextMenu() {
     <button data-add-node="glare">Add Bloom / Glare</button>
     <button data-add-node="analog">Add Analog</button>
     <button data-add-node="led-screen">Add LED Screen</button>
+    <button data-add-node="modulation">Add Modulation</button>
     <button data-add-node="lens-distort">Add Lens Distortion</button>
     <button data-add-node="chromatic-aberration">Add Chromatic Aberration</button>
     <button data-add-node="halation">Add Halation</button>
