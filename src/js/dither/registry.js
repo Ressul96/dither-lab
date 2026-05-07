@@ -2,7 +2,10 @@ const ALGORITHMS = new Map();
 const FAMILY_ORDER = ["error-diffusion", "ordered", "threshold-noise", "pattern"];
 const FAMILY_LABELS = {
   "error-diffusion": "Error Diffusion",
-  ordered: "Ordered / Bayer",
+  // The Ordered family covers Bayer + Halftone + Clustered Dot + Dispersed
+  // Dot. The earlier "Ordered / Bayer" label undersold the non-Bayer
+  // members; "Ordered" is the standard catch-all. (dither_entegrasyon §4.P1)
+  ordered: "Ordered",
   "threshold-noise": "Threshold / Noise",
   pattern: "Pattern",
 };

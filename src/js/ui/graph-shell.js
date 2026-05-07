@@ -1685,7 +1685,7 @@ function renderPatternDitherNode(node) {
         ["blue-noise", "Blue Noise"],
         ["white-noise", "White Noise"],
       ])}
-      ${renderRangeField("Scale", "scale", scale, 1, 8, `${scale}px`)}
+      ${renderRangeField("Cell Scale", "scale", scale, 1, 8, `${scale}px`)}
       ${renderRangeField("Strength", "strength", strength, 0, 200, `${strength}%`)}
     </section>
     <section class="node-panel-section node-panel-section--titled">
