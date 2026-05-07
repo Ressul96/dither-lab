@@ -1510,6 +1510,8 @@ function renderNodeSpecifics(node) {
       return renderRgbToBwNode(node);
     case "tone-map":
       return renderToneMapNode(node);
+    case "levels":
+      return renderLevelsNode(node);
     case "hsv":
       return renderHsvNode(node);
     case "rgb-curves":
@@ -1902,6 +1904,38 @@ function renderToneMapNode(node) {
     <section class="node-panel-section">
       ${renderRangeField("Intensity", "intensity", params.intensity, 10, 1000, `${(params.intensity / 100).toFixed(2)}x`)}
       ${renderRangeField("Whitepoint", "whitepoint", params.whitepoint, 10, 1000, `${(params.whitepoint / 100).toFixed(2)}`)}
+    </section>
+  `;
+}
+
+function renderLevelsNode(node) {
+  const params = node.params;
+  const inputBlack = Number(params.inputBlack ?? 0);
+  const inputWhite = Number(params.inputWhite ?? 255);
+  const gamma = Number(params.gamma ?? 100);
+  const outputBlack = Number(params.outputBlack ?? 0);
+  const outputWhite = Number(params.outputWhite ?? 255);
+  const mode = String(params.mode ?? "rgb");
+  const opacity = Number(params.opacity ?? 100);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Input</header>
+      ${renderRangeField("Black", "inputBlack", inputBlack, 0, 254, String(inputBlack))}
+      ${renderRangeField("White", "inputWhite", inputWhite, 1, 255, String(inputWhite))}
+      ${renderRangeField("Gamma", "gamma", gamma, 10, 400, (gamma / 100).toFixed(2))}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Output</header>
+      ${renderRangeField("Black", "outputBlack", outputBlack, 0, 255, String(outputBlack))}
+      ${renderRangeField("White", "outputWhite", outputWhite, 0, 255, String(outputWhite))}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Mode</header>
+      ${renderSelectField("Apply", "mode", mode, [
+        ["rgb", "RGB"],
+        ["luma", "Luma only"],
+      ])}
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
     </section>
   `;
 }
@@ -3227,6 +3261,7 @@ function initGraphContextMenu() {
   graphMenuEl.innerHTML = `
     <button data-add-node="posterize">Add Posterize</button>
     <button data-add-node="tone-map">Add Tone Map</button>
+    <button data-add-node="levels">Add Levels</button>
     <button data-add-node="rgb-curves">Add RGB Curves</button>
     <button data-add-node="blur">Add Blur</button>
     <button data-add-node="pixelate">Add Pixelate</button>
