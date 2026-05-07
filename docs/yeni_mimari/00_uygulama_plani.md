@@ -41,7 +41,9 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 |---|---|---|
 | F1.1 | **Color picker primitive** + halation pilot | ✅ `eccc750` |
 | F1.2 | **Gradient LUT helper** (256×1 canvas → GL texture, paylaşılan) | ✅ `d1eda4f` |
-| F1.3 | **UI components refactor** (`ui_components_entegrasyon.md` §8) | ⬜ |
+| F1.3 | **UI components refactor** (`ui_components_entegrasyon.md` §8) | 🚧 |
+| F1.3.1 | aria-pressed sync (loop / autokey / quality) | ✅ `c32c458` |
+| F1.3.2 | Panel toggle Micro Notch polish | ⬜ |
 
 **F1.1 detay:**
 * `src/js/color.js`: `normalizeHex`, `rgbToHex`, `hexToRgb01`
@@ -63,6 +65,15 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
   için doğrudan kullanılabilir.
 * Tarayıcıda 7 senaryo doğrulandı (linear, three-stop, empty,
   out-of-order, partial range, key stability, custom width).
+
+**F1.3.1 detay:**
+* `player.js` loop + autokey pill'lerinde `aria-pressed` set ediliyor
+  (mevcut `classList.toggle("is-active")` ile yan yana).
+* `stage.js` `syncQualityToggle`'da `aria-pressed` (full = true).
+* `index.html` başlangıç `aria-pressed` değerleri (loop=true,
+  autokey=false, quality=false).
+* compare-mode, timeline-view, scopes-toggle zaten doğruydu.
+* Inline `onclick` yok — §9 kuralı zaten sağlanıyor.
 
 ---
 
