@@ -676,7 +676,11 @@ function onPlaybackChange(playback) {
   if (!playerEls.playBtn) cachePlayerEls();
 
   if (playerEls.playBtn) playerEls.playBtn.textContent = playback.playing ? "⏸" : "▶";
-  if (playerEls.loopPill) playerEls.loopPill.classList.toggle("is-active", !!playback.loopEnabled);
+  if (playerEls.loopPill) {
+    const on = !!playback.loopEnabled;
+    playerEls.loopPill.classList.toggle("is-active", on);
+    playerEls.loopPill.setAttribute("aria-pressed", on ? "true" : "false");
+  }
 
   if (playerEls.timeReadout) {
     playerEls.timeReadout.textContent =
@@ -733,6 +737,7 @@ function renderAnimationTimeline() {
   const autokey = normalized.autokey === true;
   if (playerEls.autokeyPill) {
     playerEls.autokeyPill.classList.toggle("is-active", autokey);
+    playerEls.autokeyPill.setAttribute("aria-pressed", autokey ? "true" : "false");
   }
 
   updateTimelineChrome(normalized);

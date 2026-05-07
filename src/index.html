@@ -208,6 +208,7 @@
               <span class="zoom-accuracy" data-state="approx">~ approx</span>
             </button>
             <button class="zoom-pill quality-pill" id="qualityToggle" type="button" data-quality="auto"
+              aria-pressed="false"
               title="Live preview quality. Auto runs effects at half-res during playback for speed; Full processes every playback frame at source resolution (export-accurate but slower).">
               <span class="quality-label">FX: Auto</span>
             </button>
@@ -302,10 +303,12 @@
             <button class="icon-btn" data-action="stop" title="Stop" disabled>■</button>
           </div>
           <div class="transport-cluster transport-cluster--mid">
-            <button class="autokey-pill" data-action="toggle-loop" title="Loop">
+            <button class="autokey-pill" data-action="toggle-loop" title="Loop"
+              aria-pressed="true">
               <span class="autokey-dot"></span>Loop
             </button>
-            <button class="autokey-pill" data-action="toggle-autokey" title="Auto-Key">
+            <button class="autokey-pill" data-action="toggle-autokey" title="Auto-Key"
+              aria-pressed="false">
               <span class="autokey-dot"></span>Auto-Key
             </button>
             <label class="duration-field" title="Duration">

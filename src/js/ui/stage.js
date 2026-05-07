@@ -360,6 +360,10 @@ function syncQualityToggle(qualityToggle) {
   if (!qualityToggle) return;
   const quality = getState().view.playbackQuality ?? "auto";
   qualityToggle.dataset.quality = quality;
+  // aria-pressed reflects the "stronger" mode (full = export-accurate). Auto
+  // is the default fallback so it reads as not-pressed; this matches the
+  // visual where Full is the highlighted state.
+  qualityToggle.setAttribute("aria-pressed", quality === "full" ? "true" : "false");
   const label = qualityToggle.querySelector(".quality-label");
   if (label) label.textContent = quality === "full" ? "FX: Full" : "FX: Auto";
 }
