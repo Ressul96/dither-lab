@@ -10,6 +10,7 @@ import {
   applyHalationGpu,
   applyHalftoneGpu,
   applyGradientMapGpu,
+  applyLedScreenGpu,
   applyMeshGradientGpu,
   applyPatternDitherGpu,
   applyPixelateGpu,
@@ -1232,6 +1233,15 @@ export function applyHalftoneNode(input, params) {
   // (the dot grid math is significantly more expensive per-pixel than the
   // chromatic aberration shader).
   const gpuOutput = applyHalftoneGpu(input, params);
+  return gpuOutput ?? input;
+}
+
+export function applyLedScreenNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  // LED Screen is GPU-only: the per-pixel diode, subpixel and glow mask math
+  // is exactly what the fullscreen shader path is for. Pass-through keeps the
+  // graph usable on WebGL2-disabled browsers.
+  const gpuOutput = applyLedScreenGpu(input, params);
   return gpuOutput ?? input;
 }
 

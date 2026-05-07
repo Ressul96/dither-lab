@@ -88,6 +88,92 @@ void main() {
 }
 `;
 
+const LED_SCREEN_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform sampler2D u_image;
+uniform vec2 u_resolution;
+uniform float u_cellSize;
+uniform float u_gap;
+uniform float u_subpixelMode;
+uniform float u_shape;
+uniform float u_softness;
+uniform float u_glow;
+uniform float u_brightness;
+uniform float u_opacity;
+
+in vec2 v_uv;
+out vec4 out_color;
+
+float diodeMask(vec2 local, float shape, float activeArea, float softness, float cellSize) {
+  vec2 centered = (local - 0.5) / max(activeArea * 0.5, 0.001);
+  float edge;
+  if (shape < 0.5) {
+    edge = length(centered);
+  } else if (shape < 1.5) {
+    vec2 d = abs(centered);
+    edge = max(d.x, d.y);
+  } else {
+    vec2 d = abs(vec2(centered.x, centered.y * 0.55));
+    edge = max(d.x, d.y);
+  }
+  float aa = max(1.0 / max(cellSize, 1.0), 0.01);
+  float soft = aa + softness * 0.32;
+  return 1.0 - smoothstep(1.0 - soft, 1.0 + aa, edge);
+}
+
+vec3 subpixelColor(vec3 color, float band, float mode) {
+  if (mode < 0.5) return color;
+  if (mode < 1.5 || mode > 2.5) {
+    if (band < 1.0) return vec3(color.r, 0.0, 0.0);
+    if (band < 2.0) return vec3(0.0, color.g, 0.0);
+    return vec3(0.0, 0.0, color.b);
+  }
+  if (band < 1.0) return vec3(0.0, 0.0, color.b);
+  if (band < 2.0) return vec3(0.0, color.g, 0.0);
+  return vec3(color.r, 0.0, 0.0);
+}
+
+void main() {
+  vec2 pixel = v_uv * u_resolution;
+  float cellSize = max(u_cellSize, 2.0);
+  vec2 cell = floor(pixel / cellSize);
+  vec2 local = fract(pixel / cellSize);
+  vec2 centerUv = clamp((cell + 0.5) * cellSize / max(u_resolution, vec2(1.0)), 0.0, 1.0);
+
+  vec3 src = texture(u_image, v_uv).rgb;
+  vec3 cellColor = texture(u_image, centerUv).rgb * u_brightness;
+
+  vec2 diodeLocal = local;
+  float band = 0.0;
+  if (u_subpixelMode > 0.5) {
+    if (u_subpixelMode > 2.5) {
+      float row = step(0.5, local.y);
+      float triadX = local.x * 3.0 + row * 1.5;
+      band = floor(mod(triadX, 3.0));
+      diodeLocal = vec2(fract(triadX), fract(local.y * 2.0));
+    } else {
+      float subX = local.x * 3.0;
+      band = floor(subX);
+      diodeLocal = vec2(fract(subX), local.y);
+    }
+  }
+
+  float activeArea = max(0.08, 1.0 - u_gap);
+  float mask = diodeMask(diodeLocal, u_shape, activeArea, u_softness, cellSize);
+  vec2 centered = (diodeLocal - 0.5) / max(activeArea * 0.5, 0.001);
+  float glowFalloff = exp(-dot(centered, centered) * mix(5.5, 1.6, u_glow));
+  float glowMask = glowFalloff * u_glow;
+
+  vec3 emitted = subpixelColor(cellColor, band, u_subpixelMode);
+  vec3 panel = emitted * mask + emitted * glowMask * 0.36;
+  panel = clamp(panel, 0.0, 1.0);
+
+  vec3 result = mix(src, panel, clamp(u_opacity, 0.0, 1.0));
+  out_color = vec4(result, 1.0);
+}
+`;
+
 const HALFTONE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
@@ -1068,6 +1154,21 @@ const SHADER_PASSES = Object.freeze({
       };
     },
   },
+  "led-screen": {
+    fragment: LED_SCREEN_FRAGMENT_SHADER,
+    uniforms(params) {
+      return {
+        u_cellSize: clamp(Math.round(Number(params?.cellSize ?? 6)), 2, 48),
+        u_gap: clamp(Number(params?.gap ?? 18) / 100, 0, 0.8),
+        u_subpixelMode: ledSubpixelModeIndex(params?.subpixelMode ?? "rgb"),
+        u_shape: ledShapeIndex(params?.shape ?? "round"),
+        u_softness: clamp(Number(params?.softness ?? 35) / 100, 0, 1),
+        u_glow: clamp(Number(params?.glow ?? 18) / 100, 0, 1),
+        u_brightness: clamp(Number(params?.brightness ?? 110) / 100, 0.25, 3),
+        u_opacity: clamp(Number(params?.opacity ?? 100) / 100, 0, 1),
+      };
+    },
+  },
   bloom: {
     fragment: BLOOM_FRAGMENT_SHADER,
     uniforms(params) {
@@ -1332,6 +1433,10 @@ export function applyMeshGradientGpu(params, context) {
 
 export function applyChromaticAberrationGpu(input, params) {
   return applyShaderPass("chromatic-aberration", input, params);
+}
+
+export function applyLedScreenGpu(input, params) {
+  return applyShaderPass("led-screen", input, params);
 }
 
 export function applyHalftoneGpu(input, params) {
@@ -1617,6 +1722,21 @@ function shapeIndex(value) {
   const normalized = String(value ?? "circle").toLowerCase();
   if (normalized === "square") return 1;
   if (normalized === "diamond") return 2;
+  return 0;
+}
+
+function ledSubpixelModeIndex(value) {
+  const normalized = String(value ?? "rgb").toLowerCase();
+  if (normalized === "off" || normalized === "none") return 0;
+  if (normalized === "bgr") return 2;
+  if (normalized === "triad") return 3;
+  return 1;
+}
+
+function ledShapeIndex(value) {
+  const normalized = String(value ?? "round").toLowerCase();
+  if (normalized === "square") return 1;
+  if (normalized === "slot") return 2;
   return 0;
 }
 

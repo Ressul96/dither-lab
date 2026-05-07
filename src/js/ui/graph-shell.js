@@ -1574,6 +1574,8 @@ function renderNodeSpecifics(node) {
       return renderGlareNode(node);
     case "analog":
       return renderAnalogNode(node);
+    case "led-screen":
+      return renderLedScreenNode(node);
     case "lens-distort":
       return renderLensDistortNode(node);
     case "chromatic-aberration":
@@ -2744,6 +2746,39 @@ function renderAnalogNode(node) {
   `;
 }
 
+function renderLedScreenNode(node) {
+  const params = node.params;
+  const cellSize = Number(params.cellSize ?? 6);
+  const gap = Number(params.gap ?? 18);
+  const subpixelMode = String(params.subpixelMode ?? "rgb");
+  const shape = String(params.shape ?? "round");
+  const softness = Number(params.softness ?? 35);
+  const glow = Number(params.glow ?? 18);
+  const brightness = Number(params.brightness ?? 110);
+  const opacity = Number(params.opacity ?? 100);
+  return `
+    <section class="node-panel-section">
+      ${renderRangeField("Cell Size", "cellSize", cellSize, 2, 48, `${cellSize}px`)}
+      ${renderRangeField("Gap", "gap", gap, 0, 80, `${gap}%`)}
+      ${renderSelectField("Subpixel", "subpixelMode", subpixelMode, [
+        ["off", "Off"],
+        ["rgb", "RGB"],
+        ["bgr", "BGR"],
+        ["triad", "Triad"],
+      ])}
+      ${renderSelectField("Shape", "shape", shape, [
+        ["round", "Round"],
+        ["square", "Square"],
+        ["slot", "Slot"],
+      ])}
+      ${renderRangeField("Softness", "softness", softness, 0, 100, `${softness}%`)}
+      ${renderRangeField("Glow", "glow", glow, 0, 100, `${glow}%`)}
+      ${renderRangeField("Brightness", "brightness", brightness, 25, 300, `${brightness}%`)}
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+    </section>
+  `;
+}
+
 function renderVhsNode(node) {
   const params = node.params;
   const opacity = Number(params.opacity ?? 100);
@@ -3503,6 +3538,7 @@ function initGraphContextMenu() {
     <button data-add-node="mask-apply">Add Mask Apply</button>
     <button data-add-node="glare">Add Bloom / Glare</button>
     <button data-add-node="analog">Add Analog</button>
+    <button data-add-node="led-screen">Add LED Screen</button>
     <button data-add-node="lens-distort">Add Lens Distortion</button>
     <button data-add-node="chromatic-aberration">Add Chromatic Aberration</button>
     <button data-add-node="halation">Add Halation</button>
