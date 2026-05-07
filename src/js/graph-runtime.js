@@ -29,6 +29,7 @@ import {
   applyModulationNode,
   applyMixNode,
   applyPixelateNode,
+  applyPixelSortingNode,
   applyPosterizeNode,
   applyRgbCurvesNode,
   applyRgbToBwNode,
@@ -420,6 +421,8 @@ function computeNodeOutput(node, index, results, context) {
       return applyLedScreenNode(resolveInputImage(node, "image", index, results), node.params);
     case "modulation":
       return applyModulationNode(resolveInputImage(node, "image", index, results), node.params);
+    case "pixel-sorting":
+      return applyPixelSortingNode(resolveInputImage(node, "image", index, results), node.params);
     case "lens-distort":
       return applyLensDistortNode(resolveInputImage(node, "image", index, results), node.params);
     case "chromatic-aberration":

@@ -226,6 +226,78 @@ void main() {
 }
 `;
 
+const PIXEL_SORTING_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform sampler2D u_image;
+uniform vec2 u_resolution;
+uniform float u_threshold;
+uniform float u_softness;
+uniform float u_angle;
+uniform float u_lengthPx;
+uniform float u_iterations;
+uniform float u_channel;
+uniform float u_direction;
+uniform float u_opacity;
+
+in vec2 v_uv;
+out vec4 out_color;
+
+const int MAX_ITERATIONS = 32;
+const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+
+float channelKey(vec3 color) {
+  if (u_channel < 0.5) return dot(color, LUMA_W);
+  if (u_channel < 1.5) return color.r;
+  if (u_channel < 2.5) return color.g;
+  if (u_channel < 3.5) return color.b;
+  return max(max(color.r, color.g), color.b);
+}
+
+float thresholdMask(float key) {
+  float low = max(u_threshold - u_softness, 0.0);
+  float high = u_threshold + u_softness + 0.001;
+  float bright = smoothstep(low, high, key);
+  return u_direction < 0.5 ? bright : 1.0 - bright;
+}
+
+bool isBetter(float candidateKey, float bestKey) {
+  return u_direction < 0.5 ? candidateKey > bestKey : candidateKey < bestKey;
+}
+
+void main() {
+  vec3 src = texture(u_image, v_uv).rgb;
+  float srcKey = channelKey(src);
+  float mask = thresholdMask(srcKey);
+  if (mask <= 0.001 || u_opacity <= 0.001) {
+    out_color = vec4(src, 1.0);
+    return;
+  }
+
+  vec2 dir = vec2(cos(u_angle), sin(u_angle));
+  vec2 stepUv = dir * (u_lengthPx / max(u_iterations, 1.0)) / max(u_resolution, vec2(1.0));
+  vec3 best = src;
+  float bestKey = srcKey;
+  float bestMask = mask;
+
+  for (int i = 1; i <= MAX_ITERATIONS; i++) {
+    if (float(i) > u_iterations) break;
+    vec2 sampleUv = clamp(v_uv - stepUv * float(i), 0.0, 1.0);
+    vec3 candidate = texture(u_image, sampleUv).rgb;
+    float candidateKey = channelKey(candidate);
+    float candidateMask = thresholdMask(candidateKey);
+    if (candidateMask > 0.001 && isBetter(candidateKey, bestKey)) {
+      best = candidate;
+      bestKey = candidateKey;
+      bestMask = candidateMask;
+    }
+  }
+
+  float mixAmount = mask * bestMask * clamp(u_opacity, 0.0, 1.0);
+  out_color = vec4(mix(src, best, mixAmount), 1.0);
+}
+`;
+
 const HALFTONE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
@@ -1236,6 +1308,23 @@ const SHADER_PASSES = Object.freeze({
       };
     },
   },
+  "pixel-sorting": {
+    fragment: PIXEL_SORTING_FRAGMENT_SHADER,
+    uniforms(params) {
+      const opacity = clamp(Number(params?.opacity ?? 100) / 100, 0, 1);
+      if (opacity <= 0) return null;
+      return {
+        u_threshold: clamp(Number(params?.threshold ?? 50) / 100, 0, 1),
+        u_softness: clamp(Number(params?.softness ?? 10) / 100, 0, 0.5),
+        u_angle: ((Number(params?.angle ?? 0) / 180) * Math.PI),
+        u_lengthPx: clamp(Number(params?.length ?? 24), 1, 256),
+        u_iterations: clamp(Math.round(Number(params?.iterations ?? 8)), 1, 32),
+        u_channel: thresholdChannelIndex(params?.channel ?? "luma"),
+        u_direction: String(params?.direction ?? "bright").toLowerCase() === "dark" ? 1 : 0,
+        u_opacity: opacity,
+      };
+    },
+  },
   bloom: {
     fragment: BLOOM_FRAGMENT_SHADER,
     uniforms(params) {
@@ -1508,6 +1597,10 @@ export function applyLedScreenGpu(input, params) {
 
 export function applyModulationGpu(input, params) {
   return applyShaderPass("modulation", input, params);
+}
+
+export function applyPixelSortingGpu(input, params) {
+  return applyShaderPass("pixel-sorting", input, params);
 }
 
 export function applyHalftoneGpu(input, params) {

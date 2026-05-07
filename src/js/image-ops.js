@@ -15,6 +15,7 @@ import {
   applyModulationGpu,
   applyPatternDitherGpu,
   applyPixelateGpu,
+  applyPixelSortingGpu,
   applyPosterizeGpu,
   applyThresholdGpu,
   applyVhsGpu,
@@ -1251,6 +1252,15 @@ export function applyModulationNode(input, params) {
   // Modulation is GPU-only: phase-modulated line masks are cheap in a shader
   // but not worth a per-pixel CPU fallback during video playback.
   const gpuOutput = applyModulationGpu(input, params);
+  return gpuOutput ?? input;
+}
+
+export function applyPixelSortingNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  // P1 Pixel Sorting is a GPU-only glitch-sort approximation. True segment
+  // sorting would need a CPU/worker or multi-pass path and stays out of the
+  // live playback route for now.
+  const gpuOutput = applyPixelSortingGpu(input, params);
   return gpuOutput ?? input;
 }
 

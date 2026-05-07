@@ -1578,6 +1578,8 @@ function renderNodeSpecifics(node) {
       return renderLedScreenNode(node);
     case "modulation":
       return renderModulationNode(node);
+    case "pixel-sorting":
+      return renderPixelSortingNode(node);
     case "lens-distort":
       return renderLensDistortNode(node);
     case "chromatic-aberration":
@@ -2815,6 +2817,47 @@ function renderModulationNode(node) {
   `;
 }
 
+function renderPixelSortingNode(node) {
+  const params = node.params;
+  const mode = String(params.mode ?? "glitch");
+  const threshold = Number(params.threshold ?? 50);
+  const softness = Number(params.softness ?? 10);
+  const angle = Number(params.angle ?? 0);
+  const length = Number(params.length ?? 24);
+  const iterations = Number(params.iterations ?? 8);
+  const channel = String(params.channel ?? "luma");
+  const direction = String(params.direction ?? "bright");
+  const opacity = Number(params.opacity ?? 100);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderSelectField("Mode", "mode", mode, [
+        ["glitch", "Glitch Sort"],
+      ])}
+      ${renderRangeField("Angle", "angle", angle, -180, 180, `${angle}deg`)}
+      ${renderRangeField("Length", "length", length, 1, 256, `${length}px`)}
+      ${renderRangeField("Samples", "iterations", iterations, 1, 32, String(iterations))}
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Mask</header>
+      ${renderRangeField("Threshold", "threshold", threshold, 0, 100, `${threshold}%`)}
+      ${renderRangeField("Softness", "softness", softness, 0, 50, `${softness}%`)}
+      ${renderSelectField("Channel", "channel", channel, [
+        ["luma", "Luma"],
+        ["r", "Red"],
+        ["g", "Green"],
+        ["b", "Blue"],
+        ["max", "Max RGB"],
+      ])}
+      ${renderSelectField("Direction", "direction", direction, [
+        ["bright", "Bright"],
+        ["dark", "Dark"],
+      ])}
+    </section>
+  `;
+}
+
 function renderVhsNode(node) {
   const params = node.params;
   const opacity = Number(params.opacity ?? 100);
@@ -3576,6 +3619,7 @@ function initGraphContextMenu() {
     <button data-add-node="analog">Add Analog</button>
     <button data-add-node="led-screen">Add LED Screen</button>
     <button data-add-node="modulation">Add Modulation</button>
+    <button data-add-node="pixel-sorting">Add Pixel Sorting</button>
     <button data-add-node="lens-distort">Add Lens Distortion</button>
     <button data-add-node="chromatic-aberration">Add Chromatic Aberration</button>
     <button data-add-node="halation">Add Halation</button>
