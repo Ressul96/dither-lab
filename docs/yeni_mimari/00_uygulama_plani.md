@@ -21,7 +21,7 @@ sistem için kendi md'sinde.
 
 | Faz | Başlık | Süre | Durum |
 |---|---|---|---|
-| F1 | Altyapı temel taşları | 1-2 hafta | 🚧 |
+| F1 | Altyapı temel taşları | 1-2 hafta | ✅ |
 | F2 | Mevcut node iyileştirmeleri | 1 hafta | ⬜ |
 | F3 | Yeni Color / Source node'ları | 1-2 hafta | ⬜ |
 | F4 | Yeni Effect node'ları | 1-2 hafta | ⬜ |
@@ -41,9 +41,9 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 |---|---|---|
 | F1.1 | **Color picker primitive** + halation pilot | ✅ `eccc750` |
 | F1.2 | **Gradient LUT helper** (256×1 canvas → GL texture, paylaşılan) | ✅ `d1eda4f` |
-| F1.3 | **UI components refactor** (`ui_components_entegrasyon.md` §8) | 🚧 |
+| F1.3 | **UI components refactor** (`ui_components_entegrasyon.md` §8) | ✅ |
 | F1.3.1 | aria-pressed sync (loop / autokey / quality) | ✅ `c32c458` |
-| F1.3.2 | Panel toggle Micro Notch polish | ⬜ |
+| F1.3.2 | Panel toggle Micro Notch polish | ✅ `e01d2da` |
 
 **F1.1 detay:**
 * `src/js/color.js`: `normalizeHex`, `rgbToHex`, `hexToRgb01`
@@ -74,6 +74,15 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
   autokey=false, quality=false).
 * compare-mode, timeline-view, scopes-toggle zaten doğruydu.
 * Inline `onclick` yok — §9 kuralı zaten sağlanıyor.
+
+**F1.3.2 detay:**
+* `.panel-toggle` ve `.workspace-edge-toggle` için 150ms koordineli
+  transition (border-color, color, background, box-shadow).
+* `:focus-visible`: accent border + 2px accent ring (klavye
+  navigasyonu için belirgin affordance).
+* `::before` iç çizgi: rest %12 white → hover %32 white → focus accent
+  + 28px height. Hit area değişmedi (20×64px).
+* Salt CSS; DOM/JS/hit area değişmedi.
 
 ---
 
