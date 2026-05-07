@@ -112,7 +112,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 
 | PR | Node | Notlar | Durum |
 |---|---|---|---|
-| F4.1 | `led-screen` | GPU shader, RGB sub-pixel | ⬜ |
+| F4.1 | `led-screen` | GPU shader, RGB sub-pixel | ✅ `f036590` |
 | F4.2 | `modulation` | GPU phase modulation | ⬜ |
 | F4.3 | `pixel-sorting` | GPU heuristic single-pass | ⬜ |
 | F4.4 | `star-glow` | F1.2 gerekir | ⬜ |
