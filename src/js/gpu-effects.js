@@ -1066,6 +1066,93 @@ void main() {
 }
 `;
 
+const STAR_GLOW_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform sampler2D u_image;
+uniform vec2 u_resolution;
+uniform float u_threshold;  // 0-1 luminance cutoff
+uniform float u_knee;       // 0-0.5 soft transition width
+uniform float u_intensity;  // 0-4 streak multiplier
+uniform float u_saturation; // 0-2 highlight saturation pre-process
+uniform float u_streaks;    // 1-8 star axes
+uniform float u_angle;      // radians
+uniform float u_lengthPx;   // pixels
+uniform float u_falloff;    // 0.05-1, higher means longer tails
+uniform float u_alternate;  // secondary-axis strength
+uniform float u_colorize;   // lightweight spectral tint amount
+
+in vec2 v_uv;
+out vec4 out_color;
+
+const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const float PI = 3.141592653589793;
+const float TAU = 6.283185307179586;
+const int MAX_STREAKS = 8;
+const int STAR_TAPS = 8;
+
+float highlightMask(vec3 color) {
+  float lum = dot(color, LUMA_W);
+  float threshLow = max(u_threshold - u_knee, 0.0);
+  float threshHigh = u_threshold + u_knee + 0.001;
+  return smoothstep(threshLow, threshHigh, lum);
+}
+
+vec3 saturateHighlight(vec3 color) {
+  float lum = dot(color, LUMA_W);
+  return mix(vec3(lum), color, u_saturation);
+}
+
+vec3 starTint(float t, float axisNorm) {
+  float phase = t * 0.55 + axisNorm * 0.18;
+  return 0.72 + 0.28 * cos(TAU * (vec3(0.0, 0.33, 0.67) + phase));
+}
+
+void main() {
+  vec3 src = texture(u_image, v_uv).rgb;
+  if (u_intensity <= 0.0001 || u_lengthPx <= 0.0001) {
+    out_color = vec4(src, 1.0);
+    return;
+  }
+
+  vec2 invResolution = 1.0 / max(u_resolution, vec2(1.0));
+  float axisCount = max(u_streaks, 1.0);
+  vec3 glow = vec3(0.0);
+
+  for (int axis = 0; axis < MAX_STREAKS; axis++) {
+    float axisIndex = float(axis);
+    if (axisIndex >= u_streaks) break;
+
+    float axisNorm = axisIndex / max(axisCount - 1.0, 1.0);
+    float angle = u_angle + axisIndex * PI / axisCount;
+    vec2 dir = vec2(cos(angle), sin(angle));
+    float secondary = mix(1.0, u_alternate, step(0.5, mod(axisIndex, 2.0)));
+
+    for (int tapIndex = 1; tapIndex <= STAR_TAPS; tapIndex++) {
+      float tap = float(tapIndex) / float(STAR_TAPS);
+      float distancePx = tap * u_lengthPx;
+      float tail = pow(1.0 - tap, mix(6.0, 1.15, u_falloff)) * secondary;
+      vec2 offset = dir * distancePx * invResolution;
+
+      vec3 positive = saturateHighlight(texture(u_image, v_uv + offset).rgb);
+      vec3 negative = saturateHighlight(texture(u_image, v_uv - offset).rgb);
+      float positiveMask = highlightMask(positive);
+      float negativeMask = highlightMask(negative);
+      vec3 tint = starTint(tap, axisNorm);
+      positive = mix(positive, positive * tint * 1.35, u_colorize);
+      negative = mix(negative, negative * tint * 1.35, u_colorize);
+
+      glow += positive * positiveMask * tail;
+      glow += negative * negativeMask * tail;
+    }
+  }
+
+  glow /= max(axisCount * 1.35, 1.0);
+  vec3 lit = src + glow * u_intensity;
+  out_color = vec4(clamp(lit, 0.0, 1.0), 1.0);
+}
+`;
+
 const CRT_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
@@ -1335,6 +1422,26 @@ const SHADER_PASSES = Object.freeze({
         u_intensity: clamp(Number(params?.intensity ?? 100) / 100, 0, 4),
         u_radius: clamp(Number(params?.radius ?? 16), 0, 64),
         u_saturation: clamp(Number(params?.saturation ?? 100) / 100, 0, 2),
+      };
+    },
+  },
+  "star-glow": {
+    fragment: STAR_GLOW_FRAGMENT_SHADER,
+    uniforms(params) {
+      const intensity = clamp(Number(params?.intensity ?? 100) / 100, 0, 4);
+      const lengthPx = clamp(Number(params?.length ?? 64), 1, 192);
+      if (intensity <= 0 || lengthPx <= 0) return null;
+      return {
+        u_threshold: clamp(Number(params?.threshold ?? 70) / 100, 0, 1),
+        u_knee: clamp(Number(params?.knee ?? 20) / 100, 0, 0.5),
+        u_intensity: intensity,
+        u_saturation: clamp(Number(params?.saturation ?? 100) / 100, 0, 2),
+        u_streaks: clamp(Math.round(Number(params?.streaks ?? 4)), 1, 8),
+        u_angle: ((Number(params?.angle ?? 0) / 180) * Math.PI),
+        u_lengthPx: lengthPx,
+        u_falloff: clamp(Number(params?.falloff ?? 80) / 100, 0.05, 1),
+        u_alternate: clamp(Number(params?.alternate ?? 100) / 100, 0, 1),
+        u_colorize: clamp(Number(params?.colorize ?? 0) / 100, 0, 1),
       };
     },
   },
@@ -1617,6 +1724,10 @@ export function applyCrtGpu(input, params, context) {
 
 export function applyBloomGpu(input, params) {
   return applyShaderPass("bloom", input, params);
+}
+
+export function applyStarGlowGpu(input, params) {
+  return applyShaderPass("star-glow", input, params);
 }
 
 export function applyHalationGpu(input, params) {

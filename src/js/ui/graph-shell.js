@@ -2524,10 +2524,11 @@ function renderFlipNode(node) {
 function renderGlareNode(node) {
   const params = node.params;
   const type = String(params.type ?? "bloom-gpu");
-  // Glow merges the old Bloom node into Glare: bloom-gpu is the fast modern
-  // single-pass path, the rest are the legacy CPU types kept for back-compat.
+  // Glow merges the old Bloom node into Glare: GPU variants are the fast
+  // modern paths; CPU types remain for back-compat and WebGL fallback.
   const typeOptions = [
     ["bloom-gpu", "Bloom (GPU, fast)"],
+    ["star-gpu", "Star Glow (GPU)"],
     ["streaks", "Streaks (CPU)"],
     ["bloom", "Bloom (CPU, legacy)"],
     ["fog-glow", "Fog Glow (CPU)"],
@@ -2542,9 +2543,9 @@ function renderGlareNode(node) {
 
   // Common knobs first so the most-tweaked sliders sit at the top, then
   // per-type extras, then tint at the bottom (most users keep tint at zero).
-  // bloom-gpu skips Blend / saturation sat range parity since it composites
-  // additively inside the shader; the rest of the types still expose Blend.
-  const isGpu = type === "bloom-gpu";
+  // GPU types composite inside their shaders; CPU legacy types still expose
+  // the blend selector used by the canvas compositor below.
+  const isGpu = type === "bloom-gpu" || type === "star-gpu";
   const common = `
     ${renderSelectField("Type", "type", type, typeOptions)}
     ${isGpu ? "" : renderSelectField("Blend", "blend", blend, blendOptions)}
@@ -2559,6 +2560,23 @@ function renderGlareNode(node) {
     typeFields = `
       ${renderRangeField("Size", "size", params.size, 1, 80, `${params.size}px`)}
       ${renderRangeField("Knee", "knee", knee, 0, 50, `${knee}%`)}
+    `;
+  } else if (type === "star-gpu") {
+    const knee = Number(params.knee ?? 20);
+    const streaks = Number(params.streaks ?? 4);
+    const angle = Number(params.angle ?? 0);
+    const length = Number(params.length ?? 64);
+    const falloff = Number(params.falloff ?? 80);
+    const alternate = Number(params.alternate ?? 100);
+    const colorize = Number(params.colorize ?? 0);
+    typeFields = `
+      ${renderRangeField("Knee", "knee", knee, 0, 50, `${knee}%`)}
+      ${renderRangeField("Streaks", "streaks", streaks, 1, 8, String(streaks))}
+      ${renderRangeField("Angle", "angle", angle, 0, 180, `${angle}°`)}
+      ${renderRangeField("Length", "length", length, 1, 192, `${length}px`)}
+      ${renderRangeField("Falloff", "falloff", falloff, 1, 100, `${falloff}%`)}
+      ${renderRangeField("Alternate", "alternate", alternate, 0, 100, `${alternate}%`)}
+      ${renderRangeField("Colorize", "colorize", colorize, 0, 100, `${colorize}%`)}
     `;
   } else if (type === "streaks") {
     typeFields = `

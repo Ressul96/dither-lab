@@ -341,7 +341,7 @@ const NODE_DEFINITIONS = Object.freeze({
   glare: {
     label: "Bloom / Glare",
     family: "Effect",
-    description: "Soft glow on bright pixels — GPU bloom (fast, single-pass), anamorphic streaks, fog glow, or legacy CPU bloom. Replaces the standalone Bloom node.",
+    description: "Soft glow on bright pixels — GPU bloom, GPU star glow, anamorphic streaks, fog glow, or legacy CPU bloom. Replaces the standalone Bloom node.",
     inputs: [{ name: "image", label: "Image", type: "image" }],
     outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
@@ -358,7 +358,11 @@ const NODE_DEFINITIONS = Object.freeze({
       angle: 45,
       iterations: 5,
       fade: 85,
-      knee: 20, // bloom-gpu only — soft luminance threshold knee
+      length: 64,
+      falloff: 80,
+      alternate: 100,
+      colorize: 0,
+      knee: 20, // GPU glare soft luminance threshold knee
     },
   },
   analog: {
@@ -838,6 +842,10 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     angle: { min: 0, max: 180 },
     iterations: { min: 1, max: 8 },
     fade: { min: 0, max: 99 },
+    length: { min: 1, max: 192 },
+    falloff: { min: 1, max: 100 },
+    alternate: { min: 0, max: 100 },
+    colorize: { min: 0, max: 100 },
     size: { min: 1, max: 80 },
     quality: { min: 1, max: 4 },
     tintAmount: { min: 0, max: 100 },

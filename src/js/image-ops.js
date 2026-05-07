@@ -17,6 +17,7 @@ import {
   applyPixelateGpu,
   applyPixelSortingGpu,
   applyPosterizeGpu,
+  applyStarGlowGpu,
   applyThresholdGpu,
   applyVhsGpu,
 } from "./gpu-effects.js";
@@ -213,6 +214,27 @@ export function applyGlareNode(input, params) {
       intensity: Number(params.mix ?? 100),
       radius: clamp(Number(params.size ?? 16), 0, 64),
     });
+  }
+
+  // Star Glow is the F4.4 GPU-first glare variant: directional streaks from
+  // highlights. If WebGL2 is unavailable or the shader cannot compile, fall
+  // back to the existing CPU Streaks type so saved graphs still produce a
+  // visible flare instead of silently passing through.
+  if (type === "star-gpu") {
+    const star = applyStarGlowGpu(input, {
+      threshold: clamp(Number(params.threshold ?? 180) / 2.55, 0, 100),
+      knee: Number(params.knee ?? 20),
+      intensity: Number(params.mix ?? 100),
+      saturation: Number(params.saturation ?? 100),
+      streaks: Number(params.streaks ?? 4),
+      angle: Number(params.angle ?? 0),
+      length: Number(params.length ?? 64),
+      falloff: Number(params.falloff ?? 80),
+      alternate: Number(params.alternate ?? 100),
+      colorize: Number(params.colorize ?? 0),
+    });
+    if (star) return star;
+    return applyGlareNode(input, { ...params, type: "streaks" });
   }
 
   const threshold = clamp(Math.round(Number(params.threshold ?? 180)), 0, 255);
