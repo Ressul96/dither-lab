@@ -91,7 +91,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 | PR | Kapsam | Md | Durum |
 |---|---|---|---|
 | F2.1 | Dither algorithm grouping; "Cell Scale" label | `dither_entegrasyon.md` | ✅ `d16cdad` |
-| F2.2 | Pixelate `borderOpacity` + `shape: "hex"` | `pixelation_entegrasyon.md` | ⬜ |
+| F2.2 | Pixelate `gridOpacity` (md §3 P2; hex/staggered P3'e parked) | `pixelation_entegrasyon.md` | ✅ `0b0a9ad` |
 | F2.3 | ASCII shader sinyal şekillendirme + atlas binarization | `ascii_entegrasyon.md` | ⬜ |
 | F2.4 | VHS/Analog parametre genişletmesi (resolution, distortion, colorFringing, wobble, tapeCrease, trackingNoise, verticalJump, sparkle, flicker, grain) | `vhs_crt_entegrasyon.md` | ⬜ |
 
