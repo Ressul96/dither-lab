@@ -103,7 +103,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 |---|---|---|---|
 | F3.1 | `levels` (CPU; GPU pass parked at md P4) | F1.1 (range fields) | ✅ `0df89c6` |
 | F3.2 | `duotone` (CPU) | F1.1 (color picker) | ✅ `d4bb173` |
-| F3.3 | `gradient-map` | F1.1 + F1.2 | ⬜ |
+| F3.3 | `gradient-map` | F1.1 + F1.2 | ✅ `3db745c` |
 | F3.4 | `mesh-gradient` (procedural source) | F1.1 + F1.2 + runtime case | ⬜ |
 
 ---
