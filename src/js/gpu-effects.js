@@ -259,6 +259,7 @@ uniform float u_sizeX;
 uniform float u_sizeY;
 uniform float u_shape;       // 0 square, 1 circle
 uniform float u_smoothing;   // 0-1 cell-edge softness
+uniform float u_gridOpacity; // 0-1 cell-edge darkening (cosmetic only)
 uniform float u_opacity;
 
 in vec2 v_uv;
@@ -295,6 +296,17 @@ void main() {
     float aa = u_smoothing * 0.5 + 0.001;
     float mask = smoothstep(0.0, aa, minEdge);
     cellColor = mix(cellColor * 0.6, cellColor, mask);
+  }
+
+  // Grid edge darkening — cosmetic only, never a real LCD/LED simulation
+  // (that's led-screen's job). Square cells only — circle cells already
+  // have transparent gaps so an additional grid would double-shade.
+  if (u_gridOpacity > 0.001 && u_shape < 0.5) {
+    vec2 cellLocal = (pixel - cell * cellSize) / cellSize;
+    float edge = min(min(cellLocal.x, 1.0 - cellLocal.x),
+                     min(cellLocal.y, 1.0 - cellLocal.y));
+    float grid = 1.0 - smoothstep(0.0, 0.08, edge);
+    cellColor = mix(cellColor, cellColor * 0.55, grid * u_gridOpacity);
   }
 
   out_color = vec4(mix(src, clamp(cellColor, 0.0, 1.0), clamp(u_opacity, 0.0, 1.0)), 1.0);
@@ -899,6 +911,7 @@ const SHADER_PASSES = Object.freeze({
         u_sizeY: sizeY,
         u_shape: String(params?.shape ?? "square").toLowerCase() === "circle" ? 1 : 0,
         u_smoothing: clamp(Number(params?.smoothing ?? 0) / 100, 0, 1),
+        u_gridOpacity: clamp(Number(params?.gridOpacity ?? 0) / 100, 0, 1),
         u_opacity: clamp(Number(params?.opacity ?? 100) / 100, 0, 1),
       };
     },

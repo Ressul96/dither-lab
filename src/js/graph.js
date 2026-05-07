@@ -118,7 +118,7 @@ const NODE_DEFINITIONS = Object.freeze({
   pixelate: {
     label: "Pixelate",
     family: "Process",
-    description: "Collapses NxN blocks into single colors for chunky low-res looks. Optional non-square aspect (sizeY), circle pixels, and edge softness.",
+    description: "Collapses NxN blocks into single colors for chunky low-res looks. Optional non-square aspect (sizeY), circle pixels, edge softness, and a cosmetic cell-edge grid.",
     inputs: [{ name: "image", label: "Image", type: "image" }],
     outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
@@ -126,6 +126,10 @@ const NODE_DEFINITIONS = Object.freeze({
       sizeY: 0, // 0 sentinel = link to size; old saves with only `size` keep their square cells
       shape: "square",
       smoothing: 0,
+      // Cosmetic cell-edge darkening (square cells only). Default 0 so old
+      // projects look identical. Real LCD/LED panel simulation belongs in
+      // led-screen — see pixelation_entegrasyon.md §2.
+      gridOpacity: 0,
       opacity: 100,
     },
   },
@@ -589,6 +593,7 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     size: { min: 1, max: 64 },
     sizeY: { min: 0, max: 64 }, // 0 sentinel allowed = link to size
     smoothing: { min: 0, max: 100 },
+    gridOpacity: { min: 0, max: 100 },
     opacity: { min: 0, max: 100 },
   },
   scale: {

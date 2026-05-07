@@ -2159,6 +2159,7 @@ function renderPixelateNode(node) {
   const sizeY = Number(params.sizeY ?? 0);
   const shape = String(params.shape ?? "square");
   const smoothing = Number(params.smoothing ?? 0);
+  const gridOpacity = Number(params.gridOpacity ?? 0);
   const opacity = Number(params.opacity ?? 100);
   const sizeYLabel = sizeY > 0 ? `${sizeY}px` : `link (${size}px)`;
   return `
@@ -2171,6 +2172,7 @@ function renderPixelateNode(node) {
         ["circle", "Circle"],
       ])}
       ${renderRangeField("Smoothing", "smoothing", smoothing, 0, 100, `${smoothing}%`)}
+      ${renderRangeField("Grid Opacity", "gridOpacity", gridOpacity, 0, 100, `${gridOpacity}%`)}
     </section>
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">General</header>
