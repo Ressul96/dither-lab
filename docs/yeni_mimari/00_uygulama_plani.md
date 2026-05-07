@@ -40,7 +40,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 | PR | Kapsam | Durum |
 |---|---|---|
 | F1.1 | **Color picker primitive** + halation pilot | ✅ `eccc750` |
-| F1.2 | **Gradient LUT helper** (256×1 canvas → GL texture, paylaşılan) | ⬜ |
+| F1.2 | **Gradient LUT helper** (256×1 canvas → GL texture, paylaşılan) | ✅ `15a1c4b` |
 | F1.3 | **UI components refactor** (`ui_components_entegrasyon.md` §8) | ⬜ |
 
 **F1.1 detay:**
@@ -51,6 +51,18 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 * `graph.js` halation `tintColor` + `normalizeNodeParams` legacy
   `tintR/G/B → tintColor` migration
 * `gpu-effects.js` halation uniforms HEX parse
+
+**F1.2 detay:**
+* `src/js/gl/gradient-lut.js`: `buildGradientLut(stops, options)`,
+  `uploadGradientLutTexture(gl, lut, existing?)`, `getGradientLutKey`
+* Stop modeli: `[{ pos: 0..1, color: "#hex" }, …]`. Otomatik sort,
+  endpoint extension, empty fallback (white).
+* Default width 256, RGBA8. Wrap-S = REPEAT (shader shift için), wrap-T
+  = CLAMP. Linear filter.
+* Canvas = `OffscreenCanvas` veya `HTMLCanvasElement`; inspector swatch
+  için doğrudan kullanılabilir.
+* Tarayıcıda 7 senaryo doğrulandı (linear, three-stop, empty,
+  out-of-order, partial range, key stability, custom width).
 
 ---
 
