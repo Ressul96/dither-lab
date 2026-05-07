@@ -2708,6 +2708,11 @@ function renderAsciiNode(node) {
   const ramp = String(params.ramp ?? "standard");
   const invert = String(params.invert ?? "off");
   const colorMode = String(params.colorMode ?? "source");
+  const signalBlack = Number(params.signalBlack ?? 0);
+  const signalWhite = Number(params.signalWhite ?? 100);
+  const signalGamma = Number(params.signalGamma ?? 100);
+  const presenceThreshold = Number(params.presenceThreshold ?? 0);
+  const presenceSoftness = Number(params.presenceSoftness ?? 0);
   return `
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">General</header>
@@ -2730,6 +2735,14 @@ function renderAsciiNode(node) {
         ["source", "From Image"],
         ["mono", "Monochrome"],
       ])}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Signal</header>
+      ${renderRangeField("Black Point", "signalBlack", signalBlack, 0, 100, `${signalBlack}%`)}
+      ${renderRangeField("White Point", "signalWhite", signalWhite, 0, 100, `${signalWhite}%`)}
+      ${renderRangeField("Gamma", "signalGamma", signalGamma, 10, 400, (signalGamma / 100).toFixed(2))}
+      ${renderRangeField("Presence Threshold", "presenceThreshold", presenceThreshold, 0, 100, `${presenceThreshold}%`)}
+      ${renderRangeField("Presence Softness", "presenceSoftness", presenceSoftness, 0, 100, `${presenceSoftness}%`)}
     </section>
   `;
 }

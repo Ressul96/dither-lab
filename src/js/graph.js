@@ -424,6 +424,15 @@ const NODE_DEFINITIONS = Object.freeze({
       ramp: "standard",
       invert: "off",
       colorMode: "source",
+      // Signal shaping (md §2 P1) — identity defaults so old projects look
+      // unchanged. signalBlack/signalWhite map raw luma into [0..1]; gamma
+      // adjusts the curve; presence* hides cells whose signal sits below
+      // the floor.
+      signalBlack: 0,
+      signalWhite: 100,
+      signalGamma: 100,
+      presenceThreshold: 0,
+      presenceSoftness: 0,
     },
   },
   halftone: {
@@ -737,6 +746,11 @@ const NODE_PARAM_BOUNDS = Object.freeze({
   ascii: {
     opacity: { min: 0, max: 100 },
     cellSize: { min: 4, max: 32 },
+    signalBlack: { min: 0, max: 100 },
+    signalWhite: { min: 0, max: 100 },
+    signalGamma: { min: 10, max: 400 },
+    presenceThreshold: { min: 0, max: 100 },
+    presenceSoftness: { min: 0, max: 100 },
   },
   displace: {
     xAmount: { min: -200, max: 200 },

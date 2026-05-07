@@ -528,6 +528,15 @@ uniform float u_useImageColor;
 uniform vec3 u_fg;
 uniform vec3 u_bg;
 
+// Signal shaping (md §2 P1) — applied AFTER invert, BEFORE glyph pick.
+// Defaults (signalBlack=0, signalWhite=1, signalGamma=1, presence*=0)
+// make this a no-op so old projects look identical.
+uniform float u_signalBlack;       // 0..1
+uniform float u_signalWhite;       // 0..1
+uniform float u_signalGamma;       // 0.1..4
+uniform float u_presenceThreshold; // 0..1
+uniform float u_presenceSoftness;  // 0..1
+
 in vec2 v_uv;
 out vec4 out_color;
 
@@ -544,8 +553,15 @@ void main() {
   float luma = dot(src, LUMA_W);
   if (u_invert > 0.5) luma = 1.0 - luma;
 
-  // Pick glyph index from the ramp [0, count-1] based on luminance buckets.
-  float glyphIdx = floor(clamp(luma, 0.0, 0.99999) * u_atlasCount);
+  // Stretch luma into [signalBlack, signalWhite], then power by 1/gamma.
+  float range = max(u_signalWhite - u_signalBlack, 0.001);
+  float shaped = pow(
+    clamp((luma - u_signalBlack) / range, 0.0, 1.0),
+    1.0 / max(u_signalGamma, 0.0001)
+  );
+
+  // Pick glyph index from the shaped signal.
+  float glyphIdx = floor(clamp(shaped, 0.0, 0.99999) * u_atlasCount);
 
   // UV within this cell, in [0, 1]. The glyph atlas is laid out as a single
   // row of square glyphs, so we just shift x by the glyph index and divide
@@ -553,6 +569,18 @@ void main() {
   vec2 cellUv = (pixel - cellPx) / u_cellSize;
   vec2 atlasUv = vec2((glyphIdx + cellUv.x) / u_atlasCount, cellUv.y);
   float coverage = texture(u_atlas, atlasUv).r;
+
+  // Presence cull — when the user enables a threshold, fade out cells whose
+  // shaped signal sits below the soft floor (so dark areas can stay empty).
+  // smoothstep(a, b, x) is undefined when a == b, so guard with a small
+  // epsilon and short-circuit the no-op default (both presence params 0).
+  if (u_presenceThreshold > 0.0001 || u_presenceSoftness > 0.0001) {
+    float lo = u_presenceThreshold - u_presenceSoftness;
+    float hi = u_presenceThreshold + u_presenceSoftness;
+    if (hi - lo < 1e-4) hi = lo + 1e-4;
+    float presence = smoothstep(lo, hi, shaped);
+    coverage *= presence;
+  }
 
   vec3 fg = u_useImageColor > 0.5 ? src : u_fg;
   vec3 col = mix(u_bg, fg, coverage);
@@ -979,6 +1007,12 @@ const SHADER_PASSES = Object.freeze({
         u_useImageColor: useImageColor ? 1 : 0,
         u_fg: [1, 1, 1], // mono mode default — extend later when color picker UI lands
         u_bg: [0, 0, 0],
+        // Signal shaping (md §2 P1). Defaults are the identity transform.
+        u_signalBlack: clamp(Number(params?.signalBlack ?? 0) / 100, 0, 1),
+        u_signalWhite: clamp(Number(params?.signalWhite ?? 100) / 100, 0, 1),
+        u_signalGamma: clamp(Number(params?.signalGamma ?? 100) / 100, 0.1, 4),
+        u_presenceThreshold: clamp(Number(params?.presenceThreshold ?? 0) / 100, 0, 1),
+        u_presenceSoftness: clamp(Number(params?.presenceSoftness ?? 0) / 100, 0, 1),
       };
     },
     textures(params) {
