@@ -22,7 +22,7 @@ sistem için kendi md'sinde.
 | Faz | Başlık | Süre | Durum |
 |---|---|---|---|
 | F1 | Altyapı temel taşları | 1-2 hafta | ✅ |
-| F2 | Mevcut node iyileştirmeleri | 1 hafta | 🚧 |
+| F2 | Mevcut node iyileştirmeleri | 1 hafta | ✅ |
 | F3 | Yeni Color / Source node'ları | 1-2 hafta | ⬜ |
 | F4 | Yeni Effect node'ları | 1-2 hafta | ⬜ |
 | F5 | Curve editor + displace genişlemesi | 1 hafta | ⬜ |
@@ -93,7 +93,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 | F2.1 | Dither algorithm grouping; "Cell Scale" label | `dither_entegrasyon.md` | ✅ `d16cdad` |
 | F2.2 | Pixelate `gridOpacity` (md §3 P2; hex/staggered P3'e parked) | `pixelation_entegrasyon.md` | ✅ `0b0a9ad` |
 | F2.3 | ASCII signal shaping (md §2 P1; atlas binarization P2'ye parked) | `ascii_entegrasyon.md` | ✅ `f5dd2b0` |
-| F2.4 | VHS/Analog parametre genişletmesi (resolution, distortion, colorFringing, wobble, tapeCrease, trackingNoise, verticalJump, sparkle, flicker, grain) | `vhs_crt_entegrasyon.md` | ⬜ |
+| F2.4 | VHS/Analog tape realism (md §4 P2: tapeResolution, jitter, flicker, dropouts, crease) | `vhs_crt_entegrasyon.md` | ✅ `131db4e` |
 
 ---
 
