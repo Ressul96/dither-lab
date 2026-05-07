@@ -40,7 +40,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 | PR | Kapsam | Durum |
 |---|---|---|
 | F1.1 | **Color picker primitive** + halation pilot | ✅ `eccc750` |
-| F1.2 | **Gradient LUT helper** (256×1 canvas → GL texture, paylaşılan) | ✅ `15a1c4b` |
+| F1.2 | **Gradient LUT helper** (256×1 canvas → GL texture, paylaşılan) | ✅ `d1eda4f` |
 | F1.3 | **UI components refactor** (`ui_components_entegrasyon.md` §8) | ⬜ |
 
 **F1.1 detay:**
