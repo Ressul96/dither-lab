@@ -311,6 +311,13 @@ body.resizing-y * {
   line-height: 1;
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.24);
   backdrop-filter: blur(10px);
+  /* Micro-notch transition target — color, border, shadow follow the same
+     150ms curve so hover/focus feels coordinated. */
+  transition:
+    border-color 150ms ease,
+    color 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease;
 }
 
 .panel-toggle:hover,
@@ -318,6 +325,17 @@ body.resizing-y * {
   border-color: rgba(255, 255, 255, 0.16);
   color: var(--text-primary);
   background: rgba(24, 24, 30, 0.96);
+}
+
+/* Keyboard focus needs a visible affordance — the small handle disappears
+   in dark UI without it. focus-visible avoids ring on plain mouse clicks. */
+.panel-toggle:focus-visible,
+.workspace-edge-toggle:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px rgba(74, 158, 255, 0.32),
+    0 12px 24px rgba(0, 0, 0, 0.24);
 }
 
 .workspace-edge-toggle {
@@ -349,6 +367,18 @@ body.resizing-y * {
   height: 22px;
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.12);
+  transition: background 150ms ease, height 150ms ease;
+}
+
+.panel-toggle:hover::before,
+.workspace-edge-toggle:hover::before {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.panel-toggle:focus-visible::before,
+.workspace-edge-toggle:focus-visible::before {
+  background: var(--accent);
+  height: 28px;
 }
 
 .inspector .panel-toggle {
