@@ -161,10 +161,17 @@ uniform float u_chroma;       // RGB shift in pixels
 uniform float u_noise;        // 0-1 static intensity
 uniform float u_scanlines;    // 0-1 scanline strength
 uniform float u_tracking;     // 0-1 tracking-band strength
-uniform float u_wave;         // horizontal jitter in pixels
+uniform float u_wave;         // horizontal jitter in pixels (low-freq wobble)
 uniform float u_vignette;     // 0-1
 uniform float u_saturation;   // 0-2 pre-process saturation
 uniform float u_bleed;        // 0-1 chroma blur (Y/C separation)
+// Tape realism (md §4 P2). All identity at the defaults so old projects
+// look unchanged.
+uniform float u_tapeResolution; // 25-200 (% of source horizontal resolution)
+uniform float u_jitter;         // 0-1 high-frequency per-row x jitter
+uniform float u_flicker;        // 0-1 frame brightness flutter
+uniform float u_dropouts;       // 0-1 sparse white/black streaks
+uniform float u_crease;         // 0-1 fixed horizontal band warp
 
 in vec2 v_uv;
 out vec4 out_color;
@@ -217,6 +224,33 @@ void main() {
   float trackingMask = trackingBand * u_tracking;
   uv.x += trackingMask * 0.006;
 
+  // High-frequency per-row jitter — adds the "tape edge wobble" feel on top
+  // of the low-freq wave. Time-quantised so preview/export agree.
+  if (u_jitter > 0.001) {
+    float jrow = floor(row);
+    float jt = floor(u_time * 24.0);
+    float jn = hash21(vec2(jrow, jt)) - 0.5;
+    uv.x += jn * u_jitter * 0.012;
+  }
+
+  // Fixed horizontal creases — strong x distortion in two narrow bands.
+  // Stays put on the screen rather than scrolling, so it reads as physical
+  // tape damage instead of a moving glitch.
+  if (u_crease > 0.001) {
+    float c1 = smoothstep(0.005, 0.0, abs(v_uv.y - 0.32));
+    float c2 = smoothstep(0.005, 0.0, abs(v_uv.y - 0.68));
+    float creaseAmt = (c1 + c2) * u_crease;
+    uv.x += creaseAmt * 0.025;
+  }
+
+  // Tape resolution — quantise the horizontal sample x. At identity (100)
+  // we skip the snap; below that we collapse pixels into wider cells, which
+  // gives the soft "low TVL" VHS look without touching vertical lines.
+  if (u_tapeResolution < 99.5) {
+    float cells = max(u_resolution.x * (u_tapeResolution / 100.0), 1.0);
+    uv.x = (floor(uv.x * cells) + 0.5) / cells;
+  }
+
   vec2 chromaPx = vec2(u_chroma / max(u_resolution.x, 1.0), 0.0);
   vec3 base = sampleSoft(uv, u_bleed * 4.0);
   float r = sampleSoft(uv + chromaPx, u_bleed * 4.0).r;
@@ -243,6 +277,24 @@ void main() {
   vec2 vp = uv - 0.5;
   float vignetteMask = smoothstep(0.85, 0.18, length(vp) * 1.45);
   col *= mix(1.0, vignetteMask, u_vignette);
+
+  // Frame-locked brightness flutter — quantised time keeps it deterministic.
+  if (u_flicker > 0.001) {
+    float fseed = hash21(vec2(floor(u_time * 18.0), 0.0)) - 0.5;
+    col *= 1.0 + fseed * u_flicker * 0.18;
+  }
+
+  // Sparse dropouts — each row independently has a small chance of flashing
+  // bright or near-black for one tick. Probability scales with u_dropouts.
+  if (u_dropouts > 0.001) {
+    float drow = floor(uv.y * u_resolution.y);
+    float dt = floor(u_time * 12.0);
+    float dseed = hash21(vec2(drow, dt));
+    if (dseed < u_dropouts * 0.04) {
+      float bias = hash21(vec2(drow + 17.0, dt)) > 0.5 ? 1.0 : 0.05;
+      col = mix(col, vec3(bias), 0.85);
+    }
+  }
 
   vec3 src = texture(u_image, v_uv).rgb;
   col = mix(src, clamp(col, 0.0, 1.0), clamp(u_opacity, 0.0, 1.0));
@@ -1069,6 +1121,12 @@ const SHADER_PASSES = Object.freeze({
         u_vignette: clamp(Number(params?.vignette ?? 40) / 100, 0, 1),
         u_saturation: clamp(Number(params?.saturation ?? 110) / 100, 0, 2),
         u_bleed: clamp(Number(params?.bleed ?? 50) / 100, 0, 1),
+        // Tape realism (md §4 P2). All identity at the defaults.
+        u_tapeResolution: clamp(Number(params?.tapeResolution ?? 100), 25, 200),
+        u_jitter: clamp(Number(params?.jitter ?? 0) / 100, 0, 1),
+        u_flicker: clamp(Number(params?.flicker ?? 0) / 100, 0, 1),
+        u_dropouts: clamp(Number(params?.dropouts ?? 0) / 100, 0, 1),
+        u_crease: clamp(Number(params?.crease ?? 0) / 100, 0, 1),
       };
     },
   },

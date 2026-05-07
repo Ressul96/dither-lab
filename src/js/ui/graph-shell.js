@@ -2518,6 +2518,11 @@ function renderAnalogNode(node) {
   const glow = Number(params.glow ?? 25);
   const vignette = Number(params.vignette ?? 40);
   const rolling = Number(params.rolling ?? 0);
+  const tapeResolution = Number(params.tapeResolution ?? 100);
+  const jitter = Number(params.jitter ?? 0);
+  const flicker = Number(params.flicker ?? 0);
+  const dropouts = Number(params.dropouts ?? 0);
+  const crease = Number(params.crease ?? 0);
   const showTape = mode === "vhs" || mode === "vhs-crt";
   const showTube = mode === "crt" || mode === "vhs-crt";
   return `
@@ -2542,6 +2547,11 @@ function renderAnalogNode(node) {
             ${renderRangeField("Wave", "wave", wave, 0, 32, `${wave}px`)}
             ${renderRangeField("Tracking", "tracking", tracking, 0, 100, `${tracking}%`)}
             ${renderRangeField("Noise", "noise", noise, 0, 100, `${noise}%`)}
+            ${renderRangeField("Tape Resolution", "tapeResolution", tapeResolution, 25, 200, `${tapeResolution}%`)}
+            ${renderRangeField("Jitter", "jitter", jitter, 0, 100, `${jitter}%`)}
+            ${renderRangeField("Flicker", "flicker", flicker, 0, 100, `${flicker}%`)}
+            ${renderRangeField("Dropouts", "dropouts", dropouts, 0, 100, `${dropouts}%`)}
+            ${renderRangeField("Crease", "crease", crease, 0, 100, `${crease}%`)}
           </section>
         `
         : ""
@@ -2584,6 +2594,11 @@ function renderVhsNode(node) {
   const tracking = Number(params.tracking ?? 35);
   const wave = Number(params.wave ?? 4);
   const vignette = Number(params.vignette ?? 40);
+  const tapeResolution = Number(params.tapeResolution ?? 100);
+  const jitter = Number(params.jitter ?? 0);
+  const flicker = Number(params.flicker ?? 0);
+  const dropouts = Number(params.dropouts ?? 0);
+  const crease = Number(params.crease ?? 0);
   return `
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">General</header>
@@ -2596,6 +2611,11 @@ function renderVhsNode(node) {
       ${renderRangeField("Color Bleed", "bleed", bleed, 0, 100, `${bleed}%`)}
       ${renderRangeField("Wave", "wave", wave, 0, 32, `${wave}px`)}
       ${renderRangeField("Tracking", "tracking", tracking, 0, 100, `${tracking}%`)}
+      ${renderRangeField("Tape Resolution", "tapeResolution", tapeResolution, 25, 200, `${tapeResolution}%`)}
+      ${renderRangeField("Jitter", "jitter", jitter, 0, 100, `${jitter}%`)}
+      ${renderRangeField("Flicker", "flicker", flicker, 0, 100, `${flicker}%`)}
+      ${renderRangeField("Dropouts", "dropouts", dropouts, 0, 100, `${dropouts}%`)}
+      ${renderRangeField("Crease", "crease", crease, 0, 100, `${crease}%`)}
     </section>
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Tube</header>

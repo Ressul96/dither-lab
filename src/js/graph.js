@@ -312,6 +312,13 @@ const NODE_DEFINITIONS = Object.freeze({
       glow: 25,
       vignette: 40,
       rolling: 0,
+      // Tape realism (md §4 P2). Identity defaults: tapeResolution 100 = no
+      // resolution loss; the rest are 0 = effect off.
+      tapeResolution: 100,
+      jitter: 0,
+      flicker: 0,
+      dropouts: 0,
+      crease: 0,
     },
   },
   "lens-distort": {
@@ -360,6 +367,12 @@ const NODE_DEFINITIONS = Object.freeze({
       wave: 4,
       vignette: 40,
       saturation: 110,
+      // Tape realism (md §4 P2) — same identity defaults as analog.
+      tapeResolution: 100,
+      jitter: 0,
+      flicker: 0,
+      dropouts: 0,
+      crease: 0,
     },
   },
   crt: {
@@ -703,6 +716,11 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     glow: { min: 0, max: 100 },
     vignette: { min: 0, max: 100 },
     rolling: { min: 0, max: 100 },
+    tapeResolution: { min: 25, max: 200 },
+    jitter: { min: 0, max: 100 },
+    flicker: { min: 0, max: 100 },
+    dropouts: { min: 0, max: 100 },
+    crease: { min: 0, max: 100 },
   },
   vhs: {
     opacity: { min: 0, max: 100 },
@@ -714,6 +732,11 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     wave: { min: 0, max: 32 },
     vignette: { min: 0, max: 100 },
     saturation: { min: 0, max: 200 },
+    tapeResolution: { min: 25, max: 200 },
+    jitter: { min: 0, max: 100 },
+    flicker: { min: 0, max: 100 },
+    dropouts: { min: 0, max: 100 },
+    crease: { min: 0, max: 100 },
   },
   crt: {
     opacity: { min: 0, max: 100 },
