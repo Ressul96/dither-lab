@@ -23,7 +23,7 @@ sistem için kendi md'sinde.
 |---|---|---|---|
 | F1 | Altyapı temel taşları | 1-2 hafta | ✅ |
 | F2 | Mevcut node iyileştirmeleri | 1 hafta | ✅ |
-| F3 | Yeni Color / Source node'ları | 1-2 hafta | ⬜ |
+| F3 | Yeni Color / Source node'ları | 1-2 hafta | 🚧 |
 | F4 | Yeni Effect node'ları | 1-2 hafta | ⬜ |
 | F5 | Curve editor + displace genişlemesi | 1 hafta | ⬜ |
 | F6 | Editor scaling: Group nodes | 1-2 hafta | ⬜ |
@@ -101,7 +101,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 
 | PR | Node | Bağımlılık | Durum |
 |---|---|---|---|
-| F3.1 | `levels` | F1.1 (range fields) | ⬜ |
+| F3.1 | `levels` (CPU; GPU pass parked at md P4) | F1.1 (range fields) | ✅ `0df89c6` |
 | F3.2 | `duotone` | F1.1 (color picker) | ⬜ |
 | F3.3 | `gradient-map` | F1.1 + F1.2 | ⬜ |
 | F3.4 | `mesh-gradient` (procedural source) | F1.1 + F1.2 + runtime case | ⬜ |
