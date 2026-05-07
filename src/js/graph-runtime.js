@@ -9,6 +9,7 @@ import {
   applyCrtNode,
   applyDitherNode,
   applyDisplaceNode,
+  applyDuotoneNode,
   applyFlipNode,
   applyGlareNode,
   applyHalationNode,
@@ -366,6 +367,8 @@ function computeNodeOutput(node, index, results, context) {
       return applyToneMapNode(resolveInputImage(node, "image", index, results), node.params);
     case "levels":
       return applyLevelsNode(resolveInputImage(node, "image", index, results), node.params);
+    case "duotone":
+      return applyDuotoneNode(resolveInputImage(node, "image", index, results), node.params);
     case "hsv":
       return applyHsvNode(resolveInputImage(node, "image", index, results), node.params);
     case "rgb-curves":

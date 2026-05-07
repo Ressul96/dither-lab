@@ -1512,6 +1512,8 @@ function renderNodeSpecifics(node) {
       return renderToneMapNode(node);
     case "levels":
       return renderLevelsNode(node);
+    case "duotone":
+      return renderDuotoneNode(node);
     case "hsv":
       return renderHsvNode(node);
     case "rgb-curves":
@@ -1935,6 +1937,33 @@ function renderLevelsNode(node) {
         ["rgb", "RGB"],
         ["luma", "Luma only"],
       ])}
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+    </section>
+  `;
+}
+
+function renderDuotoneNode(node) {
+  const params = node.params;
+  const shadowColor = params.shadowColor ?? "#101010";
+  const highlightColor = params.highlightColor ?? "#f4b642";
+  const redGamma = Number(params.redGamma ?? 100);
+  const greenGamma = Number(params.greenGamma ?? 100);
+  const blueGamma = Number(params.blueGamma ?? 100);
+  const opacity = Number(params.opacity ?? 100);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Colors</header>
+      ${renderColorField("Shadow", "shadowColor", shadowColor, { fallback: "#101010" })}
+      ${renderColorField("Highlight", "highlightColor", highlightColor, { fallback: "#f4b642" })}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Channel Gamma</header>
+      ${renderRangeField("Red", "redGamma", redGamma, 10, 500, (redGamma / 100).toFixed(2))}
+      ${renderRangeField("Green", "greenGamma", greenGamma, 10, 500, (greenGamma / 100).toFixed(2))}
+      ${renderRangeField("Blue", "blueGamma", blueGamma, 10, 500, (blueGamma / 100).toFixed(2))}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
       ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
     </section>
   `;
@@ -3262,6 +3291,7 @@ function initGraphContextMenu() {
     <button data-add-node="posterize">Add Posterize</button>
     <button data-add-node="tone-map">Add Tone Map</button>
     <button data-add-node="levels">Add Levels</button>
+    <button data-add-node="duotone">Add Duotone</button>
     <button data-add-node="rgb-curves">Add RGB Curves</button>
     <button data-add-node="blur">Add Blur</button>
     <button data-add-node="pixelate">Add Pixelate</button>
