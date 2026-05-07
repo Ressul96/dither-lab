@@ -942,6 +942,20 @@ function onNodeClick(event) {
 }
 
 function onInspectorInput(event) {
+  const gradientStopControl = event.target.closest("[data-gradient-map-stop-color]");
+  if (gradientStopControl) {
+    const node = getSelectedNode();
+    if (!node || node.type !== "gradient-map") return;
+    if (gradientStopControl.dataset.inputKind === "gradient-stop-hex") {
+      inspectorEditing = true;
+      return;
+    }
+    inspectorEditing = true;
+    commitGradientMapStopColor(node, gradientStopControl);
+    syncGradientStopSiblingControls(gradientStopControl);
+    return;
+  }
+
   const control = event.target.closest("[data-node-param]");
   if (control) {
     const node = getSelectedNode();
@@ -993,6 +1007,18 @@ function onInspectorInput(event) {
 }
 
 function onInspectorChange(event) {
+  const gradientStopControl = event.target.closest("[data-gradient-map-stop-color]");
+  if (gradientStopControl) {
+    inspectorEditing = false;
+    const node = getSelectedNode();
+    if (node?.type === "gradient-map") {
+      commitGradientMapStopColor(node, gradientStopControl);
+      syncGradientStopSiblingControls(gradientStopControl);
+    }
+    renderInspector();
+    return;
+  }
+
   const control = event.target.closest("[data-node-param]");
   if (control) {
     inspectorEditing = false;
@@ -1514,6 +1540,8 @@ function renderNodeSpecifics(node) {
       return renderLevelsNode(node);
     case "duotone":
       return renderDuotoneNode(node);
+    case "gradient-map":
+      return renderGradientMapNode(node);
     case "hsv":
       return renderHsvNode(node);
     case "rgb-curves":
@@ -1961,6 +1989,39 @@ function renderDuotoneNode(node) {
       ${renderRangeField("Red", "redGamma", redGamma, 10, 500, (redGamma / 100).toFixed(2))}
       ${renderRangeField("Green", "greenGamma", greenGamma, 10, 500, (greenGamma / 100).toFixed(2))}
       ${renderRangeField("Blue", "blueGamma", blueGamma, 10, 500, (blueGamma / 100).toFixed(2))}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+    </section>
+  `;
+}
+
+function renderGradientMapNode(node) {
+  const params = node.params;
+  const stops = normalizeGradientMapInspectorStops(params.stops);
+  const firstStop = stops[0];
+  const lastStop = stops.at(-1);
+  const repeat = Number(params.repeat ?? 1);
+  const shift = Number(params.shift ?? 0);
+  const mode = String(params.mode ?? "luma");
+  const opacity = Number(params.opacity ?? 100);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Gradient</header>
+      ${renderGradientStopColorField("Shadow", 0, firstStop.color, { fallback: "#111111" })}
+      ${renderGradientStopColorField("Highlight", stops.length - 1, lastStop.color, { fallback: "#ffffff" })}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Mapping</header>
+      ${renderSelectField("Signal", "mode", mode, [
+        ["luma", "Luma"],
+        ["r", "Red"],
+        ["g", "Green"],
+        ["b", "Blue"],
+      ])}
+      ${renderRangeField("Repeat", "repeat", repeat, 1, 20, String(repeat))}
+      ${renderRangeField("Shift", "shift", shift, -100, 100, `${shift}%`)}
     </section>
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">General</header>
@@ -3170,6 +3231,42 @@ function renderColorField(label, key, value, options = {}) {
   `;
 }
 
+function renderGradientStopColorField(label, stopIndex, value, options = {}) {
+  const safeIndex = String(Math.max(0, Number(stopIndex) || 0));
+  const fallback = options.fallback ?? "#000000";
+  const hex = normalizeHex(value, fallback);
+  return `
+    <div class="field color-field">
+      <label>
+        <span class="field-label-row">
+          <span class="field-label-text">${escapeHtml(label)}</span>
+        </span>
+      </label>
+      <div class="color-row">
+        <input
+          type="color"
+          class="color-swatch"
+          value="${escapeHtml(hex)}"
+          data-gradient-map-stop-color="${safeIndex}"
+          data-input-kind="gradient-stop-swatch"
+          aria-label="${escapeHtml(label)} color"
+        />
+        <input
+          type="text"
+          class="color-hex"
+          value="${escapeHtml(hex)}"
+          data-gradient-map-stop-color="${safeIndex}"
+          data-input-kind="gradient-stop-hex"
+          maxlength="7"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+        />
+      </div>
+    </div>
+  `;
+}
+
 function readControlValue(control) {
   if (control.type === "checkbox") return control.checked;
   if (control.tagName === "SELECT") return control.value;
@@ -3194,6 +3291,70 @@ function syncSiblingControls(control) {
     if (el === control) continue;
     if (el.value !== value) el.value = value;
   }
+}
+
+function commitGradientMapStopColor(node, control) {
+  const stops = normalizeGradientMapInspectorStops(node.params?.stops);
+  const rawIndex = Number(control.dataset.gradientMapStopColor);
+  const index = Math.max(0, Math.min(stops.length - 1, Number.isFinite(rawIndex) ? rawIndex : 0));
+  const fallback = index === 0 ? "#111111" : "#ffffff";
+  const color = normalizeHex(control.value, fallback);
+  const nextStops = stops.map((stop) => ({ ...stop }));
+  nextStops[index] = {
+    ...nextStops[index],
+    pos: index === 0 ? 0 : index === nextStops.length - 1 ? 1 : nextStops[index].pos,
+    color,
+  };
+  control.value = color;
+  updateNodeParams(node.id, { stops: nextStops });
+  return color;
+}
+
+function syncGradientStopSiblingControls(control) {
+  const key = control.dataset.gradientMapStopColor;
+  if (!key || !inspectorEl) return;
+  const value = normalizeHex(control.value, "#000000");
+  const siblings = inspectorEl.querySelectorAll(
+    `[data-gradient-map-stop-color="${cssEscape(key)}"]`
+  );
+  for (const el of siblings) {
+    if (el === control) continue;
+    if (el.value !== value) el.value = value;
+  }
+}
+
+function normalizeGradientMapInspectorStops(value) {
+  const fallback = [
+    { pos: 0, color: "#111111" },
+    { pos: 1, color: "#ffffff" },
+  ];
+  const source = Array.isArray(value) && value.length > 0 ? value : fallback;
+  const stops = source
+    .map((stop) => ({
+      pos: clamp01(Number(stop?.pos)),
+      color: normalizeHex(stop?.color, "#ffffff"),
+    }))
+    .sort((a, b) => a.pos - b.pos);
+
+  if (!stops.length) return fallback;
+  if (stops.length === 1) {
+    return [
+      { pos: 0, color: stops[0].color },
+      { pos: 1, color: stops[0].color },
+    ];
+  }
+  if (stops[0].pos > 0) {
+    stops.unshift({ pos: 0, color: stops[0].color });
+  }
+  if (stops.at(-1).pos < 1) {
+    stops.push({ pos: 1, color: stops.at(-1).color });
+  }
+  return stops;
+}
+
+function clamp01(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 function updateInlineReadout(_control) {}
@@ -3292,6 +3453,7 @@ function initGraphContextMenu() {
     <button data-add-node="tone-map">Add Tone Map</button>
     <button data-add-node="levels">Add Levels</button>
     <button data-add-node="duotone">Add Duotone</button>
+    <button data-add-node="gradient-map">Add Gradient Map</button>
     <button data-add-node="rgb-curves">Add RGB Curves</button>
     <button data-add-node="blur">Add Blur</button>
     <button data-add-node="pixelate">Add Pixelate</button>

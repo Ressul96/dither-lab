@@ -4,6 +4,7 @@
 // a 2D canvas so the rest of the graph can stay agnostic about WebGL.
 
 import { hexToRgb01 } from "./color.js";
+import { buildGradientLut } from "./gl/gradient-lut.js";
 
 const FULLSCREEN_VERTEX_SHADER = `#version 300 es
 in vec2 a_position;
@@ -414,6 +415,45 @@ void main() {
 
   vec3 finalColor = u_gamma > 0.5 ? toSrgb(clamp(result, 0.0, 1.0)) : result;
   out_color = vec4(mix(src, clamp(finalColor, 0.0, 1.0), clamp(u_opacity, 0.0, 1.0)), 1.0);
+}
+`;
+
+const GRADIENT_MAP_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform sampler2D u_image;
+uniform sampler2D u_gradientLut;
+uniform float u_shift;       // -1..1, expressed as LUT-space offset
+uniform float u_repeat;      // 1..20
+uniform float u_mode;        // 0 luma, 1 red, 2 green, 3 blue
+uniform float u_opacity;
+
+in vec2 v_uv;
+out vec4 out_color;
+
+const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+
+float sampleSignal(vec3 color, float mode) {
+  if (mode < 0.5) return dot(color, LUMA_W);
+  if (mode < 1.5) return color.r;
+  if (mode < 2.5) return color.g;
+  return color.b;
+}
+
+void main() {
+  vec3 src = texture(u_image, v_uv).rgb;
+  float signal = sampleSignal(src, u_mode);
+  float raw = signal * max(u_repeat, 1.0) + u_shift;
+
+  // Preserve the exact luma endpoint mapping for the default ramp:
+  // black samples stop 0, white samples stop 1. Once repeat or shift is
+  // active, wrap with fract() so the node behaves like a contour/scrolling LUT.
+  float t = (abs(u_shift) < 0.00001 && abs(u_repeat - 1.0) < 0.00001)
+    ? clamp(raw, 0.0, 1.0)
+    : fract(raw);
+
+  vec3 mapped = texture(u_gradientLut, vec2(t, 0.5)).rgb;
+  out_color = vec4(mix(src, mapped, clamp(u_opacity, 0.0, 1.0)), 1.0);
 }
 `;
 
@@ -924,6 +964,25 @@ function buildAsciiAtlas(ramp, glyphSize) {
   return canvas;
 }
 
+function gradientMapStops(params) {
+  if (Array.isArray(params?.stops) && params.stops.length > 0) {
+    return params.stops;
+  }
+  return [
+    { pos: 0, color: params?.shadowColor ?? "#111111" },
+    { pos: 1, color: params?.highlightColor ?? "#ffffff" },
+  ];
+}
+
+function gradientLutTextureSource(params) {
+  const lut = buildGradientLut(gradientMapStops(params));
+  if (lut.canvas) return lut.canvas;
+  if (typeof ImageData !== "undefined") {
+    return new ImageData(new Uint8ClampedArray(lut.data), lut.width, 1);
+  }
+  return null;
+}
+
 const SHADER_PASSES = Object.freeze({
   "chromatic-aberration": {
     fragment: CHROMATIC_ABERRATION_FRAGMENT_SHADER,
@@ -1014,6 +1073,22 @@ const SHADER_PASSES = Object.freeze({
         u_lumaMode: String(params?.lumaMode ?? "rgb").toLowerCase() === "luma" ? 1 : 0,
         u_opacity: clamp(Number(params?.opacity ?? 100) / 100, 0, 1),
       };
+    },
+  },
+  "gradient-map": {
+    fragment: GRADIENT_MAP_FRAGMENT_SHADER,
+    uniforms(params) {
+      const opacity = clamp(Number(params?.opacity ?? 100) / 100, 0, 1);
+      if (opacity <= 0) return null;
+      return {
+        u_shift: clamp(Number(params?.shift ?? 0) / 100, -1, 1),
+        u_repeat: clamp(Number(params?.repeat ?? 1), 1, 20),
+        u_mode: gradientMapModeIndex(params?.mode ?? "luma"),
+        u_opacity: opacity,
+      };
+    },
+    textures(params) {
+      return { u_gradientLut: gradientLutTextureSource(params) };
     },
   },
   threshold: {
@@ -1213,6 +1288,10 @@ export function applyPixelateGpu(input, params) {
 
 export function applyPosterizeGpu(input, params) {
   return applyShaderPass("posterize", input, params);
+}
+
+export function applyGradientMapGpu(input, params) {
+  return applyShaderPass("gradient-map", input, params);
 }
 
 export function applyThresholdGpu(input, params) {
@@ -1429,4 +1508,12 @@ function thresholdChannelIndex(value) {
   if (normalized === "b" || normalized === "blue") return 3;
   if (normalized === "max") return 4;
   return 0; // luma default
+}
+
+function gradientMapModeIndex(value) {
+  const normalized = String(value ?? "luma").toLowerCase();
+  if (normalized === "r" || normalized === "red") return 1;
+  if (normalized === "g" || normalized === "green") return 2;
+  if (normalized === "b" || normalized === "blue") return 3;
+  return 0;
 }

@@ -117,6 +117,23 @@ const NODE_DEFINITIONS = Object.freeze({
       opacity: 100,
     },
   },
+  "gradient-map": {
+    label: "Gradient Map",
+    family: "Color",
+    description: "Maps image luminance to a custom gradient. Repeat and shift can turn the ramp into contour bands or animated color flows.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      stops: [
+        { pos: 0, color: "#111111" },
+        { pos: 1, color: "#ffffff" },
+      ],
+      shift: 0,
+      repeat: 1,
+      mode: "luma",
+      opacity: 100,
+    },
+  },
   hsv: {
     label: "HSV",
     family: "Color",
@@ -571,34 +588,35 @@ const TYPE_ORDER = {
   "tone-map": 5,
   levels: 6,
   duotone: 7,
-  hsv: 8,
-  "rgb-curves": 9,
-  blur: 10,
-  pixelate: 11,
-  scale: 12,
-  transform: 13,
-  crop: 14,
-  flip: 15,
-  dither: 16,
-  "pattern-dither": 17,
-  threshold: 18,
-  "mask-combine": 19,
-  "mask-apply": 20,
-  glare: 21,
-  "lens-distort": 22,
-  "chromatic-aberration": 23,
-  analog: 24,
-  vhs: 25,
-  crt: 26,
-  bloom: 27,
-  halation: 28,
-  ascii: 29,
-  halftone: 30,
-  displace: 31,
-  mix: 32,
-  value: 33,
-  math: 34,
-  "viewer-output": 35,
+  "gradient-map": 8,
+  hsv: 9,
+  "rgb-curves": 10,
+  blur: 11,
+  pixelate: 12,
+  scale: 13,
+  transform: 14,
+  crop: 15,
+  flip: 16,
+  dither: 17,
+  "pattern-dither": 18,
+  threshold: 19,
+  "mask-combine": 20,
+  "mask-apply": 21,
+  glare: 22,
+  "lens-distort": 23,
+  "chromatic-aberration": 24,
+  analog: 25,
+  vhs: 26,
+  crt: 27,
+  bloom: 28,
+  halation: 29,
+  ascii: 30,
+  halftone: 31,
+  displace: 32,
+  mix: 33,
+  value: 34,
+  math: 35,
+  "viewer-output": 36,
 };
 
 const NODE_PARAM_BOUNDS = Object.freeze({
@@ -646,6 +664,13 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     redGamma: { min: 10, max: 500 },
     greenGamma: { min: 10, max: 500 },
     blueGamma: { min: 10, max: 500 },
+    opacity: { min: 0, max: 100 },
+  },
+  "gradient-map": {
+    // gradient_map_entegrasyon.md §1 bounds. The `stops` array carries HEX
+    // colors + normalized positions; numeric controls only need these bounds.
+    shift: { min: -100, max: 100 },
+    repeat: { min: 1, max: 20 },
     opacity: { min: 0, max: 100 },
   },
   hsv: {
@@ -1624,10 +1649,59 @@ function normalizeNodeParams(type, defaultParams, incomingParams) {
     delete incoming.tintG;
     delete incoming.tintB;
   }
+  if (type === "gradient-map") {
+    incoming.stops = normalizeGradientMapStops(
+      incoming.stops,
+      defaultParams.stops,
+      incoming.shadowColor,
+      incoming.highlightColor
+    );
+    delete incoming.shadowColor;
+    delete incoming.highlightColor;
+  }
   return {
     ...clone(defaultParams),
     ...incoming,
   };
+}
+
+function normalizeGradientMapStops(stops, fallbackStops, legacyShadow, legacyHighlight) {
+  let source = stops;
+  if (!Array.isArray(source) || source.length === 0) {
+    source = [
+      { pos: 0, color: legacyShadow ?? fallbackStops?.[0]?.color ?? "#111111" },
+      { pos: 1, color: legacyHighlight ?? fallbackStops?.at?.(-1)?.color ?? "#ffffff" },
+    ];
+  }
+
+  const normalized = source
+    .map((stop) => ({
+      pos: clamp01(Number(stop?.pos)),
+      color: normalizeHex(stop?.color, "#ffffff"),
+    }))
+    .sort((a, b) => a.pos - b.pos);
+
+  if (!normalized.length) {
+    return clone(fallbackStops);
+  }
+  if (normalized.length === 1) {
+    return [
+      { pos: 0, color: normalized[0].color },
+      { pos: 1, color: normalized[0].color },
+    ];
+  }
+  if (normalized[0].pos > 0) {
+    normalized.unshift({ pos: 0, color: normalized[0].color });
+  }
+  if (normalized.at(-1).pos < 1) {
+    normalized.push({ pos: 1, color: normalized.at(-1).color });
+  }
+  return normalized;
+}
+
+function clamp01(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 function getLinearChain(graph) {

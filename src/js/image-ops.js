@@ -1,6 +1,7 @@
 import { runAlgorithm } from "./dither/index.js";
 import { getPalette } from "./palettes.js";
 import { hexToRgb01 } from "./color.js";
+import { buildGradientLut } from "./gl/gradient-lut.js";
 import {
   applyAsciiGpu,
   applyBloomGpu,
@@ -8,6 +9,7 @@ import {
   applyCrtGpu,
   applyHalationGpu,
   applyHalftoneGpu,
+  applyGradientMapGpu,
   applyPatternDitherGpu,
   applyPixelateGpu,
   applyPosterizeGpu,
@@ -937,6 +939,88 @@ export function applyDuotoneNode(input, params) {
 
   ctx.putImageData(imageData, 0, 0);
   return output;
+}
+
+// Gradient Map — maps a scalar signal (luma by default) through the shared
+// gradient LUT. GPU owns the hot path; CPU fallback keeps WebGL2-disabled
+// environments visually consistent and exercises the same LUT helper.
+export function applyGradientMapNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const gpuOutput = applyGradientMapGpu(input, params);
+  if (gpuOutput) return gpuOutput;
+  return applyGradientMapCpu(input, params);
+}
+
+function applyGradientMapCpu(input, params = {}) {
+  const opacity = clamp(Number(params?.opacity ?? 100) / 100, 0, 1);
+  if (opacity <= 0) return input;
+
+  const repeat = clamp(Number(params?.repeat ?? 1), 1, 20);
+  const shift = clamp(Number(params?.shift ?? 0) / 100, -1, 1);
+  const mode = String(params?.mode ?? "luma").toLowerCase();
+  const lut = buildGradientLut(gradientMapStops(params));
+  const lutData = lut.data;
+  const lutWidth = lut.width;
+
+  const output = createBuffer(input.width, input.height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  ctx.drawImage(input, 0, 0);
+  const imageData = ctx.getImageData(0, 0, output.width, output.height);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i] / 255;
+    const g = data[i + 1] / 255;
+    const b = data[i + 2] / 255;
+    const signal = gradientMapSignal(r, g, b, mode);
+    const t = gradientMapCoordinate(signal, repeat, shift);
+    const mapped = sampleGradientLut(lutData, lutWidth, t);
+    data[i] = mixByte(data[i], mapped[0], opacity);
+    data[i + 1] = mixByte(data[i + 1], mapped[1], opacity);
+    data[i + 2] = mixByte(data[i + 2], mapped[2], opacity);
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+function gradientMapStops(params) {
+  if (Array.isArray(params?.stops) && params.stops.length > 0) {
+    return params.stops;
+  }
+  return [
+    { pos: 0, color: params?.shadowColor ?? "#111111" },
+    { pos: 1, color: params?.highlightColor ?? "#ffffff" },
+  ];
+}
+
+function gradientMapSignal(r, g, b, mode) {
+  if (mode === "r" || mode === "red") return r;
+  if (mode === "g" || mode === "green") return g;
+  if (mode === "b" || mode === "blue") return b;
+  return r * 0.299 + g * 0.587 + b * 0.114;
+}
+
+function gradientMapCoordinate(signal, repeat, shift) {
+  const raw = signal * repeat + shift;
+  if (Math.abs(shift) < 1e-5 && Math.abs(repeat - 1) < 1e-5) {
+    return clamp01(raw);
+  }
+  return raw - Math.floor(raw);
+}
+
+function sampleGradientLut(data, width, t) {
+  const x = clamp01(t) * (width - 1);
+  const i0 = Math.floor(x);
+  const i1 = Math.min(width - 1, i0 + 1);
+  const f = x - i0;
+  const a = i0 * 4;
+  const b = i1 * 4;
+  return [
+    data[a] + (data[b] - data[a]) * f,
+    data[a + 1] + (data[b + 1] - data[a + 1]) * f,
+    data[a + 2] + (data[b + 2] - data[a + 2]) * f,
+  ];
 }
 
 export function applyToneMapNode(input, params) {
