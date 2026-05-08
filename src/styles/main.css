@@ -2387,6 +2387,10 @@ body.dragging-tangent .timeline-tangent-handle {
   gap: 12px;
 }
 
+.curve-field {
+  gap: 8px;
+}
+
 .curves-editor {
   width: 100%;
   aspect-ratio: 1;

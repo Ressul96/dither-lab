@@ -2099,13 +2099,11 @@ function renderRgbCurvesNode(node) {
         ["green", "Green"],
         ["blue", "Blue"],
       ])}
-      <div class="curves-editor">
-        ${renderCurveCanvas(points, prefix)}
-      </div>
-      <div class="curves-actions">
-        <button type="button" data-curve-action="reset">Reset Curve</button>
-      </div>
-      <p class="hint">Click curve to add a point. Drag points to remap tones. Right-click a point to delete.</p>
+      ${renderCurveField("Curve", `points_${prefix}`, points, {
+        tone: prefix,
+        legacyChannel: prefix,
+        hint: "Click curve to add a point. Drag points to remap tones. Right-click a point to delete.",
+      })}
     </section>
   `;
 }
@@ -2124,9 +2122,47 @@ function readCurvePoints(node, channel) {
   ];
 }
 
-function renderCurveCanvas(points, channel) {
+function renderCurveField(label, paramKey, points, options = {}) {
+  const safeKey = escapeHtml(paramKey);
+  const tone = normalizeCurveTone(options.tone);
+  const legacyAttr = options.legacyChannel
+    ? ` data-curve-legacy-channel="${escapeHtml(options.legacyChannel)}"`
+    : "";
+  const hint = options.hint ? `<p class="hint">${escapeHtml(options.hint)}</p>` : "";
+  const resetLabel = options.resetLabel ?? "Reset Curve";
+  return `
+    <div class="field curve-field" data-curve-field="${safeKey}">
+      <label>
+        <span class="field-label-row">
+          <span class="field-label-text">${escapeHtml(label)}</span>
+        </span>
+      </label>
+      <div class="curves-editor">
+        ${renderCurveCanvas(points, {
+          paramKey,
+          tone,
+          label,
+          legacyChannel: options.legacyChannel,
+        })}
+      </div>
+      <div class="curves-actions">
+        <button type="button" data-curve-action="reset" data-curve-param="${safeKey}"${legacyAttr}>${escapeHtml(resetLabel)}</button>
+      </div>
+      ${hint}
+    </div>
+  `;
+}
+
+function renderCurveCanvas(points, options = {}) {
   const size = 240;
-  const stroke = curveStrokeColor(channel);
+  const paramKey = options.paramKey ?? "curve";
+  const tone = normalizeCurveTone(options.tone);
+  const safeKey = escapeHtml(paramKey);
+  const safeTone = escapeHtml(tone);
+  const legacyAttr = options.legacyChannel
+    ? ` data-curve-legacy-channel="${escapeHtml(options.legacyChannel)}"`
+    : "";
+  const stroke = curveStrokeColor(tone);
   const polyline = buildCurvePolyline(points, size);
   const handles = points
     .map(
@@ -2142,19 +2178,33 @@ function renderCurveCanvas(points, channel) {
     )
     .join("");
   return `
-    <svg class="curves-svg" viewBox="0 0 ${size} ${size}" data-curve-svg preserveAspectRatio="none">
+    <svg
+      class="curves-svg"
+      viewBox="0 0 ${size} ${size}"
+      data-curve-svg
+      data-curve-param="${safeKey}"
+      data-curve-tone="${safeTone}"
+      ${legacyAttr}
+      preserveAspectRatio="none"
+      role="img"
+      aria-label="${escapeHtml(options.label ?? "Curve")}"
+    >
       <defs>
-        <pattern id="curveGrid-${escapeHtml(channel)}" width="${size / 4}" height="${size / 4}" patternUnits="userSpaceOnUse">
+        <pattern id="curveGrid-${safeKey}" width="${size / 4}" height="${size / 4}" patternUnits="userSpaceOnUse">
           <path d="M ${size / 4} 0 L 0 0 0 ${size / 4}" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
         </pattern>
       </defs>
       <rect width="${size}" height="${size}" fill="rgba(0,0,0,0.34)"/>
-      <rect width="${size}" height="${size}" fill="url(#curveGrid-${escapeHtml(channel)})"/>
+      <rect width="${size}" height="${size}" fill="url(#curveGrid-${safeKey})"/>
       <line x1="0" y1="${size}" x2="${size}" y2="0" stroke="rgba(255,255,255,0.1)" stroke-dasharray="3 4"/>
       <polyline points="${polyline}" fill="none" stroke="${stroke}" stroke-width="1.7" stroke-linejoin="round"/>
       ${handles}
     </svg>
   `;
+}
+
+function normalizeCurveTone(value) {
+  return ["master", "red", "green", "blue"].includes(value) ? value : "master";
 }
 
 function curveStrokeColor(channel) {
@@ -2220,12 +2270,43 @@ function normalizeCurvePoints(rawPoints) {
     .sort((a, b) => a.x - b.x);
 }
 
+function identityCurvePoints() {
+  return [{ x: 0, y: 0 }, { x: 255, y: 255 }];
+}
+
+function readCurveParamPoints(node, paramKey, legacyChannel = null) {
+  const raw = node?.params?.[paramKey];
+  if (Array.isArray(raw) && raw.length >= 2) return raw;
+  if (legacyChannel) return readCurvePoints(node, legacyChannel);
+  return identityCurvePoints();
+}
+
+function resolveCurveTarget(element, node = getSelectedNode()) {
+  const target = element?.closest?.("[data-curve-param]") ?? element;
+  const paramKey = target?.dataset?.curveParam;
+  if (paramKey) {
+    return {
+      paramKey,
+      legacyChannel: target.dataset.curveLegacyChannel ?? null,
+    };
+  }
+  if (node?.type === "rgb-curves") {
+    const channel = normalizeCurveChannel(node.params?.activeChannel);
+    return {
+      paramKey: `points_${channel}`,
+      legacyChannel: channel,
+    };
+  }
+  return null;
+}
+
 function handleCurveClick(_action) {
   const node = getSelectedNode();
-  if (!node || node.type !== "rgb-curves") return;
-  const channel = normalizeCurveChannel(node.params?.activeChannel);
+  if (!node) return;
+  const target = resolveCurveTarget(_action, node);
+  if (!target) return;
   updateNodeParams(node.id, {
-    [`points_${channel}`]: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+    [target.paramKey]: identityCurvePoints(),
   });
   renderInspector();
 }
@@ -2234,12 +2315,11 @@ function onInspectorPointerDown(event) {
   const svg = event.target.closest("[data-curve-svg]");
   if (!svg) return;
   const node = getSelectedNode();
-  if (!node || node.type !== "rgb-curves") return;
+  const target = resolveCurveTarget(svg, node);
+  if (!node || !target) return;
   event.preventDefault();
 
   const handle = event.target.closest("[data-curve-handle]");
-  const channel = normalizeCurveChannel(node.params?.activeChannel);
-  const key = `points_${channel}`;
   const rect = svg.getBoundingClientRect();
   const toCurve = (clientX, clientY) => {
     const u = clamp((clientX - rect.left) / rect.width, 0, 1);
@@ -2250,7 +2330,7 @@ function onInspectorPointerDown(event) {
     };
   };
 
-  let points = normalizeCurvePoints(readCurvePoints(node, channel));
+  let points = normalizeCurvePoints(readCurveParamPoints(node, target.paramKey, target.legacyChannel));
   let activeIndex;
   if (handle) {
     activeIndex = Number(handle.dataset.curveHandle);
@@ -2258,7 +2338,7 @@ function onInspectorPointerDown(event) {
     const cursor = toCurve(event.clientX, event.clientY);
     points.push(cursor);
     points.sort((a, b) => a.x - b.x);
-    updateNodeParams(node.id, { [key]: points });
+    updateNodeParams(node.id, { [target.paramKey]: points });
     renderInspector();
     return;
   }
@@ -2270,7 +2350,7 @@ function onInspectorPointerDown(event) {
 
   const onMove = (ev) => {
     const selected = getSelectedNode() ?? node;
-    const updated = normalizeCurvePoints(readCurvePoints(selected, channel));
+    const updated = normalizeCurvePoints(readCurveParamPoints(selected, target.paramKey, target.legacyChannel));
     if (activeIndex < 0 || activeIndex >= updated.length) return;
 
     const next = toCurve(ev.clientX, ev.clientY);
@@ -2282,7 +2362,7 @@ function onInspectorPointerDown(event) {
       next.x = clamp(next.x, updated[activeIndex - 1].x + 1, updated[activeIndex + 1].x - 1);
     }
     updated[activeIndex] = next;
-    updateNodeParams(node.id, { [key]: updated });
+    updateNodeParams(node.id, { [target.paramKey]: updated });
     renderInspector();
   };
 
@@ -2305,16 +2385,15 @@ function onInspectorContextMenu(event) {
   const handle = event.target.closest("[data-curve-handle]");
   if (!handle) return;
   const node = getSelectedNode();
-  if (!node || node.type !== "rgb-curves") return;
+  const target = resolveCurveTarget(handle, node);
+  if (!node || !target) return;
   event.preventDefault();
 
-  const channel = normalizeCurveChannel(node.params?.activeChannel);
-  const key = `points_${channel}`;
-  const points = normalizeCurvePoints(readCurvePoints(node, channel));
+  const points = normalizeCurvePoints(readCurveParamPoints(node, target.paramKey, target.legacyChannel));
   const index = Number(handle.dataset.curveHandle);
   if (!Number.isFinite(index) || index <= 0 || index >= points.length - 1) return;
   points.splice(index, 1);
-  updateNodeParams(node.id, { [key]: points });
+  updateNodeParams(node.id, { [target.paramKey]: points });
   renderInspector();
 }
 
