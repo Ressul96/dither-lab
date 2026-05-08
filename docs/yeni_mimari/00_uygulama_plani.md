@@ -126,7 +126,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 |---|---|---|---|
 | F5.1 | 2D Curve editor inspector kontrolü (paylaşılan primitive) | yeni | ✅ `4fef130` |
 | F5.2 | `rgb-curves` 4-eğri (master+RGB), applyMode, 256×1 LUT | `curves_entegrasyon.md` | ✅ `070bff8` |
-| F5.3 | `displace` map modu için `mapCurve` + `fitType` + `textureScale` + `direction` | `displacement_entegrasyon.md` | ⬜ |
+| F5.3 | `displace` map modu için `mapCurve` + `fitType` + `textureScale` + `direction` | `displacement_entegrasyon.md` | ✅ `97b8240` |
 
 ---
 
