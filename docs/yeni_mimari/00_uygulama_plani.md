@@ -116,7 +116,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 | F4.2 | `modulation` | GPU phase modulation | ✅ `f72e152` |
 | F4.3 | `pixel-sorting` | GPU heuristic single-pass | ✅ `8586a48` |
 | F4.4 | `star-glow` | F1.2 gerekir | ✅ `b66d032` |
-| F4.5 | `depth-of-field` | P1 focus mask + circular blur | ⬜ |
+| F4.5 | `depth-of-field` | P1 focus mask + circular blur | ✅ `3a070ab` |
 
 ---
 
