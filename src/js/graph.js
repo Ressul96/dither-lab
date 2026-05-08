@@ -164,11 +164,12 @@ const NODE_DEFINITIONS = Object.freeze({
   "rgb-curves": {
     label: "RGB Curves",
     family: "Color",
-    description: "Applies a simple three-point curve to master and RGB channels.",
+    description: "Remaps master and RGB channels with editable tone curves.",
     inputs: [{ name: "image", label: "Image", type: "image" }],
     outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
       activeChannel: "master",
+      applyMode: "normal",
       masterLow: 0,
       masterMid: 128,
       masterHigh: 255,

@@ -2410,6 +2410,11 @@ body.dragging-tangent .timeline-tangent-handle {
   cursor: crosshair;
 }
 
+.curve-overlay {
+  opacity: 0.24;
+  pointer-events: none;
+}
+
 .curve-handle {
   fill: var(--text-primary);
   stroke: rgba(0, 0, 0, 0.72);
