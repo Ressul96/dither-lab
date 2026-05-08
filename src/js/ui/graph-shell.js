@@ -2705,28 +2705,75 @@ function renderLensDistortNode(node) {
 function renderDisplaceNode(node) {
   const params = node.params;
   const mode = String(params.mode ?? "wave");
+  const mapMode = String(params.mapMode ?? "rg");
+  const mapFit = String(params.mapFit ?? "stretch");
+  const debugMap = String(params.debugMap ?? "off");
   const filter = params.filter ?? "linear";
+  const xAmount = Number(params.xAmount ?? 16);
+  const yAmount = Number(params.yAmount ?? 0);
+  const strength = Number(params.strength ?? 100);
+  const frequency = Number(params.frequency ?? 4);
+  const phase = Number(params.phase ?? 0);
+  const mapScale = Number(params.mapScale ?? 100);
+  const mapOffsetX = Number(params.mapOffsetX ?? 0);
+  const mapOffsetY = Number(params.mapOffsetY ?? 0);
+  const hasMapInput = (getState().graph?.edges ?? []).some(
+    (edge) => edge.toNode === node.id && edge.toSocket === "map"
+  );
   const waveFields = mode === "wave"
     ? `
-      ${renderRangeField("Frequency", "frequency", params.frequency, 1, 32, `${params.frequency}x`)}
-      ${renderRangeField("Phase", "phase", params.phase, 0, 360, `${params.phase}°`)}
+      <section class="node-panel-section node-panel-section--titled">
+        <header class="node-panel-section-title">Wave</header>
+        ${renderRangeField("Frequency", "frequency", frequency, 1, 32, `${frequency}x`)}
+        ${renderRangeField("Phase", "phase", phase, 0, 360, `${phase}°`)}
+      </section>
     `
-    : `<p class="hint">Connect an image to the Map input. Red offsets X, green offsets Y.</p>`;
+    : `
+      <section class="node-panel-section node-panel-section--titled">
+        <header class="node-panel-section-title">Map</header>
+        ${renderSelectField("Map Mode", "mapMode", mapMode, [
+          ["rg", "RG Vector"],
+          ["luma", "Luma Height"],
+        ])}
+        ${renderSelectField("Map Fit", "mapFit", mapFit, [
+          ["stretch", "Stretch"],
+          ["fit", "Fit"],
+          ["fill", "Fill"],
+          ["tile", "Tile"],
+        ])}
+        ${mapFit === "tile" ? renderRangeField("Texture Scale", "mapScale", mapScale, 10, 800, `${mapScale}%`) : ""}
+        ${mapFit === "stretch" ? "" : renderRangeField("Offset X", "mapOffsetX", mapOffsetX, -100, 100, `${mapOffsetX}%`)}
+        ${mapFit === "stretch" ? "" : renderRangeField("Offset Y", "mapOffsetY", mapOffsetY, -100, 100, `${mapOffsetY}%`)}
+        ${renderSelectField("Debug", "debugMap", debugMap, [
+          ["off", "Off"],
+          ["map", "Map"],
+          ["vectors", "Vectors"],
+        ])}
+        ${mapMode === "luma"
+          ? renderCurveField("Map Curve", "mapCurve", params.mapCurve ?? createIdentityCurvePoints(), {
+              tone: "master",
+              hint: "Shape luma before it becomes displacement height.",
+            })
+          : ""}
+        ${hasMapInput ? "" : `<p class="hint">Connect an image to the Map input.</p>`}
+      </section>
+    `;
   return `
-    <section class="node-panel-section">
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">General</header>
       ${renderSelectField("Mode", "mode", mode, [
         ["wave", "Wave"],
         ["map", "Map input"],
       ])}
-      ${renderRangeField("X Amount", "xAmount", params.xAmount, -200, 200, `${params.xAmount}px`)}
-      ${renderRangeField("Y Amount", "yAmount", params.yAmount, -200, 200, `${params.yAmount}px`)}
-      ${renderRangeField("Strength", "strength", params.strength, 0, 400, `${params.strength}%`)}
-      ${waveFields}
+      ${renderRangeField("X Amount", "xAmount", xAmount, -200, 200, `${xAmount}px`)}
+      ${renderRangeField("Y Amount", "yAmount", yAmount, -200, 200, `${yAmount}px`)}
+      ${renderRangeField("Strength", "strength", strength, 0, 400, `${strength}%`)}
       ${renderSelectField("Filter", "filter", filter, [
         ["linear", "Linear"],
         ["nearest", "Nearest"],
       ])}
     </section>
+    ${waveFields}
   `;
 }
 

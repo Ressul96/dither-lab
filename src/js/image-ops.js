@@ -3,6 +3,7 @@ import { getPalette } from "./palettes.js";
 import { hexToRgb01 } from "./color.js";
 import {
   areRgbCurvesIdentity,
+  buildCurveLut,
   buildFinalRgbCurvesLuts,
   buildRgbCurvesLuts,
   normalizeCurveApplyMode,
@@ -1511,8 +1512,12 @@ export function applyDisplaceNode(input, mapInput, params) {
   const yAmount = Number(params.yAmount ?? 0);
   const strength = clamp(Number(params.strength ?? 100) / 100, 0, 4);
   const mode = String(params.mode ?? "wave");
+  const mapMode = String(params.mapMode ?? "rg");
+  const debugMap = String(params.debugMap ?? "off");
   const filter = params.filter === "nearest" ? "nearest" : "linear";
-  if ((xAmount === 0 && yAmount === 0) || strength === 0) return input;
+  const hasDisplacement = (xAmount !== 0 || yAmount !== 0) && strength !== 0;
+  if (mode === "map" && (!mapInput?.width || !mapInput?.height)) return input;
+  if (!hasDisplacement && debugMap === "off") return input;
 
   const width = input.width;
   const height = input.height;
@@ -1522,13 +1527,19 @@ export function applyDisplaceNode(input, mapInput, params) {
   const src = srcCtx.getImageData(0, 0, width, height).data;
   releaseBuffer(srcBuf);
 
-  let map = null;
+  let mapData = null;
+  let mapWidth = 0;
+  let mapHeight = 0;
+  let mapCurve = null;
   if (mode === "map" && mapInput?.width && mapInput?.height) {
-    const mapBuf = createBuffer(width, height);
+    mapWidth = mapInput.width;
+    mapHeight = mapInput.height;
+    const mapBuf = createBuffer(mapWidth, mapHeight);
     const mapCtx = mapBuf.getContext("2d", { alpha: false, willReadFrequently: true });
-    mapCtx.drawImage(mapInput, 0, 0, width, height);
-    map = mapCtx.getImageData(0, 0, width, height).data;
+    mapCtx.drawImage(mapInput, 0, 0);
+    mapData = mapCtx.getImageData(0, 0, mapWidth, mapHeight).data;
     releaseBuffer(mapBuf);
+    if (mapMode === "luma") mapCurve = buildCurveLut(params.mapCurve);
   }
 
   const output = createBuffer(width, height);
@@ -1537,19 +1548,56 @@ export function applyDisplaceNode(input, mapInput, params) {
   const out = imageData.data;
   const frequency = Math.max(0.001, Number(params.frequency ?? 4));
   const phase = (Number(params.phase ?? 0) / 180) * Math.PI;
+  const mapLayout = mapData
+    ? createDisplaceMapLayout(width, height, mapWidth, mapHeight, params)
+    : null;
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4;
       let dx;
       let dy;
-      if (map) {
-        dx = ((map[i] - 128) / 128) * xAmount * strength;
-        dy = ((map[i + 1] - 128) / 128) * yAmount * strength;
+      let vectorX = 0;
+      let vectorY = 0;
+      let mapSample = null;
+      if (mapData) {
+        mapSample = sampleDisplaceMap(mapData, mapWidth, mapHeight, x, y, mapLayout);
+        if (mapMode === "luma") {
+          const luma = clamp(Math.round(rgbLuma(mapSample[0], mapSample[1], mapSample[2])), 0, 255);
+          const shaped = mapCurve[luma];
+          vectorX = (shaped - 128) / 128;
+          vectorY = vectorX;
+        } else {
+          vectorX = (mapSample[0] - 128) / 128;
+          vectorY = (mapSample[1] - 128) / 128;
+        }
+        dx = vectorX * xAmount * strength;
+        dy = vectorY * yAmount * strength;
       } else {
         dx = Math.sin((y / height) * frequency * Math.PI * 2 + phase) * xAmount * strength;
         dy = Math.sin((x / width) * frequency * Math.PI * 2 + phase) * yAmount * strength;
       }
+
+      if (mapSample && debugMap !== "off") {
+        if (debugMap === "vectors") {
+          out[i] = clamp(Math.round(128 + vectorX * 127), 0, 255);
+          out[i + 1] = clamp(Math.round(128 + vectorY * 127), 0, 255);
+          out[i + 2] = 128;
+        } else if (mapMode === "luma") {
+          const luma = clamp(Math.round(rgbLuma(mapSample[0], mapSample[1], mapSample[2])), 0, 255);
+          const shaped = mapCurve[luma];
+          out[i] = shaped;
+          out[i + 1] = shaped;
+          out[i + 2] = shaped;
+        } else {
+          out[i] = mapSample[0];
+          out[i + 1] = mapSample[1];
+          out[i + 2] = mapSample[2];
+        }
+        out[i + 3] = 255;
+        continue;
+      }
+
       const sx = x - dx;
       const sy = y - dy;
       if (filter === "nearest") {
@@ -1565,6 +1613,87 @@ export function applyDisplaceNode(input, mapInput, params) {
 
   ctx.putImageData(imageData, 0, 0);
   return output;
+}
+
+function createDisplaceMapLayout(width, height, mapWidth, mapHeight, params) {
+  const fit = String(params.mapFit ?? "stretch");
+  const offsetX = Number(params.mapOffsetX ?? 0) / 100;
+  const offsetY = Number(params.mapOffsetY ?? 0) / 100;
+  if (fit === "tile") {
+    const mapScale = clamp(Number(params.mapScale ?? 100) / 100, 0.1, 8);
+    const tileW = Math.max(1, mapWidth * mapScale);
+    const tileH = Math.max(1, mapHeight * mapScale);
+    return {
+      fit,
+      tileW,
+      tileH,
+      offsetX: offsetX * tileW,
+      offsetY: offsetY * tileH,
+    };
+  }
+
+  if (fit === "fit" || fit === "fill") {
+    const scale = fit === "fit"
+      ? Math.min(width / Math.max(1, mapWidth), height / Math.max(1, mapHeight))
+      : Math.max(width / Math.max(1, mapWidth), height / Math.max(1, mapHeight));
+    const drawW = mapWidth * scale;
+    const drawH = mapHeight * scale;
+    return {
+      fit,
+      scale,
+      offsetX: (width - drawW) / 2 + offsetX * width,
+      offsetY: (height - drawH) / 2 + offsetY * height,
+    };
+  }
+
+  return { fit: "stretch", outputWidth: width, outputHeight: height };
+}
+
+function sampleDisplaceMap(data, width, height, x, y, layout) {
+  const [mx, my] = mapSamplePosition(width, height, x, y, layout);
+  const x0 = Math.floor(mx);
+  const y0 = Math.floor(my);
+  const x1 = Math.min(x0 + 1, width - 1);
+  const y1 = Math.min(y0 + 1, height - 1);
+  const fx = mx - x0;
+  const fy = my - y0;
+  const out = [0, 0, 0];
+
+  for (let channel = 0; channel < 3; channel++) {
+    const i00 = (y0 * width + x0) * 4 + channel;
+    const i10 = (y0 * width + x1) * 4 + channel;
+    const i01 = (y1 * width + x0) * 4 + channel;
+    const i11 = (y1 * width + x1) * 4 + channel;
+    const top = data[i00] * (1 - fx) + data[i10] * fx;
+    const bottom = data[i01] * (1 - fx) + data[i11] * fx;
+    out[channel] = Math.round(top * (1 - fy) + bottom * fy);
+  }
+
+  return out;
+}
+
+function mapSamplePosition(mapWidth, mapHeight, x, y, layout) {
+  if (layout.fit === "tile") {
+    const u = positiveModulo((x - layout.offsetX) / Math.max(1, layout.tileW), 1);
+    const v = positiveModulo((y - layout.offsetY) / Math.max(1, layout.tileH), 1);
+    return [u * Math.max(0, mapWidth - 1), v * Math.max(0, mapHeight - 1)];
+  }
+
+  if (layout.fit === "fit" || layout.fit === "fill") {
+    return [
+      clamp((x - layout.offsetX) / Math.max(0.0001, layout.scale), 0, Math.max(0, mapWidth - 1)),
+      clamp((y - layout.offsetY) / Math.max(0.0001, layout.scale), 0, Math.max(0, mapHeight - 1)),
+    ];
+  }
+
+  return [
+    mapWidth <= 1 ? 0 : (x / Math.max(1, (layout.outputWidth ?? 1) - 1)) * (mapWidth - 1),
+    mapHeight <= 1 ? 0 : (y / Math.max(1, (layout.outputHeight ?? 1) - 1)) * (mapHeight - 1),
+  ];
+}
+
+function positiveModulo(value, divisor) {
+  return ((value % divisor) + divisor) % divisor;
 }
 
 // Combines two masks (read as luma) via boolean ops. Output is a grayscale
