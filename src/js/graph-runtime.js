@@ -7,6 +7,7 @@ import {
   applyChromaticAberrationNode,
   applyCropNode,
   applyCrtNode,
+  applyDepthOfFieldNode,
   applyDitherNode,
   applyDisplaceNode,
   applyDuotoneNode,
@@ -423,6 +424,8 @@ function computeNodeOutput(node, index, results, context) {
       return applyModulationNode(resolveInputImage(node, "image", index, results), node.params);
     case "pixel-sorting":
       return applyPixelSortingNode(resolveInputImage(node, "image", index, results), node.params);
+    case "depth-of-field":
+      return applyDepthOfFieldNode(resolveInputImage(node, "image", index, results), node.params);
     case "lens-distort":
       return applyLensDistortNode(resolveInputImage(node, "image", index, results), node.params);
     case "chromatic-aberration":

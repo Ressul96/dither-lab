@@ -1580,6 +1580,8 @@ function renderNodeSpecifics(node) {
       return renderModulationNode(node);
     case "pixel-sorting":
       return renderPixelSortingNode(node);
+    case "depth-of-field":
+      return renderDepthOfFieldNode(node);
     case "lens-distort":
       return renderLensDistortNode(node);
     case "chromatic-aberration":
@@ -2876,6 +2878,61 @@ function renderPixelSortingNode(node) {
   `;
 }
 
+function renderDepthOfFieldNode(node) {
+  const params = node.params;
+  const centerX = Number(params.centerX ?? 50);
+  const centerY = Number(params.centerY ?? 50);
+  const radius = Number(params.radius ?? 35);
+  const falloff = Number(params.falloff ?? 25);
+  const aspect = Number(params.aspect ?? 100);
+  const rotation = Number(params.rotation ?? 0);
+  const invert = String(params.invert ?? "off");
+  const blur = Number(params.blur ?? 16);
+  const samples = Number(params.samples ?? 32);
+  const bokehShape = String(params.bokehShape ?? "round");
+  const blades = Number(params.blades ?? 6);
+  const anamorphic = Number(params.anamorphic ?? 100);
+  const debug = String(params.debug ?? "off");
+  const opacity = Number(params.opacity ?? 100);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Focus</header>
+      ${renderRangeField("Center X", "centerX", centerX, 0, 100, `${centerX}%`)}
+      ${renderRangeField("Center Y", "centerY", centerY, 0, 100, `${centerY}%`)}
+      ${renderRangeField("Radius", "radius", radius, 0, 100, `${radius}%`)}
+      ${renderRangeField("Falloff", "falloff", falloff, 0, 100, `${falloff}%`)}
+      ${renderRangeField("Aspect", "aspect", aspect, 25, 400, `${(aspect / 100).toFixed(2)}x`)}
+      ${renderRangeField("Rotation", "rotation", rotation, -180, 180, `${rotation}deg`)}
+      ${renderSelectField("Invert", "invert", invert, [
+        ["off", "Off"],
+        ["on", "On"],
+      ])}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Blur</header>
+      ${renderRangeField("Blur", "blur", blur, 0, 80, `${blur}px`)}
+      ${renderRangeField("Samples", "samples", samples, 8, 64, String(samples))}
+      ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Bokeh</header>
+      ${renderSelectField("Shape", "bokehShape", bokehShape, [
+        ["round", "Round"],
+        ["polygon", "Polygon"],
+      ])}
+      ${renderRangeField("Blades", "blades", blades, 3, 12, String(blades))}
+      ${renderRangeField("Anamorphic", "anamorphic", anamorphic, 25, 400, `${(anamorphic / 100).toFixed(2)}x`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Debug</header>
+      ${renderSelectField("Debug", "debug", debug, [
+        ["off", "Off"],
+        ["mask", "Mask"],
+      ])}
+    </section>
+  `;
+}
+
 function renderVhsNode(node) {
   const params = node.params;
   const opacity = Number(params.opacity ?? 100);
@@ -3638,6 +3695,7 @@ function initGraphContextMenu() {
     <button data-add-node="led-screen">Add LED Screen</button>
     <button data-add-node="modulation">Add Modulation</button>
     <button data-add-node="pixel-sorting">Add Pixel Sorting</button>
+    <button data-add-node="depth-of-field">Add Depth of Field</button>
     <button data-add-node="lens-distort">Add Lens Distortion</button>
     <button data-add-node="chromatic-aberration">Add Chromatic Aberration</button>
     <button data-add-node="halation">Add Halation</button>

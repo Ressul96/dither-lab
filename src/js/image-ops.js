@@ -7,6 +7,7 @@ import {
   applyBloomGpu,
   applyChromaticAberrationGpu,
   applyCrtGpu,
+  applyDepthOfFieldGpu,
   applyHalationGpu,
   applyHalftoneGpu,
   applyGradientMapGpu,
@@ -1283,6 +1284,15 @@ export function applyPixelSortingNode(input, params) {
   // sorting would need a CPU/worker or multi-pass path and stays out of the
   // live playback route for now.
   const gpuOutput = applyPixelSortingGpu(input, params);
+  return gpuOutput ?? input;
+}
+
+export function applyDepthOfFieldNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  // Depth of Field P1 is GPU-only: even 32 round aperture taps per pixel are
+  // too expensive for the live CPU path. Pass-through fallback keeps older
+  // browsers rendering the graph rather than producing a blank frame.
+  const gpuOutput = applyDepthOfFieldGpu(input, params);
   return gpuOutput ?? input;
 }
 

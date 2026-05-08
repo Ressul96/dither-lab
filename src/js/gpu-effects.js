@@ -1153,6 +1153,103 @@ void main() {
 }
 `;
 
+const DEPTH_OF_FIELD_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform sampler2D u_image;
+uniform vec2 u_resolution;
+uniform float u_opacity;
+uniform vec2 u_center;
+uniform float u_radius;
+uniform float u_falloff;
+uniform float u_aspect;
+uniform float u_rotation;
+uniform float u_invert;
+uniform float u_blurPx;
+uniform float u_samples;
+uniform float u_bokehShape;
+uniform float u_blades;
+uniform float u_anamorphic;
+uniform float u_debug;
+
+in vec2 v_uv;
+out vec4 out_color;
+
+const float TAU = 6.283185307179586;
+const float GOLDEN = 2.39996323;
+const int MAX_DOF_SAMPLES = 64;
+
+vec2 rotate2(vec2 p, float angle) {
+  float c = cos(angle);
+  float s = sin(angle);
+  return vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+float focusMask(vec2 uv) {
+  vec2 p = uv - u_center;
+  p.x *= u_resolution.x / max(u_resolution.y, 1.0);
+  p = rotate2(p, -u_rotation);
+  p.x /= max(u_aspect, 0.001);
+  float dist = length(p);
+  float feather = max(u_falloff, 0.001);
+  float mask = smoothstep(u_radius, u_radius + feather, dist);
+  return mix(mask, 1.0 - mask, u_invert);
+}
+
+float polygonWeight(vec2 p) {
+  if (u_bokehShape < 0.5) return 1.0;
+  float blades = max(u_blades, 3.0);
+  float sector = TAU / blades;
+  float angle = atan(p.y, p.x) + sector * 0.5;
+  float local = mod(angle + TAU, sector) - sector * 0.5;
+  float edge = cos(sector * 0.5) / max(cos(local), 0.05);
+  float r = length(p);
+  return 1.0 - smoothstep(edge - 0.03, edge + 0.03, r);
+}
+
+void main() {
+  vec3 src = texture(u_image, v_uv).rgb;
+  float mask = focusMask(v_uv);
+
+  if (u_debug > 0.5) {
+    out_color = vec4(vec3(mask), 1.0);
+    return;
+  }
+
+  float blurRadius = u_blurPx * mask;
+  if (blurRadius <= 0.01 || u_opacity <= 0.0001 || mask <= 0.0001) {
+    out_color = vec4(src, 1.0);
+    return;
+  }
+
+  vec2 invResolution = 1.0 / max(u_resolution, vec2(1.0));
+  float sampleCount = max(u_samples, 1.0);
+  vec3 blurred = vec3(0.0);
+  float weightSum = 0.0;
+
+  for (int i = 0; i < MAX_DOF_SAMPLES; i++) {
+    float fi = float(i);
+    if (fi >= u_samples) break;
+
+    float r = sqrt((fi + 0.5) / sampleCount);
+    float angle = fi * GOLDEN;
+    vec2 disk = vec2(cos(angle), sin(angle)) * r;
+    float weight = polygonWeight(disk);
+    if (weight <= 0.0001) continue;
+
+    vec2 aperture = vec2(disk.x * u_anamorphic, disk.y / max(u_anamorphic, 0.001));
+    aperture = rotate2(aperture, u_rotation);
+    vec2 sampleUv = v_uv + aperture * blurRadius * invResolution;
+    blurred += texture(u_image, sampleUv).rgb * weight;
+    weightSum += weight;
+  }
+
+  blurred /= max(weightSum, 0.0001);
+  float blend = clamp(mask * u_opacity, 0.0, 1.0);
+  out_color = vec4(mix(src, blurred, blend), 1.0);
+}
+`;
+
 const CRT_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
@@ -1409,6 +1506,33 @@ const SHADER_PASSES = Object.freeze({
         u_channel: thresholdChannelIndex(params?.channel ?? "luma"),
         u_direction: String(params?.direction ?? "bright").toLowerCase() === "dark" ? 1 : 0,
         u_opacity: opacity,
+      };
+    },
+  },
+  "depth-of-field": {
+    fragment: DEPTH_OF_FIELD_FRAGMENT_SHADER,
+    uniforms(params) {
+      const opacity = clamp(Number(params?.opacity ?? 100) / 100, 0, 1);
+      const blurPx = clamp(Number(params?.blur ?? 16), 0, 80);
+      const debug = String(params?.debug ?? "off").toLowerCase() === "mask" ? 1 : 0;
+      if (debug <= 0 && (opacity <= 0 || blurPx <= 0)) return null;
+      return {
+        u_opacity: opacity,
+        u_center: [
+          clamp(Number(params?.centerX ?? 50) / 100, 0, 1),
+          1 - clamp(Number(params?.centerY ?? 50) / 100, 0, 1),
+        ],
+        u_radius: clamp(Number(params?.radius ?? 35) / 100, 0, 1),
+        u_falloff: clamp(Number(params?.falloff ?? 25) / 100, 0, 1),
+        u_aspect: clamp(Number(params?.aspect ?? 100) / 100, 0.25, 4),
+        u_rotation: ((Number(params?.rotation ?? 0) / 180) * Math.PI),
+        u_invert: String(params?.invert ?? "off").toLowerCase() === "on" ? 1 : 0,
+        u_blurPx: blurPx,
+        u_samples: clamp(Math.round(Number(params?.samples ?? 32)), 8, 64),
+        u_bokehShape: String(params?.bokehShape ?? "round").toLowerCase() === "polygon" ? 1 : 0,
+        u_blades: clamp(Math.round(Number(params?.blades ?? 6)), 3, 12),
+        u_anamorphic: clamp(Number(params?.anamorphic ?? 100) / 100, 0.25, 4),
+        u_debug: debug,
       };
     },
   },
@@ -1708,6 +1832,10 @@ export function applyModulationGpu(input, params) {
 
 export function applyPixelSortingGpu(input, params) {
   return applyShaderPass("pixel-sorting", input, params);
+}
+
+export function applyDepthOfFieldGpu(input, params) {
+  return applyShaderPass("depth-of-field", input, params);
 }
 
 export function applyHalftoneGpu(input, params) {
