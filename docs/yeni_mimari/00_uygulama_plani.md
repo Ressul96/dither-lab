@@ -146,7 +146,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 |---|---|---|---|
 | F7.1 | `viewer-overlay.js` SVG layer + screen ↔ stage koordinat dönüşümü | `gizmo_gelisme.md` | ✅ |
 | F7.2 | Point gizmo (chromatic-aberration, lens-distort) | `gizmo_gelisme.md` | ✅ |
-| F7.3 | Ring / angle / box gizmo'lar (bloom, halftone, depth-of-field, crop) | `gizmo_gelisme.md` | ⬜ |
+| F7.3 | Ring / angle gizmo'lar (halftone, chromatic-aberration directional, depth-of-field); bloom spatial param yok → atlandı; crop box ileri faza | `gizmo_gelisme.md` | ✅ |
 
 ---
 
