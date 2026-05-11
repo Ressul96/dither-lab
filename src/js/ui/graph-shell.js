@@ -8,7 +8,9 @@ import {
   getNodeDefinition,
   getNodeParentId,
   getSelectedNode,
+  getSelectedNodeIds,
   getValueNodeOutputBounds,
+  groupSelectedNodes,
   insertExistingNodeOnEdge,
   insertNodeOnEdge,
   mutateNodePosition,
@@ -19,6 +21,7 @@ import {
   selectNode,
   toggleParamExposed,
   toggleNodeBypass,
+  ungroupNode,
   updateNodeParams,
 } from "../graph.js";
 import { getAlgorithmOptions } from "../dither/index.js";
@@ -225,7 +228,7 @@ function setCurrentGraphParent(parentId) {
   dispatch("graphView", { currentParentId });
   const selected = graph.nodes.find((node) => node.id === graph.selectedNodeId);
   if (selected && getNodeParentId(selected) !== currentParentId) {
-    dispatch("graph", { selectedNodeId: null });
+    dispatch("graph", { selectedNodeId: null, selectedNodeIds: [] });
   }
 }
 
@@ -662,12 +665,35 @@ function wireKeyboard() {
       return;
     }
 
+    const commandKey = event.metaKey || event.ctrlKey;
+    if (commandKey && event.key.toLowerCase() === "g") {
+      const handled = event.shiftKey ? ungroupCurrentSelection() : groupCurrentSelection();
+      if (handled) event.preventDefault();
+      return;
+    }
+
     if (event.key !== "Delete" && event.key !== "Backspace") return;
     const selectedNodeId = getState().graph.selectedNodeId;
     if (!selectedNodeId) return;
     if (!removeNode(selectedNodeId)) return;
     event.preventDefault();
   });
+}
+
+function groupCurrentSelection() {
+  const groupId = groupSelectedNodes();
+  if (!groupId) return false;
+  return true;
+}
+
+function ungroupCurrentSelection() {
+  const { graph, graphView } = getState();
+  const selected = getSelectedNode(graph);
+  if (selected?.type === "group") {
+    return ungroupNode(selected.id);
+  }
+  const currentParent = resolveGraphParentId(graph, graphView.currentParentId);
+  return currentParent !== ROOT_PARENT_ID ? ungroupNode(currentParent) : false;
 }
 
 function startNodeDrag(e, nodeEl) {
@@ -684,9 +710,17 @@ function startNodeDrag(e, nodeEl) {
 
   const originX = e.clientX;
   const originY = e.clientY;
-  const startX = node.x;
-  const startY = node.y;
   const startZoom = getState().graphView.zoom || 1;
+  const selectedAtStart = getSelectedNodeIds();
+  const dragNodeIds = selectedAtStart.includes(nodeId) && selectedAtStart.length > 1
+    ? selectedAtStart.filter((id) => getNodeById(id) && getNodeParentId(getNodeById(id)) === getCurrentGraphParentId())
+    : [nodeId];
+  const startPositions = new Map(
+    dragNodeIds
+      .map((id) => getNodeById(id))
+      .filter(Boolean)
+      .map((item) => [item.id, { x: item.x, y: item.y }])
+  );
   let moved = false;
   let liveEl = nodeEl;
   let edgeRenderQueued = false;
@@ -707,17 +741,24 @@ function startNodeDrag(e, nodeEl) {
     if (!moved && Math.hypot(dx, dy) < 3) return;
     if (!moved) {
       moved = true;
-      selectNodeWithoutDispatch(nodeId);
+      selectNodesWithoutDispatch(dragNodeIds, nodeId);
     }
-    const nextX = startX + dx / startZoom;
-    const nextY = startY + dy / startZoom;
-    mutateNodePosition(nodeId, nextX, nextY);
+    for (const id of dragNodeIds) {
+      const start = startPositions.get(id);
+      if (!start) continue;
+      const nextX = start.x + dx / startZoom;
+      const nextY = start.y + dy / startZoom;
+      mutateNodePosition(id, nextX, nextY);
+      const itemEl = nodesEl.querySelector(`[data-node-id="${cssEscape(id)}"]`);
+      if (itemEl) {
+        itemEl.style.left = `${toSceneX(nextX)}px`;
+        itemEl.style.top = `${toSceneY(nextY)}px`;
+      }
+    }
     if (!liveEl.isConnected) {
       liveEl = nodesEl.querySelector(`[data-node-id="${cssEscape(nodeId)}"]`) || liveEl;
     }
-    liveEl.style.left = `${toSceneX(nextX)}px`;
-    liveEl.style.top = `${toSceneY(nextY)}px`;
-    const edge = findInsertTargetForNodeAt(nodeId, ev.clientX, ev.clientY);
+    const edge = dragNodeIds.length === 1 ? findInsertTargetForNodeAt(nodeId, ev.clientX, ev.clientY) : null;
     setInsertHighlight(edge?.edgeId ?? "");
     scheduleEdgeRender();
   };
@@ -734,22 +775,17 @@ function startNodeDrag(e, nodeEl) {
     document.body.classList.remove("dragging-node");
     if (!moved) {
       clearInsertHighlight();
-      selectNode(nodeId);
     } else {
-      const edge = findInsertTargetForNodeAt(nodeId, ev.clientX, ev.clientY);
+      const edge = dragNodeIds.length === 1 ? findInsertTargetForNodeAt(nodeId, ev.clientX, ev.clientY) : null;
       clearInsertHighlight();
       if (edge?.edgeId && insertExistingNodeOnEdge(nodeId, edge.edgeId)) {
         return;
       }
 
-      const liveSelected = nodesEl.querySelector(`[data-node-id="${cssEscape(nodeId)}"]`);
-      liveSelected?.classList.add("selected");
-      const previouslySelected = getState().graph.selectedNodeId;
-      if (previouslySelected && previouslySelected !== nodeId) {
-        const prev = nodesEl.querySelector(`[data-node-id="${cssEscape(previouslySelected)}"]`);
-        prev?.classList.remove("selected");
+      for (const id of dragNodeIds) {
+        nodesEl.querySelector(`[data-node-id="${cssEscape(id)}"]`)?.classList.add("selected");
       }
-      selectNodeWithoutDispatch(nodeId);
+      selectNodesWithoutDispatch(dragNodeIds, nodeId);
       renderInspector();
       renderEdges();
     }
@@ -760,10 +796,13 @@ function startNodeDrag(e, nodeEl) {
   document.addEventListener("pointercancel", onUp);
 }
 
-function selectNodeWithoutDispatch(nodeId) {
+function selectNodesWithoutDispatch(nodeIds, primaryNodeId = null) {
   const { graph } = getState();
-  if (graph.selectedNodeId === nodeId) return;
-  graph.selectedNodeId = nodeId;
+  const ids = [...new Set(Array.isArray(nodeIds) ? nodeIds : [])].filter((id) =>
+    graph.nodes.some((node) => node.id === id)
+  );
+  graph.selectedNodeIds = ids;
+  graph.selectedNodeId = primaryNodeId && ids.includes(primaryNodeId) ? primaryNodeId : ids.at(-1) ?? null;
 }
 
 function cssEscape(value) {
@@ -1022,7 +1061,10 @@ function onNodeClick(event) {
 
   const node = event.target.closest("[data-node-id]");
   if (!node) return;
-  selectNode(node.dataset.nodeId);
+  selectNode(node.dataset.nodeId, {
+    toggle: event.shiftKey || event.metaKey || event.ctrlKey,
+    extend: event.shiftKey || event.metaKey || event.ctrlKey,
+  });
 }
 
 function onNodeDoubleClick(event) {
@@ -1150,6 +1192,12 @@ function onInspectorChange(event) {
 }
 
 function onInspectorClick(event) {
+  const graphAction = event.target.closest("[data-graph-action]");
+  if (graphAction) {
+    handleGraphInspectorAction(graphAction);
+    return;
+  }
+
   const keyframeToggle = event.target.closest("[data-param-keyframe-toggle]");
   if (keyframeToggle) {
     event.preventDefault();
@@ -1182,6 +1230,22 @@ function onInspectorClick(event) {
   if (!paletteControl) return;
   if (paletteControl.tagName === "INPUT") return;
   handlePaletteClick(paletteControl);
+}
+
+function handleGraphInspectorAction(control) {
+  switch (control.dataset.graphAction) {
+    case "group-selected":
+      groupCurrentSelection();
+      break;
+    case "open-group":
+      setCurrentGraphParent(control.dataset.groupId);
+      break;
+    case "ungroup":
+      ungroupNode(control.dataset.groupId);
+      break;
+    default:
+      break;
+  }
 }
 
 function handlePaletteClick(control) {
@@ -1430,8 +1494,8 @@ function renderShell() {
   applyGraphViewport();
   maybeAutoCenterGraph();
 
-  const selected = getSelectedNode();
-  if (!inspectorEditing || renderedInspectorNodeId !== selected?.id) {
+  const selectionKey = getSelectedNodeIds().join(",");
+  if (!inspectorEditing || renderedInspectorNodeId !== selectionKey) {
     renderInspector();
   }
 }
@@ -1440,9 +1504,10 @@ function renderGraph() {
   const { graph } = getState();
   const parentId = getCurrentGraphParentId();
   const visibleNodes = getVisibleGraphNodes(graph, parentId);
+  const selectedNodeIds = new Set(getSelectedNodeIds(graph));
   nodesEl.style.width = `${GRAPH_WORLD_SIZE}px`;
   nodesEl.style.height = `${GRAPH_WORLD_SIZE}px`;
-  nodesEl.innerHTML = visibleNodes.map((node) => renderNode(node, graph.selectedNodeId)).join("");
+  nodesEl.innerHTML = visibleNodes.map((node) => renderNode(node, selectedNodeIds)).join("");
   renderedGraphParentId = parentId;
   renderEdges(parentId);
   syncGraphBreadcrumb(parentId);
@@ -1476,12 +1541,12 @@ function getVisibleGraphNodeIds(graph, parentId = getCurrentGraphParentId()) {
   return new Set(getVisibleGraphNodes(graph, parentId).map((node) => node.id));
 }
 
-function renderNode(node, selectedNodeId) {
+function renderNode(node, selectedNodeIds) {
   const definition = getNodeDefinition(node.type);
-  const selected = node.id === selectedNodeId ? " selected" : "";
+  const selected = selectedNodeIds.has(node.id) ? " selected" : "";
   const bypassed = node.bypassed ? " is-bypassed" : "";
   const family = familySlug(definition?.family);
-  const canBypass = node.type !== "source" && node.type !== "viewer-output";
+  const canBypass = node.type !== "source" && node.type !== "viewer-output" && node.type !== "group";
   const bypassIcon = node.bypassed ? eyeClosedSvg() : eyeOpenSvg();
 
   return `
@@ -1508,6 +1573,7 @@ function renderNode(node, selectedNodeId) {
       </div>
       <div class="graph-node-rows">
         ${renderSocketRows(node)}
+        ${renderGroupBoundarySummary(node)}
         ${renderExposedParamRows(node)}
       </div>
     </div>
@@ -1541,6 +1607,19 @@ function renderSocketRows(node) {
       </div>
     </div>
   `).join("");
+}
+
+function renderGroupBoundarySummary(node) {
+  if (node.type !== "group") return "";
+  const childCount = getState().graph.nodes.filter((item) => getNodeParentId(item) === node.id).length;
+  const inputs = node.group?.inputBindings?.length ?? 0;
+  const outputs = node.group?.outputBindings?.length ?? 0;
+  return `
+    <div class="graph-node-row graph-node-row--group">
+      <span>${childCount} node${childCount === 1 ? "" : "s"}</span>
+      <span>${inputs} in / ${outputs} out</span>
+    </div>
+  `;
 }
 
 function renderExposedParamRows(node) {
@@ -1608,14 +1687,23 @@ function renderEdge(edge, graph) {
     `${end.x - controlOffset} ${end.y}`,
     `${end.x} ${end.y}`,
   ].join(" ");
+  const selectedNodeIds = new Set(getSelectedNodeIds(graph));
   const active =
-    graph.selectedNodeId === fromNode.id || graph.selectedNodeId === toNode.id ? " active" : "";
+    selectedNodeIds.has(fromNode.id) || selectedNodeIds.has(toNode.id) ? " active" : "";
 
   return `<path class="graph-edge${active}" data-edge-id="${escapeHtml(edge.id)}" d="${path}" />`;
 }
 
 function renderInspector() {
   const { graph } = getState();
+  const selectedNodeIds = getSelectedNodeIds(graph);
+  if (selectedNodeIds.length > 1) {
+    renderedInspectorNodeId = selectedNodeIds.join(",");
+    syncInspectorTitle(null, `${selectedNodeIds.length} nodes selected`);
+    inspectorEl.innerHTML = renderMultiSelectionInspector(selectedNodeIds);
+    return;
+  }
+
   const node = getSelectedNode(graph);
   renderedInspectorNodeId = node?.id ?? null;
 
@@ -1628,17 +1716,20 @@ function renderInspector() {
   syncInspectorTitle(node);
 
   inspectorEl.innerHTML = `
+    ${renderNodeActions(node)}
     ${renderNodeSpecifics(node)}
   `;
 }
 
-function syncInspectorTitle(node) {
+function syncInspectorTitle(node, fallback = "No node selected") {
   if (!inspectorTitleEl) return;
-  inspectorTitleEl.textContent = node?.label ?? "No node selected";
+  inspectorTitleEl.textContent = node?.label ?? fallback;
 }
 
 function renderNodeSpecifics(node) {
   switch (node.type) {
+    case "group":
+      return renderGroupNode(node);
     case "source":
       return renderSourceNode();
     case "mesh-gradient":
@@ -1730,6 +1821,85 @@ function renderNodeSpecifics(node) {
         </section>
       `;
   }
+}
+
+function renderNodeActions(node) {
+  if (!node || node.type === "source" || node.type === "viewer-output" || node.type === "group") {
+    return "";
+  }
+  return `
+    <section class="node-panel-section">
+      <div class="node-panel-actions">
+        <button type="button" data-graph-action="group-selected">Group Node</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderMultiSelectionInspector(selectedNodeIds) {
+  const { graph } = getState();
+  const nodes = selectedNodeIds.map((nodeId) => getNodeById(nodeId, graph)).filter(Boolean);
+  const groupable = nodes.filter((node) => node.type !== "source" && node.type !== "viewer-output");
+  const parentIds = new Set(groupable.map((node) => getNodeParentId(node)));
+  const canGroup = groupable.length > 0 && parentIds.size === 1;
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Selection</header>
+      <p class="hint">${nodes.length} nodes selected · ${groupable.length} groupable</p>
+      <div class="node-panel-actions">
+        <button type="button" data-graph-action="group-selected" ${canGroup ? "" : "disabled"}>Group Selected</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderGroupNode(node) {
+  const { graph } = getState();
+  const children = graph.nodes.filter((item) => getNodeParentId(item) === node.id);
+  const boundary = node.group ?? {};
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Group</header>
+      <p class="hint">${children.length} child node${children.length === 1 ? "" : "s"} · ${boundary.internalEdgeIds?.length ?? 0} internal edge${(boundary.internalEdgeIds?.length ?? 0) === 1 ? "" : "s"}</p>
+      <div class="node-panel-actions">
+        <button type="button" data-graph-action="open-group" data-group-id="${escapeHtml(node.id)}">Open Group</button>
+        <button type="button" data-graph-action="ungroup" data-group-id="${escapeHtml(node.id)}">Ungroup</button>
+      </div>
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Boundary</header>
+      ${renderGroupBoundaryList("Inputs", boundary.inputBindings ?? [], "input")}
+      ${renderGroupBoundaryList("Outputs", boundary.outputBindings ?? [], "output")}
+    </section>
+  `;
+}
+
+function renderGroupBoundaryList(label, bindings, direction) {
+  if (!bindings.length) {
+    return `<p class="hint">${label}: none</p>`;
+  }
+  const rows = bindings
+    .map((binding) => renderGroupBoundaryRow(binding, direction))
+    .join("");
+  return `
+    <div class="group-boundary-list">
+      <p class="hint">${label}: ${bindings.length}</p>
+      ${rows}
+    </div>
+  `;
+}
+
+function renderGroupBoundaryRow(binding, direction) {
+  const { graph } = getState();
+  const fromNode = getNodeById(binding.fromNode, graph);
+  const toNode = getNodeById(binding.toNode, graph);
+  const from = `${fromNode?.label ?? binding.fromNode}.${binding.fromSocket}`;
+  const to = `${toNode?.label ?? binding.toNode}.${binding.toSocket}`;
+  return `
+    <div class="group-boundary-row">
+      ${escapeHtml(direction === "input" ? `${from} -> ${to}` : `${from} -> ${to}`)}
+    </div>
+  `;
 }
 
 function renderSourceNode() {

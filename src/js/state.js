@@ -45,6 +45,7 @@ const state = {
     nodes: [],
     edges: [],
     selectedNodeId: null,
+    selectedNodeIds: [],
   },
   timeline: {
     version: 1,

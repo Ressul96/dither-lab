@@ -1094,6 +1094,15 @@ body.resizing-y * {
   font-size: 10px;
 }
 
+.graph-node-row--group {
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 650;
+}
+
 .graph-cut-path {
   fill: none;
   stroke: rgba(255, 232, 128, 0.95);
@@ -2426,6 +2435,51 @@ body.dragging-tangent .timeline-tangent-handle {
   font-weight: 650;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+}
+
+.node-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.node-panel-actions button {
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.node-panel-actions button:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.node-panel-actions button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.group-boundary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.group-boundary-row {
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .curves-panel {

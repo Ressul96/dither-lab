@@ -1104,6 +1104,7 @@ export function createBootGraph() {
     nodes,
     edges: buildLinearEdges(nodes),
     selectedNodeId: "viewer-output-1",
+    selectedNodeIds: ["viewer-output-1"],
   };
 }
 
@@ -1116,11 +1117,55 @@ export function ensureBootGraph() {
   return bootGraph;
 }
 
-export function selectNode(nodeId) {
+export function selectNode(nodeId, options = {}) {
   const { graph } = getState();
-  if (!nodeId || graph.selectedNodeId === nodeId) return;
+  if (!nodeId) return;
   if (!graph.nodes.some((node) => node.id === nodeId)) return;
-  dispatch("graph", { selectedNodeId: nodeId });
+  const current = new Set(getSelectedNodeIds(graph));
+  const extend = Boolean(options.extend || options.toggle);
+
+  if (extend) {
+    if (options.toggle && current.has(nodeId) && current.size > 1) {
+      current.delete(nodeId);
+      const nextIds = [...current];
+      dispatch("graph", {
+        selectedNodeId: nextIds.at(-1) ?? null,
+        selectedNodeIds: nextIds,
+      });
+      return;
+    }
+    current.add(nodeId);
+    dispatch("graph", {
+      selectedNodeId: nodeId,
+      selectedNodeIds: [...current],
+    });
+    return;
+  }
+
+  if (graph.selectedNodeId === nodeId && getSelectedNodeIds(graph).length === 1) return;
+  dispatch("graph", {
+    selectedNodeId: nodeId,
+    selectedNodeIds: [nodeId],
+  });
+}
+
+export function selectNodes(nodeIds, primaryNodeId = null) {
+  const { graph } = getState();
+  const existing = new Set(graph.nodes.map((node) => node.id));
+  const ids = [...new Set(Array.isArray(nodeIds) ? nodeIds : [])].filter((nodeId) => existing.has(nodeId));
+  const primary = primaryNodeId && ids.includes(primaryNodeId) ? primaryNodeId : ids.at(-1) ?? null;
+  dispatch("graph", {
+    selectedNodeId: primary,
+    selectedNodeIds: ids,
+  });
+}
+
+export function getSelectedNodeIds(graph = getState().graph) {
+  const ids = Array.isArray(graph?.selectedNodeIds) ? graph.selectedNodeIds : [];
+  const existing = new Set((graph?.nodes ?? []).map((node) => node.id));
+  const selected = [...new Set(ids)].filter((nodeId) => existing.has(nodeId));
+  if (selected.length > 0) return selected;
+  return graph?.selectedNodeId && existing.has(graph.selectedNodeId) ? [graph.selectedNodeId] : [];
 }
 
 export function getViewerOutputNode(graph = getState().graph) {
@@ -1235,9 +1280,10 @@ function insertNodeIntoChain(type, extraEdgeFactory = null) {
   layoutMainChain(nextNodes, nextEdges);
 
   dispatch("graph", {
-    nodes: nextNodes,
+    nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
     edges: nextEdges,
     selectedNodeId: nodeId,
+    selectedNodeIds: [nodeId],
   });
 
   return nodeId;
@@ -1258,6 +1304,7 @@ export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
   dispatch("graph", {
     nodes: [...graph.nodes.map((node) => clone(node)), newNode],
     selectedNodeId: nodeId,
+    selectedNodeIds: [nodeId],
   });
 
   return nodeId;
@@ -1308,9 +1355,10 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
       });
     }
     dispatch("graph", {
-      nodes: nextNodes,
+      nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
       edges: nextEdges,
       selectedNodeId: nodeId,
+      selectedNodeIds: [nodeId],
     });
 
     return nodeId;
@@ -1357,9 +1405,10 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
     });
   }
   dispatch("graph", {
-    nodes: nextNodes,
+    nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
     edges: nextEdges,
     selectedNodeId: nodeId,
+    selectedNodeIds: [nodeId],
   });
 
   return nodeId;
@@ -1417,9 +1466,10 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
     }
 
     dispatch("graph", {
-      nodes: nextNodes,
+      nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
       edges: nextEdges,
       selectedNodeId: nodeId,
+      selectedNodeIds: [nodeId],
     });
 
     return true;
@@ -1480,10 +1530,94 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
   }
 
   dispatch("graph", {
-    nodes: nextNodes,
+    nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
     edges: nextEdges,
     selectedNodeId: nodeId,
+    selectedNodeIds: [nodeId],
   });
+
+  return true;
+}
+
+export function groupSelectedNodes(options = {}) {
+  const graph = ensureBootGraph();
+  const selectedNodes = getGroupableSelectedNodes(graph, options.nodeIds);
+  if (selectedNodes.length === 0) return null;
+
+  const parentId = getNodeParentId(selectedNodes[0]);
+  if (!selectedNodes.every((node) => getNodeParentId(node) === parentId)) {
+    return null;
+  }
+
+  const groupId = nextNodeId("group", graph);
+  const childIds = new Set(selectedNodes.map((node) => node.id));
+  const bounds = getNodesBounds(selectedNodes);
+  const groupNode = createNode(groupId, "group", {
+    parentId,
+    label: options.label ?? defaultGroupLabel(groupId),
+    x: Math.round(bounds.minX - 34),
+    y: Math.round(bounds.minY - 86),
+    group: analyzeGroupBoundary(graph, childIds),
+  });
+
+  const nextNodes = [
+    ...graph.nodes.map((node) => {
+      const next = clone(node);
+      if (childIds.has(next.id)) next.parentId = groupId;
+      return next;
+    }),
+    groupNode,
+  ];
+  normalizeNodeParents(nextNodes);
+
+  dispatch("graph", {
+    nodes: refreshGroupMetadataForNodes(nextNodes, graph.edges),
+    edges: graph.edges.map((edge) => ({ ...edge })),
+    selectedNodeId: groupId,
+    selectedNodeIds: [groupId],
+  });
+
+  return groupId;
+}
+
+export function ungroupNode(groupId) {
+  if (!groupId) return false;
+  const graph = ensureBootGraph();
+  const group = getNodeById(groupId, graph);
+  if (!group || group.type !== "group") return false;
+
+  const parentId = getNodeParentId(group);
+  const childIds = graph.nodes
+    .filter((node) => getNodeParentId(node) === groupId)
+    .map((node) => node.id);
+  const childSet = new Set(childIds);
+
+  const nextNodes = graph.nodes
+    .filter((node) => node.id !== groupId)
+    .map((node) => {
+      const next = clone(node);
+      if (childSet.has(next.id) || getNodeParentId(next) === groupId) {
+        next.parentId = parentId;
+      }
+      return next;
+    });
+  normalizeNodeParents(nextNodes);
+
+  const nextEdges = graph.edges
+    .filter((edge) => edge.fromNode !== groupId && edge.toNode !== groupId)
+    .map((edge) => ({ ...edge }));
+  const nextSelection = childIds.filter((nodeId) => nextNodes.some((node) => node.id === nodeId));
+
+  dispatch("graph", {
+    nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
+    edges: nextEdges,
+    selectedNodeId: nextSelection.at(-1) ?? null,
+    selectedNodeIds: nextSelection,
+  });
+
+  if (getState().graphView.currentParentId === groupId) {
+    dispatch("graphView", { currentParentId: parentId });
+  }
 
   return true;
 }
@@ -1541,8 +1675,12 @@ export function addEdge(fromNode, fromSocket, toNode, toSocket) {
     fromDef.type === "value" && isParamSocketName(toSocket)
       ? clampValueNodeForEdges(graph.nodes, nextEdges, fromNode)
       : graph.nodes;
+  const refreshedNodes = refreshGroupMetadataForNodes(
+    nextNodes === graph.nodes ? graph.nodes.map((node) => clone(node)) : nextNodes,
+    nextEdges
+  );
 
-  dispatch("graph", nextNodes === graph.nodes ? { edges: nextEdges } : { nodes: nextNodes, edges: nextEdges });
+  dispatch("graph", { nodes: refreshedNodes, edges: nextEdges });
   return true;
 }
 
@@ -1611,11 +1749,17 @@ export function removeNode(nodeId) {
     graph.selectedNodeId === nodeId
       ? nextNodes.find((item) => item.type === "viewer-output")?.id ?? nextNodes.at(-1)?.id ?? null
       : graph.selectedNodeId;
+  const existingAfterRemove = new Set(nextNodes.map((item) => item.id));
+  let nextSelectedIds = getSelectedNodeIds(graph).filter((id) => id !== nodeId && existingAfterRemove.has(id));
+  if (nextSelectedIds.length === 0 && fallbackSelection && existingAfterRemove.has(fallbackSelection)) {
+    nextSelectedIds = [fallbackSelection];
+  }
 
   dispatch("graph", {
-    nodes: nextNodes,
+    nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
     edges: nextEdges,
     selectedNodeId: fallbackSelection,
+    selectedNodeIds: nextSelectedIds,
   });
   if (getState().graphView.currentParentId === nodeId) {
     dispatch("graphView", { currentParentId: fallbackParentId });
@@ -1650,7 +1794,9 @@ export function toggleNodeBypass(nodeId) {
   const { graph } = getState();
   let changed = false;
   const nextNodes = graph.nodes.map((node) => {
-    if (node.id !== nodeId || node.type === "source" || node.type === "viewer-output") return node;
+    if (node.id !== nodeId || node.type === "source" || node.type === "viewer-output" || node.type === "group") {
+      return node;
+    }
     changed = true;
     return {
       ...node,
@@ -1715,7 +1861,10 @@ export function setParamExposed(nodeId, paramKey, exposed, config = null) {
       )
     : graph.edges;
 
-  dispatch("graph", { nodes: nextNodes, edges: nextEdges });
+  dispatch("graph", {
+    nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
+    edges: nextEdges,
+  });
   return true;
 }
 
@@ -1732,7 +1881,10 @@ export function removeEdgesById(edgeIds) {
   const { graph } = getState();
   const nextEdges = graph.edges.filter((edge) => !ids.has(edge.id));
   if (nextEdges.length === graph.edges.length) return false;
-  dispatch("graph", { edges: nextEdges });
+  dispatch("graph", {
+    nodes: refreshGroupMetadataForNodes(graph.nodes.map((node) => clone(node)), nextEdges),
+    edges: nextEdges,
+  });
   return true;
 }
 
@@ -1765,8 +1917,9 @@ export function replaceGraph(nextGraph) {
 }
 
 export function serializeGraph(graph = getState().graph) {
+  const nodes = refreshGroupMetadataForNodes(graph.nodes, graph.edges);
   return {
-    nodes: graph.nodes.map((node) => {
+    nodes: nodes.map((node) => {
       const definition = getNodeDefinition(node.type);
       const payload = {
         id: node.id,
@@ -1785,6 +1938,7 @@ export function serializeGraph(graph = getState().graph) {
     }),
     edges: graph.edges.map((edge) => ({ ...edge })),
     selectedNodeId: graph.selectedNodeId,
+    selectedNodeIds: getSelectedNodeIds(graph),
   };
 }
 
@@ -1860,25 +2014,38 @@ function normalizeGraph(graph) {
 
   const hasSerializedEdges = Array.isArray(graph.edges);
   const nextEdges = sanitizeEdges(graph.edges, nextNodes);
+  const selectedNodeId = nextNodes.some((node) => node.id === graph.selectedNodeId)
+    ? graph.selectedNodeId
+    : nextNodes.at(-1)?.id ?? null;
+  const selectedNodeIds = normalizeSelectedNodeIds(graph.selectedNodeIds, nextNodes, selectedNodeId);
 
   if (nextEdges.length === 0 && !hasSerializedEdges) {
     const chain = getLinearChain({ nodes: nextNodes, edges: [] });
     layoutLinearNodes(chain);
+    const fallbackSelection = graph.selectedNodeId ?? chain.at(-1)?.id ?? null;
     return {
       nodes: chain,
       edges: buildLinearEdges(chain),
-      selectedNodeId: graph.selectedNodeId ?? chain.at(-1)?.id ?? null,
+      selectedNodeId: fallbackSelection,
+      selectedNodeIds: normalizeSelectedNodeIds(graph.selectedNodeIds, chain, fallbackSelection),
     };
   }
 
   return {
-    nodes: nextNodes,
+    nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
     edges: nextEdges,
-    selectedNodeId:
-      nextNodes.some((node) => node.id === graph.selectedNodeId)
-        ? graph.selectedNodeId
-        : nextNodes.at(-1)?.id ?? null,
+    selectedNodeId,
+    selectedNodeIds,
   };
+}
+
+function normalizeSelectedNodeIds(selectedNodeIds, nodes, fallbackId = null) {
+  const existing = new Set(nodes.map((node) => node.id));
+  const ids = Array.isArray(selectedNodeIds)
+    ? [...new Set(selectedNodeIds)].filter((nodeId) => existing.has(nodeId))
+    : [];
+  if (ids.length > 0) return ids;
+  return fallbackId && existing.has(fallbackId) ? [fallbackId] : [];
 }
 
 function normalizeNodeParents(nodes) {
@@ -1909,6 +2076,79 @@ function parentChainContainsNode(parentId, nodeId, nodeById) {
     current = normalizeParentId(parent.parentId);
   }
   return false;
+}
+
+function getGroupableSelectedNodes(graph, nodeIds = null) {
+  const requested = Array.isArray(nodeIds) ? nodeIds : getSelectedNodeIds(graph);
+  const seen = new Set();
+  return requested
+    .map((nodeId) => getNodeById(nodeId, graph))
+    .filter((node) => {
+      if (!node || seen.has(node.id) || isRootLockedType(node.type)) return false;
+      seen.add(node.id);
+      return true;
+    });
+}
+
+function getNodesBounds(nodes) {
+  return nodes.reduce(
+    (acc, node) => ({
+      minX: Math.min(acc.minX, node.x),
+      minY: Math.min(acc.minY, node.y),
+      maxX: Math.max(acc.maxX, node.x + NODE_WIDTH),
+      maxY: Math.max(acc.maxY, node.y + 108),
+    }),
+    { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+  );
+}
+
+function defaultGroupLabel(groupId) {
+  const suffix = String(groupId).match(/(\d+)$/)?.[1];
+  return suffix ? `Group ${suffix}` : "Group";
+}
+
+function refreshGroupMetadataForNodes(nodes, edges) {
+  const graph = { nodes, edges };
+  return nodes.map((node) => {
+    if (node.type !== "group") return node;
+    return {
+      ...node,
+      group: analyzeGroupBoundary(
+        graph,
+        new Set(nodes.filter((child) => getNodeParentId(child) === node.id).map((child) => child.id))
+      ),
+    };
+  });
+}
+
+function analyzeGroupBoundary(graph, childIds) {
+  const inputBindings = [];
+  const outputBindings = [];
+  const internalEdgeIds = [];
+
+  for (const edge of graph.edges ?? []) {
+    const fromInside = childIds.has(edge.fromNode);
+    const toInside = childIds.has(edge.toNode);
+    if (fromInside && toInside) {
+      internalEdgeIds.push(edge.id);
+    } else if (!fromInside && toInside) {
+      inputBindings.push(createBoundaryBinding(edge));
+    } else if (fromInside && !toInside) {
+      outputBindings.push(createBoundaryBinding(edge));
+    }
+  }
+
+  return normalizeGroupMetadata({ inputBindings, outputBindings, internalEdgeIds });
+}
+
+function createBoundaryBinding(edge) {
+  return {
+    edgeId: edge.id,
+    fromNode: edge.fromNode,
+    fromSocket: edge.fromSocket,
+    toNode: edge.toNode,
+    toSocket: edge.toSocket,
+  };
 }
 
 function createNode(id, type, options = {}) {
@@ -1948,6 +2188,7 @@ function normalizeGroupMetadata(group) {
   return {
     inputBindings: normalizeGroupBindings(group?.inputBindings),
     outputBindings: normalizeGroupBindings(group?.outputBindings),
+    internalEdgeIds: normalizeStringList(group?.internalEdgeIds),
   };
 }
 
@@ -1956,6 +2197,11 @@ function normalizeGroupBindings(bindings) {
   return bindings
     .filter((binding) => binding && typeof binding === "object" && !Array.isArray(binding))
     .map((binding) => clone(binding));
+}
+
+function normalizeStringList(values) {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
 }
 
 function normalizeNodeParams(type, defaultParams, incomingParams) {
