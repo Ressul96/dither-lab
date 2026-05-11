@@ -587,6 +587,96 @@ body.resizing-y * {
   fill: var(--accent, #6ea3ff);
 }
 
+.viewer-angle-gizmo__shaft {
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1.2;
+  fill: none;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-angle-gizmo__anchor {
+  fill: rgba(255, 255, 255, 0.92);
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 1;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-angle-gizmo__tip-ring {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 1.5;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-angle-gizmo__tip-dot {
+  fill: rgba(255, 255, 255, 0.95);
+  pointer-events: none;
+}
+
+.viewer-angle-gizmo__tip-hit {
+  fill: transparent;
+  cursor: grab;
+}
+
+.viewer-angle-gizmo[data-dragging="true"] .viewer-angle-gizmo__tip-hit {
+  cursor: grabbing;
+}
+
+.viewer-angle-gizmo[data-dragging="true"] .viewer-angle-gizmo__tip-dot {
+  fill: var(--accent, #6ea3ff);
+}
+
+.viewer-ring-gizmo__ellipse {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-width: 1.2;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-ring-gizmo__center-hit,
+.viewer-ring-gizmo__rim-hit {
+  fill: transparent;
+  cursor: grab;
+}
+
+.viewer-ring-gizmo[data-dragging="true"] .viewer-ring-gizmo__center-hit,
+.viewer-ring-gizmo[data-dragging="true"] .viewer-ring-gizmo__rim-hit {
+  cursor: grabbing;
+}
+
+.viewer-ring-gizmo__center-ring {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: 1.5;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-ring-gizmo__center-dot {
+  fill: rgba(255, 255, 255, 0.98);
+  stroke: rgba(0, 0, 0, 0.65);
+  stroke-width: 1;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-ring-gizmo__rim-dot {
+  fill: rgba(255, 255, 255, 0.95);
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 1.2;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-ring-gizmo[data-dragging="true"] .viewer-ring-gizmo__center-dot,
+.viewer-ring-gizmo[data-dragging="true"] .viewer-ring-gizmo__rim-dot {
+  fill: var(--accent, #6ea3ff);
+}
+
 .split-divider {
   position: absolute;
   top: 18px;
