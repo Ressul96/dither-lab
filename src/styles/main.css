@@ -558,6 +558,35 @@ body.resizing-y * {
   vector-effect: non-scaling-stroke;
 }
 
+.viewer-point-gizmo__hit {
+  fill: transparent;
+  cursor: grab;
+}
+
+.viewer-point-gizmo[data-dragging="true"] .viewer-point-gizmo__hit {
+  cursor: grabbing;
+}
+
+.viewer-point-gizmo__ring {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: 1.5;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-point-gizmo__dot {
+  fill: rgba(255, 255, 255, 0.98);
+  stroke: rgba(0, 0, 0, 0.65);
+  stroke-width: 1;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-point-gizmo[data-dragging="true"] .viewer-point-gizmo__dot {
+  fill: var(--accent, #6ea3ff);
+}
+
 .split-divider {
   position: absolute;
   top: 18px;

@@ -3,6 +3,7 @@ import { openExport } from "../export.js";
 import { clearSource, formatTime, openSource, samplePixel } from "../source.js";
 import { timeToFrame, timelineFrameRate } from "../timeline.js";
 import { initViewerOverlay } from "./viewer-overlay.js";
+import { initViewerGizmos } from "./viewer-gizmos.js";
 
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 
@@ -30,6 +31,7 @@ export function initStage() {
   wireZoomShortcuts(outputs);
   wireQualityToggle(qualityToggle);
   initViewerOverlay(stageCanvas);
+  initViewerGizmos();
 
   const sync = () =>
     syncStagePresentation(
