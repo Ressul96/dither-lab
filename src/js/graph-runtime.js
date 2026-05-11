@@ -91,6 +91,36 @@ export function pruneHiddenGraph(graph) {
   return { ...graph, nodes: visibleNodes, edges: visibleEdges };
 }
 
+// Group nodes are editor-only containers — children carry the actual compute
+// and the edges between them already pierce the boundary (groupSelectedNodes
+// preserves them as-is). Strip groups and any dangling edges that referenced
+// the group node's own sockets so the runtime sees a pure compute graph.
+//
+// Compute-node ids are unchanged, so nodeCache hits survive group/ungroup
+// without rebuild.
+export function flattenGraphForRuntime(graph) {
+  if (!graph?.nodes?.length) return graph ?? { nodes: [], edges: [] };
+  let hasGroup = false;
+  for (const node of graph.nodes) {
+    if (node?.type === "group") {
+      hasGroup = true;
+      break;
+    }
+  }
+  if (!hasGroup) return graph;
+
+  const groupIds = new Set();
+  for (const node of graph.nodes) {
+    if (node?.type === "group") groupIds.add(node.id);
+  }
+
+  const nodes = graph.nodes.filter((node) => !groupIds.has(node.id));
+  const edges = (graph.edges ?? []).filter(
+    (edge) => !groupIds.has(edge.fromNode) && !groupIds.has(edge.toNode)
+  );
+  return { ...graph, nodes, edges };
+}
+
 export function evaluateGraphOutputs(graph, context) {
   const timelineGraph = applyTimelineToGraph(
     graph,
@@ -101,7 +131,8 @@ export function evaluateGraphOutputs(graph, context) {
       fps: context?.fps,
     }
   );
-  const scoped = pruneHiddenGraph(timelineGraph);
+  const flattened = flattenGraphForRuntime(timelineGraph);
+  const scoped = pruneHiddenGraph(flattened);
   if (!scoped?.nodes?.length) {
     return {
       viewerOutput: null,

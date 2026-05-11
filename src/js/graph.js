@@ -680,7 +680,7 @@ const NODE_DEFINITIONS = Object.freeze({
   group: {
     label: "Group",
     family: "Utility",
-    description: "Contains a nested editor subgraph while runtime flattening lands in F6.3.",
+    description: "Editor-only container; children stay in the flat runtime graph.",
     chainable: false,
     inputs: [{ name: "image", label: "Image", type: "image" }],
     outputs: [{ name: "image", label: "Image", type: "image" }],
