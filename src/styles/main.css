@@ -838,6 +838,51 @@ body.resizing-y * {
   pointer-events: none;
 }
 
+.graph-breadcrumb {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: calc(100% - 20px);
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  background: rgba(12, 12, 16, 0.78);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(14px);
+}
+
+.graph-breadcrumb-item {
+  min-width: 0;
+  max-width: 160px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-label);
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.graph-breadcrumb-item:hover,
+.graph-breadcrumb-item.is-active {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.graph-breadcrumb-separator {
+  color: var(--text-muted);
+  font-size: var(--text-label);
+  user-select: none;
+}
+
 .graph-edges,
 .graph-node-layer {
   position: absolute;

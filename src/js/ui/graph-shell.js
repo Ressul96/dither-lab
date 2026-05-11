@@ -1,10 +1,12 @@
 import { DEFAULT_GRAPH_VIEW, dispatch, getState, subscribe } from "../state.js";
 import {
+  ROOT_PARENT_ID,
   addEdge,
   createFreeNode,
   ensureBootGraph,
   getNodeById,
   getNodeDefinition,
+  getNodeParentId,
   getSelectedNode,
   getValueNodeOutputBounds,
   insertExistingNodeOnEdge,
@@ -13,6 +15,7 @@ import {
   removeEdgesById,
   removeNode,
   replacePaletteUsages,
+  resolveGraphParentId,
   selectNode,
   toggleParamExposed,
   toggleNodeBypass,
@@ -85,6 +88,8 @@ let draggedPaletteType = "";
 let paletteExtractionSize = 4;
 let graphMenuEl = null;
 let graphMenuState = null;
+let graphBreadcrumbEl = null;
+let renderedGraphParentId = "";
 let insertHighlightEdgeId = "";
 let graphAutoCentered = false;
 let paletteDragPreviewEl = null;
@@ -103,6 +108,7 @@ export function initGraphShell() {
   if (!nodesEl || !edgesEl || !editorEl || !inspectorEl) return;
 
   nodesEl.addEventListener("click", onNodeClick);
+  nodesEl.addEventListener("dblclick", onNodeDoubleClick);
   nodesEl.addEventListener("pointerdown", onGraphPointerDown);
   inspectorEl.addEventListener("input", onInspectorInput);
   inspectorEl.addEventListener("change", onInspectorChange);
@@ -113,6 +119,7 @@ export function initGraphShell() {
   initPaletteDragAndDrop();
   initViewportInteractions();
   initGraphContextMenu();
+  initGraphBreadcrumb();
   wireKeyboard();
 
   if (typeof ResizeObserver === "function") {
@@ -139,7 +146,15 @@ export function initGraphShell() {
   subscribe("playback", () => {
     if (!inspectorEditing) syncTimelineButtons();
   });
-  subscribe("graphView", applyGraphViewport);
+  subscribe("graphView", () => {
+    const parentId = getCurrentGraphParentId();
+    if (parentId !== renderedGraphParentId) {
+      renderGraph();
+    } else {
+      syncGraphBreadcrumb();
+    }
+    applyGraphViewport();
+  });
   subscribe("source", () => {
     const selected = getSelectedNode();
     if (selected?.type === "viewer-output" && !inspectorEditing) {
@@ -150,6 +165,68 @@ export function initGraphShell() {
   requestAnimationFrame(() => {
     maybeAutoCenterGraph();
   });
+}
+
+function initGraphBreadcrumb() {
+  if (graphBreadcrumbEl || !editorEl) return;
+  graphBreadcrumbEl = document.createElement("nav");
+  graphBreadcrumbEl.className = "graph-breadcrumb";
+  graphBreadcrumbEl.setAttribute("aria-label", "Graph path");
+  graphBreadcrumbEl.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-graph-parent-id]");
+    if (!button) return;
+    setCurrentGraphParent(button.dataset.graphParentId);
+  });
+  editorEl.appendChild(graphBreadcrumbEl);
+  syncGraphBreadcrumb();
+}
+
+function syncGraphBreadcrumb(parentId = getCurrentGraphParentId()) {
+  if (!graphBreadcrumbEl) return;
+  const chain = getGraphBreadcrumbChain(parentId);
+  graphBreadcrumbEl.innerHTML = chain
+    .map((item, index) => {
+      const separator = index > 0 ? `<span class="graph-breadcrumb-separator">/</span>` : "";
+      const active = index === chain.length - 1 ? " is-active" : "";
+      return `
+        ${separator}
+        <button
+          type="button"
+          class="graph-breadcrumb-item${active}"
+          data-graph-parent-id="${escapeHtml(item.id)}"
+          aria-current="${index === chain.length - 1 ? "page" : "false"}"
+        >${escapeHtml(item.label)}</button>
+      `;
+    })
+    .join("");
+}
+
+function getGraphBreadcrumbChain(parentId = getCurrentGraphParentId()) {
+  const { graph } = getState();
+  const chain = [{ id: ROOT_PARENT_ID, label: "Root" }];
+  const visited = new Set([ROOT_PARENT_ID]);
+  let currentId = resolveGraphParentId(graph, parentId);
+  const groups = [];
+
+  while (currentId !== ROOT_PARENT_ID && !visited.has(currentId)) {
+    visited.add(currentId);
+    const group = getNodeById(currentId, graph);
+    if (!group || group.type !== "group") break;
+    groups.unshift({ id: group.id, label: group.label || group.id });
+    currentId = getNodeParentId(group);
+  }
+
+  return chain.concat(groups);
+}
+
+function setCurrentGraphParent(parentId) {
+  const { graph } = getState();
+  const currentParentId = resolveGraphParentId(graph, parentId);
+  dispatch("graphView", { currentParentId });
+  const selected = graph.nodes.find((node) => node.id === graph.selectedNodeId);
+  if (selected && getNodeParentId(selected) !== currentParentId) {
+    dispatch("graph", { selectedNodeId: null });
+  }
 }
 
 function initPaletteDragAndDrop() {
@@ -948,6 +1025,16 @@ function onNodeClick(event) {
   selectNode(node.dataset.nodeId);
 }
 
+function onNodeDoubleClick(event) {
+  const nodeEl = event.target.closest("[data-node-id]");
+  if (!nodeEl) return;
+  const node = getNodeById(nodeEl.dataset.nodeId);
+  if (node?.type !== "group") return;
+  event.preventDefault();
+  event.stopPropagation();
+  setCurrentGraphParent(node.id);
+}
+
 function onInspectorInput(event) {
   const gradientStopControl = event.target.closest("[data-gradient-map-stop-color]");
   if (gradientStopControl) {
@@ -1351,21 +1438,42 @@ function renderShell() {
 
 function renderGraph() {
   const { graph } = getState();
+  const parentId = getCurrentGraphParentId();
+  const visibleNodes = getVisibleGraphNodes(graph, parentId);
   nodesEl.style.width = `${GRAPH_WORLD_SIZE}px`;
   nodesEl.style.height = `${GRAPH_WORLD_SIZE}px`;
-  nodesEl.innerHTML = graph.nodes.map((node) => renderNode(node, graph.selectedNodeId)).join("");
-  renderEdges();
+  nodesEl.innerHTML = visibleNodes.map((node) => renderNode(node, graph.selectedNodeId)).join("");
+  renderedGraphParentId = parentId;
+  renderEdges(parentId);
+  syncGraphBreadcrumb(parentId);
 }
 
-function renderEdges() {
+function renderEdges(parentId = getCurrentGraphParentId()) {
   const { graph } = getState();
+  const visibleNodeIds = getVisibleGraphNodeIds(graph, parentId);
   edgesEl.setAttribute("viewBox", `0 0 ${GRAPH_WORLD_SIZE} ${GRAPH_WORLD_SIZE}`);
   edgesEl.setAttribute("width", String(GRAPH_WORLD_SIZE));
   edgesEl.setAttribute("height", String(GRAPH_WORLD_SIZE));
-  edgesEl.innerHTML = graph.edges.map((edge) => renderEdge(edge, graph)).join("");
+  edgesEl.innerHTML = graph.edges
+    .filter((edge) => visibleNodeIds.has(edge.fromNode) && visibleNodeIds.has(edge.toNode))
+    .map((edge) => renderEdge(edge, graph))
+    .join("");
   if (insertHighlightEdgeId) {
     edgesEl.querySelector(`[data-edge-id="${insertHighlightEdgeId}"]`)?.classList.add("insert-target");
   }
+}
+
+function getCurrentGraphParentId() {
+  const { graph, graphView } = getState();
+  return resolveGraphParentId(graph, graphView.currentParentId);
+}
+
+function getVisibleGraphNodes(graph, parentId = getCurrentGraphParentId()) {
+  return graph.nodes.filter((node) => getNodeParentId(node) === parentId);
+}
+
+function getVisibleGraphNodeIds(graph, parentId = getCurrentGraphParentId()) {
+  return new Set(getVisibleGraphNodes(graph, parentId).map((node) => node.id));
 }
 
 function renderNode(node, selectedNodeId) {
@@ -3757,7 +3865,7 @@ function insertPaletteNodeAtDefault(type) {
 
 function createNodeFromPalette(type, point) {
   if (!type || !point) return null;
-  return createFreeNode(type, nodePositionFromPoint(point));
+  return createFreeNode(type, nodePositionFromPoint(point), getCurrentGraphParentId());
 }
 
 function nodePositionFromPoint(point) {
@@ -3769,10 +3877,16 @@ function nodePositionFromPoint(point) {
 
 function getViewerInputEdgeId() {
   const { graph } = getState();
-  const viewer = graph.nodes.find((node) => node.type === "viewer-output");
+  const visibleNodeIds = getVisibleGraphNodeIds(graph);
+  const viewer = graph.nodes.find((node) => node.type === "viewer-output" && visibleNodeIds.has(node.id));
   const primarySocket = viewer?.inputs?.[0]?.name;
   if (!viewer || !primarySocket) return null;
-  return graph.edges.find((edge) => edge.toNode === viewer.id && edge.toSocket === primarySocket)?.id ?? null;
+  return graph.edges.find(
+    (edge) =>
+      edge.toNode === viewer.id &&
+      edge.toSocket === primarySocket &&
+      visibleNodeIds.has(edge.fromNode)
+  )?.id ?? null;
 }
 
 function initGraphContextMenu() {
@@ -3875,9 +3989,10 @@ function maybeAutoCenterGraph() {
   }
 
   const rect = editorEl.getBoundingClientRect();
-  if (!rect.width || !rect.height || graph.nodes.length === 0) return;
+  const visibleNodes = getVisibleGraphNodes(graph);
+  if (!rect.width || !rect.height || visibleNodes.length === 0) return;
 
-  const bounds = graph.nodes.reduce(
+  const bounds = visibleNodes.reduce(
     (acc, node) => ({
       minX: Math.min(acc.minX, node.x),
       maxX: Math.max(acc.maxX, node.x + NODE_WIDTH),

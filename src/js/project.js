@@ -3,6 +3,7 @@ import {
   createBootGraph,
   getViewerOutputFps,
   replaceGraph,
+  resolveGraphParentId,
   serializeGraph,
 } from "./graph.js";
 import { clearSource, openSourcePath, pausePlayback, seek, setFps } from "./source.js";
@@ -146,6 +147,7 @@ function buildProjectPayload() {
       zoom: state.graphView.zoom,
       panX: state.graphView.panX,
       panY: state.graphView.panY,
+      currentParentId: resolveGraphParentId(state.graph, state.graphView.currentParentId),
     },
     graph: serializeGraph(state.graph),
     timeline: serializeTimeline(state.timeline),
@@ -181,11 +183,13 @@ async function applyProject(project) {
     });
   }
 
-  dispatch("graphView", {
+  const requestedGraphView = {
     zoom: project?.graphView?.zoom ?? DEFAULT_GRAPH_VIEW.zoom,
     panX: project?.graphView?.panX ?? DEFAULT_GRAPH_VIEW.panX,
     panY: project?.graphView?.panY ?? DEFAULT_GRAPH_VIEW.panY,
-  });
+    currentParentId: project?.graphView?.currentParentId ?? DEFAULT_GRAPH_VIEW.currentParentId,
+  };
+  dispatch("graphView", requestedGraphView);
 
   applyCustomPalettes(project?.customPalettes ?? []);
   dispatch(
@@ -195,7 +199,10 @@ async function applyProject(project) {
       fps: getState().source.fps,
     })
   );
-  replaceGraph(project?.graph);
+  const graph = replaceGraph(project?.graph);
+  dispatch("graphView", {
+    currentParentId: resolveGraphParentId(graph, requestedGraphView.currentParentId),
+  });
   if (getState().source.loaded) {
     setFps(
       getViewerOutputFps(project?.graph ?? null) ??

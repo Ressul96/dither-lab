@@ -7,6 +7,8 @@ const NODE_BASE_Y = 84;
 const NODE_WIDTH = 220;
 const NODE_INSERT_GAP_X = Math.round(NODE_WIDTH * 0.2);
 
+export const ROOT_PARENT_ID = "root";
+
 const NODE_DEFINITIONS = Object.freeze({
   source: {
     label: "Video Source",
@@ -675,6 +677,15 @@ const NODE_DEFINITIONS = Object.freeze({
     outputs: [{ name: "value", label: "Value", type: "value" }],
     defaultParams: { operation: "add", a: 0, b: 1, clamp: false },
   },
+  group: {
+    label: "Group",
+    family: "Utility",
+    description: "Contains a nested editor subgraph while runtime flattening lands in F6.3.",
+    chainable: false,
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {},
+  },
   "viewer-output": {
     label: "Viewer Output",
     family: "Output",
@@ -727,7 +738,8 @@ const TYPE_ORDER = {
   mix: 38,
   value: 39,
   math: 40,
-  "viewer-output": 41,
+  group: 41,
+  "viewer-output": 42,
 };
 
 const NODE_PARAM_BOUNDS = Object.freeze({
@@ -1038,6 +1050,18 @@ export function getNodeDefinition(type) {
   return NODE_DEFINITIONS[type] ?? null;
 }
 
+export function getNodeParentId(node) {
+  if (!node || isRootLockedType(node.type)) return ROOT_PARENT_ID;
+  return normalizeParentId(node.parentId);
+}
+
+export function resolveGraphParentId(graph, parentId) {
+  const requested = normalizeParentId(parentId);
+  if (requested === ROOT_PARENT_ID) return ROOT_PARENT_ID;
+  const parent = graph?.nodes?.find((node) => node.id === requested);
+  return parent?.type === "group" ? requested : ROOT_PARENT_ID;
+}
+
 export function getNodeParamBounds(nodeOrType, paramKey) {
   const type = typeof nodeOrType === "string" ? nodeOrType : nodeOrType?.type;
   const configured =
@@ -1219,7 +1243,7 @@ function insertNodeIntoChain(type, extraEdgeFactory = null) {
   return nodeId;
 }
 
-export function createFreeNode(type, position) {
+export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
   const definition = getNodeDefinition(type);
   if (!definition || type === "source" || type === "viewer-output") return null;
 
@@ -1228,6 +1252,7 @@ export function createFreeNode(type, position) {
   const newNode = createNode(nodeId, type, {
     x: position?.x ?? NODE_BASE_X,
     y: position?.y ?? NODE_BASE_Y,
+    parentId,
   });
 
   dispatch("graph", {
@@ -1252,9 +1277,11 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
 
   const nodeId = nextNodeId(type, graph);
   const hasExplicitPosition = Boolean(options.position);
+  const parentId = options.parentId ?? commonNodeParentId(fromNode, toNode);
   const newNode = createNode(nodeId, type, {
     x: options.position?.x ?? midpoint(fromNode.x, toNode.x),
     y: options.position?.y ?? midpoint(fromNode.y, toNode.y),
+    parentId,
   });
   const inputSocket = getPrimaryInputSocket(newNode);
   const outputSocket = newNode.outputs?.[0]?.name;
@@ -1363,6 +1390,7 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
     const nextNodes = graph.nodes.map((item) => clone(item));
     const inserted = nextNodes.find((item) => item.id === nodeId);
     if (!inserted) return false;
+    inserted.parentId = commonNodeParentId(fromNode, toNode);
     if (options.position) {
       inserted.x = options.position.x;
       inserted.y = options.position.y;
@@ -1402,6 +1430,7 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
   const nextNodes = graph.nodes.map((item) => clone(item));
   const inserted = nextNodes.find((item) => item.id === nodeId);
   if (!inserted) return false;
+  inserted.parentId = commonNodeParentId(fromNode, toNode);
   if (options.position) {
     inserted.x = options.position.x;
     inserted.y = options.position.y;
@@ -1533,7 +1562,17 @@ export function removeNode(nodeId) {
     ? graph.edges.find((edge) => edge.fromNode === nodeId && edge.fromSocket === primaryOutput)
     : null;
 
-  const nextNodes = graph.nodes.filter((item) => item.id !== nodeId).map((item) => clone(item));
+  const fallbackParentId = getNodeParentId(node);
+  const nextNodes = graph.nodes
+    .filter((item) => item.id !== nodeId)
+    .map((item) => {
+      const next = clone(item);
+      if (getNodeParentId(next) === nodeId) {
+        next.parentId = fallbackParentId;
+      }
+      return next;
+    });
+  normalizeNodeParents(nextNodes);
   const nextEdges = graph.edges
     .filter((edge) => edge.fromNode !== nodeId && edge.toNode !== nodeId)
     .map((edge) => ({ ...edge }));
@@ -1578,6 +1617,9 @@ export function removeNode(nodeId) {
     edges: nextEdges,
     selectedNodeId: fallbackSelection,
   });
+  if (getState().graphView.currentParentId === nodeId) {
+    dispatch("graphView", { currentParentId: fallbackParentId });
+  }
   return true;
 }
 
@@ -1724,16 +1766,23 @@ export function replaceGraph(nextGraph) {
 
 export function serializeGraph(graph = getState().graph) {
   return {
-    nodes: graph.nodes.map((node) => ({
-      id: node.id,
-      type: node.type,
-      x: node.x,
-      y: node.y,
-      params: clone(node.params),
-      exposedParams: Array.isArray(node.exposedParams) ? [...node.exposedParams] : [],
-      exposedParamConfig: clone(node.exposedParamConfig),
-      bypassed: Boolean(node.bypassed),
-    })),
+    nodes: graph.nodes.map((node) => {
+      const definition = getNodeDefinition(node.type);
+      const payload = {
+        id: node.id,
+        type: node.type,
+        parentId: getNodeParentId(node),
+        x: node.x,
+        y: node.y,
+        params: clone(node.params),
+        exposedParams: Array.isArray(node.exposedParams) ? [...node.exposedParams] : [],
+        exposedParamConfig: clone(node.exposedParamConfig),
+        bypassed: Boolean(node.bypassed),
+      };
+      if (node.label && node.label !== definition?.label) payload.label = node.label;
+      if (node.type === "group") payload.group = normalizeGroupMetadata(node.group);
+      return payload;
+    }),
     edges: graph.edges.map((edge) => ({ ...edge })),
     selectedNodeId: graph.selectedNodeId,
   };
@@ -1790,6 +1839,9 @@ function normalizeGraph(graph) {
       return createNode(node.id, node.type, {
         x: node.x,
         y: node.y,
+        parentId: node.parentId,
+        label: node.label,
+        group: node.group,
         params: node.params,
         exposedParams: node.exposedParams,
         exposedParamConfig: node.exposedParamConfig,
@@ -1804,6 +1856,7 @@ function normalizeGraph(graph) {
   if (!nextNodes.some((node) => node.type === "viewer-output")) {
     nextNodes.push(createNode("viewer-output-1", "viewer-output"));
   }
+  normalizeNodeParents(nextNodes);
 
   const hasSerializedEdges = Array.isArray(graph.edges);
   const nextEdges = sanitizeEdges(graph.edges, nextNodes);
@@ -1828,15 +1881,45 @@ function normalizeGraph(graph) {
   };
 }
 
+function normalizeNodeParents(nodes) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  for (const node of nodes) {
+    node.parentId = normalizeNodeParent(node, nodeById);
+  }
+}
+
+function normalizeNodeParent(node, nodeById) {
+  if (!node || isRootLockedType(node.type)) return ROOT_PARENT_ID;
+  const parentId = normalizeParentId(node.parentId);
+  if (parentId === ROOT_PARENT_ID) return ROOT_PARENT_ID;
+  const parent = nodeById.get(parentId);
+  if (!parent || parent.type !== "group" || parent.id === node.id) return ROOT_PARENT_ID;
+  if (parentChainContainsNode(parentId, node.id, nodeById)) return ROOT_PARENT_ID;
+  return parentId;
+}
+
+function parentChainContainsNode(parentId, nodeId, nodeById) {
+  let current = parentId;
+  const visited = new Set();
+  while (current && current !== ROOT_PARENT_ID) {
+    if (current === nodeId || visited.has(current)) return true;
+    visited.add(current);
+    const parent = nodeById.get(current);
+    if (!parent) return false;
+    current = normalizeParentId(parent.parentId);
+  }
+  return false;
+}
+
 function createNode(id, type, options = {}) {
   const definition = getNodeDefinition(type);
   if (!definition) throw new Error(`Unknown node type: ${type}`);
   const explicitInputs = new Set(definition.inputs.map((socket) => socket.name));
-
-  return {
+  const node = {
     id,
     type,
-    label: definition.label,
+    parentId: isRootLockedType(type) ? ROOT_PARENT_ID : normalizeParentId(options.parentId),
+    label: normalizeNodeLabel(options.label, definition.label),
     x: options.x ?? NODE_BASE_X,
     y: options.y ?? NODE_BASE_Y,
     inputs: definition.inputs.map((socket) => ({ ...socket })),
@@ -1848,6 +1931,31 @@ function createNode(id, type, options = {}) {
     exposedParamConfig: clone(options.exposedParamConfig),
     bypassed: Boolean(options.bypassed),
   };
+
+  if (type === "group") {
+    node.group = normalizeGroupMetadata(options.group);
+  }
+
+  return node;
+}
+
+function normalizeNodeLabel(value, fallback) {
+  const label = typeof value === "string" ? value.trim() : "";
+  return label || fallback;
+}
+
+function normalizeGroupMetadata(group) {
+  return {
+    inputBindings: normalizeGroupBindings(group?.inputBindings),
+    outputBindings: normalizeGroupBindings(group?.outputBindings),
+  };
+}
+
+function normalizeGroupBindings(bindings) {
+  if (!Array.isArray(bindings)) return [];
+  return bindings
+    .filter((binding) => binding && typeof binding === "object" && !Array.isArray(binding))
+    .map((binding) => clone(binding));
 }
 
 function normalizeNodeParams(type, defaultParams, incomingParams) {
@@ -2008,6 +2116,21 @@ function getPrimaryInputSocket(node) {
 
 function getPrimaryOutputSocket(node) {
   return node.outputs?.[0]?.name ?? null;
+}
+
+function normalizeParentId(parentId) {
+  const value = typeof parentId === "string" ? parentId.trim() : "";
+  return value || ROOT_PARENT_ID;
+}
+
+function isRootLockedType(type) {
+  return type === "source" || type === "viewer-output";
+}
+
+function commonNodeParentId(a, b) {
+  const parentA = getNodeParentId(a);
+  const parentB = getNodeParentId(b);
+  return parentA === parentB ? parentA : ROOT_PARENT_ID;
 }
 
 function getSocket(node, kind, socketName) {

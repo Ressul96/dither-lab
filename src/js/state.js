@@ -4,6 +4,7 @@ export const DEFAULT_GRAPH_VIEW = Object.freeze({
   zoom: 1,
   panX: -7820,
   panY: -7904,
+  currentParentId: "root",
 });
 
 const state = {
