@@ -134,7 +134,7 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 
 | PR | Kapsam | Md | Durum |
 |---|---|---|---|
-| F6.1 | `parentId` + `state.graphView.currentParentId` + breadcrumb | `node_gelisme.md` | ⬜ |
+| F6.1 | `parentId` + `state.graphView.currentParentId` + breadcrumb | `node_gelisme.md` | ✅ `d381222` |
 | F6.2 | Group / Ungroup eylemleri, dış-iç bağlantı analizi | `node_gelisme.md` | ⬜ |
 | F6.3 | Runtime flattening (`graph-runtime.js`) | `node_gelisme.md` | ⬜ |
 
