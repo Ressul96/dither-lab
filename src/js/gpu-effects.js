@@ -5,6 +5,7 @@
 
 import { hexToRgb01 } from "./color.js";
 import { buildGradientLut } from "./gl/gradient-lut.js";
+import { createProcessingCanvas } from "./canvas.js";
 
 const FULLSCREEN_VERTEX_SHADER = `#version 300 es
 in vec2 a_position;
@@ -1397,11 +1398,13 @@ function getAsciiAtlas(ramp, glyphSize) {
 }
 
 function buildAsciiAtlas(ramp, glyphSize) {
+  // Worker scopes still bail here — font availability + text rasterisation
+  // aren't guaranteed inside a Worker (spec §Faz 3 open decision). When the
+  // worker adapter lands the atlas will be built on the main thread and
+  // shipped as an ImageBitmap; until then, ASCII renders main-thread only.
   if (typeof document === "undefined") return null;
   const size = Math.max(8, Math.round(glyphSize));
-  const canvas = document.createElement("canvas");
-  canvas.width = ramp.length * size;
-  canvas.height = size;
+  const canvas = createProcessingCanvas(ramp.length * size, size);
   const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) return null;
   ctx.fillStyle = "#000";
@@ -1922,9 +1925,13 @@ function getRenderer() {
 }
 
 function createRenderer() {
+  // Same worker bail as the ASCII atlas: WebGL2 inside a Worker requires the
+  // factory's OffscreenCanvas branch, but the rest of the renderer wiring
+  // (createTexture / drawArrays) isn't wired through yet. F8.4 removes this
+  // guard once the worker adapter lands.
   if (typeof document === "undefined") return null;
 
-  const canvas = document.createElement("canvas");
+  const canvas = createProcessingCanvas(1, 1);
   const gl = canvas.getContext("webgl2", {
     alpha: false,
     antialias: false,
@@ -2012,9 +2019,7 @@ function createRenderer() {
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-      const output = document.createElement("canvas");
-      output.width = input.width;
-      output.height = input.height;
+      const output = createProcessingCanvas(input.width, input.height);
       const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
       if (!ctx) return null;
       ctx.drawImage(canvas, 0, 0);
@@ -2069,9 +2074,7 @@ function createRenderer() {
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-      const output = document.createElement("canvas");
-      output.width = w;
-      output.height = h;
+      const output = createProcessingCanvas(w, h);
       const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
       if (!ctx) return null;
       ctx.drawImage(canvas, 0, 0);
