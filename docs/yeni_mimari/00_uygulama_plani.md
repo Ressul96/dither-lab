@@ -30,7 +30,7 @@ sistem için kendi md'sinde.
 | F7 | On-canvas Gizmos | 1 hafta | ✅ |
 | F8 | Web Worker / OffscreenCanvas | 2-4 hafta | ✅ |
 | F9 | Renderer altyapı (ping-pong + mip + HDR) | 2-3 hafta | ⬜ |
-| F10 | Timeline + Player UI yeniden tasarım | 2-3 hafta | ⬜ F10.1-F10.2 indi |
+| F10 | Timeline + Player UI yeniden tasarım | 2-3 hafta | ⬜ F10.1-F10.3 indi |
 | F11 | Composite, scene grading + UI primitive parity | 1-2 hafta | ⬜ |
 | F12 | Export polish + preset'ler | ~1 hafta | ⬜ |
 | F13 | Graph editor UX overhaul (palette + shortcuts + mouse mode) | 1-2 hafta | ⬜ |

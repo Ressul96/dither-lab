@@ -99,6 +99,11 @@ tuşu kısayolları korunuyor.
 | Klavye kısayolları: Space (play/pause), L (loop toggle), K (auto-key toggle), Home/End | shader-lab'da yok ama yapmamız mantıklı |
 
 ### F10.3 — Adaptive ruler + playhead
+**Durum (2026-05-12): ✅ İndi.** Ruler artık timeline süresine ve zoom'a
+göre major/minor saniye tick'leri üretir. Playhead handle pointer-capture ile
+sürüklenebilir, frame grid'e snap eder, sürükleme sırasında playback'i pause
+eder ve inline zaman/frame tooltip'i gösterir.
+
 | Kapsam | Notlar |
 |---|---|
 | Major/minor tick step'leri duration'a bağlı (`getMajorTickStep(duration)`) | duration ≤ 6s → 1s, ≤ 12s → 2s, ≤ 30s → 5s, … |

@@ -2088,20 +2088,30 @@ body.cutting-edges * {
 
 .time-tick {
   position: absolute;
-  top: 0;
   bottom: 0;
   width: 1px;
-  background: rgba(255, 255, 255, 0.06);
+  transform: translateX(-0.5px);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.time-tick--major {
+  top: 0;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.time-tick--minor {
+  top: 11px;
 }
 
 .time-tick-label {
   position: absolute;
-  top: 5px;
-  left: 4px;
+  top: 4px;
+  left: 5px;
   font-size: 9px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  letter-spacing: 0;
 }
 
 .timeline-pane-body {
@@ -2149,6 +2159,33 @@ body.cutting-edges * {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
   cursor: ew-resize;
   pointer-events: auto;
+}
+
+.playhead-tooltip {
+  position: absolute;
+  top: 14px;
+  left: 0;
+  transform: translateX(-50%) translateY(3px);
+  padding: 3px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-sm);
+  background: rgba(15, 15, 18, 0.96);
+  color: var(--text-primary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.playhead.is-dragging .playhead-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 /* Lane host --------------------------------------------------------------- */
@@ -2533,7 +2570,8 @@ body.cutting-edges * {
 }
 
 body.dragging-keyframe,
-body.dragging-tangent {
+body.dragging-tangent,
+body.dragging-playhead {
   cursor: ew-resize;
   user-select: none;
 }
