@@ -31,14 +31,20 @@ sistem için kendi md'sinde.
 | F8 | Web Worker / OffscreenCanvas | 2-4 hafta | ✅ |
 | F9 | Renderer altyapı (ping-pong + mip + HDR) | 2-3 hafta | ⬜ |
 | F10 | Timeline + Player UI yeniden tasarım | 2-3 hafta | ⬜ |
-| F11 | Composite & scene grading parity | ~1 hafta | ⬜ |
+| F11 | Composite, scene grading + UI primitive parity | 1-2 hafta | ⬜ |
 | F12 | Export polish + preset'ler | ~1 hafta | ⬜ |
-| F13 | Stretch (custom-shader, procedural sources) | açık uçlu | ⬜ |
+| F13 | Graph editor UX overhaul (palette + shortcuts + mouse mode) | 1-2 hafta | ⬜ |
+| F14 | Stretch (custom-shader, procedural sources) | açık uçlu | ⬜ |
 
-F9–F13 detayları: [`shader_lab_plan.md`](shader_lab_plan.md). Karşılaştırma
-kaynağı: https://github.com/basementstudio/shader-lab. **Kullanıcı kararı
-(2026-05-12):** effect catalog ports + audio-reactive bindings kapsam dışı —
-kalite/performans + UX önceliği.
+F7 follow-up: dashed gizmo for falloff + crop/transform box gizmo — küçük
+PR'lar, F9 öncesi de inebilir.
+
+F9–F14 detayları: [`shader_lab_plan.md`](shader_lab_plan.md). Karşılaştırma
+kaynağı: https://github.com/basementstudio/shader-lab. **Kullanıcı kararları
+(2026-05-12):** effect catalog ports + audio-reactive kapsam dışı; UI
+primitive'ler (curves/xy-pad/color-picker/gradient-ramp) shader-lab'tan
+direkt port; graph editor interaction model yeniden tasarlanacak (box
+select on plain left-click, shortcuts: G/M/X/T).
 
 Player reformu (Faz 1-5) ayrı bir iş kalemidir, tamamlandı (`f754dcd`'ye
 kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).

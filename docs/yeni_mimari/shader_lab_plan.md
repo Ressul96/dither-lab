@@ -139,18 +139,33 @@ view'ını tek floating overlay altında yeniden inşa eder.**
 
 ---
 
-## 3. F11 — Composite & scene grading parity
+## 3. F11 — Composite, scene grading + UI primitive parity
 
 Onların `pass-node` mimarisi her layer'a 16 blend mode + mask config + per-layer
 hue/saturation/opacity veriyor; bizim mix node'umuz sınırlı, scene-wide grading
-yok. Bu faz graph editor üzerinde küçük PR'larla parite alır.
+yok. Plus, shader-lab'ın inspector UI primitive'leri (curves, xy-pad, color-
+picker, gradient-ramp) bizimkilerden daha sağlam — kullanıcı feedback'i
+(2026-05-12): "rgb curves, xy pad, renk seçici, color ramp gibi mevzuları
+direkt shader-lab dosyasından öğren ona uygun yap".
 
+### Composite parity (graph editor düğümleri)
 | PR | Kapsam | Notlar |
 |---|---|---|
 | F11.1 | 16 blend mode katalogu (normal, multiply, screen, overlay, darken, lighten, color-dodge/burn, hard/soft-light, difference, exclusion, hue, saturation, color, luminosity) | `mix` node'unda + opsiyonel olarak `viewer-output` üstünde blend selector. CPU + GPU pair |
 | F11.2 | Mask config zenginleştirme: source (luma/alpha/R/G/B), mode (multiply/stencil), invert | `mask-apply` node'una param ekleme |
 | F11.3 | Scene-wide post-process node: master color curves (R/G/B + master) + clamp gamma + opsiyonel color-map LUT | `viewer-output`'tan önce uygulanan global node; F5.2 rgb-curves altyapısı + F1.2 gradient LUT helper'ı yeniden kullanılır |
 | F11.4 | Layer-level color adjustments (per-node hue/saturation/opacity bayrakları) | Property tracks'in (F10.4) animasyon hedefi olur |
+
+### Inspector UI primitive parity (shader-lab'tan port)
+| PR | Kapsam | Kaynak (shader-lab) | Notlar |
+|---|---|---|---|
+| F11.5 | **Color curves editor** — channel switcher (master/R/G/B), monotone curve tangents, MIN_POINT_GAP guard, smooth handle interaction | `src/components/ui/color-curves/index.tsx` (565 satır) | F5.1 curve primitive'ini yeniden inşa et: monotone interpolation + 6px handle + drag-to-rearrange + UI sound hooks paterni |
+| F11.6 | **XY pad** — 2D vec parametreleri için (vec2 hedefler: center, offset, displace amount XY) | `src/components/ui/xy-pad/index.tsx` (217 satır) | Min/max/step + keyboard arrows + interaction start/end callback'leri |
+| F11.7 | **Color picker** — HSV popover, hex input, eyedropper opsiyonel | `src/components/ui/color-picker/index.tsx` (423 satır) | Mevcut `renderColorField`'i değiştir — gradient-map / mesh-gradient / halation tint hep buradan beslensin |
+| F11.8 | **Gradient ramp** — multi-stop gradient editor (drag stops, add/remove, color picker per stop) | `src/components/ui/gradient-ramp/index.tsx` (196 satır) | Gradient-map node + mesh-gradient stops (F9 sonrası) UI'ı bu primitive üzerine taşınır |
+| F11.9 | **Channel curves** (alt-kategori) — RGB kanallarına ayrı curve | `src/components/ui/channel-curves/index.tsx` (255 satır) | F5.2 rgb-curves zaten var; bu sadece UX iyileştirmesi |
+
+---
 
 ---
 
@@ -169,19 +184,99 @@ quality/aspect preset'leri ve UI polish UX'i ciddi iyileştirir.
 
 ---
 
-## 5. F13 — Stretch (custom-shader + procedural sources)
+## 5. F13 — Graph editor UX overhaul
+
+Kullanıcı feedback'i (2026-05-12): mevcut node palette ayrı kartlar, search yok,
+shortcut'lar dağınık, sol-tık-drag pan ama box select daha doğal. Bu faz
+graph editor'ün interaction modelini ve palette UX'ini yeniden inşa eder.
+
+### F13.1 — Node palette polish
+| Kapsam | Notlar |
+|---|---|
+| **Arama kutusu** — palette başlığında lupe ikonu + inline filter input | Fuzzy/substring; kategori başlıkları match'e göre filtrelenir |
+| **Kompakt liste** — her node ayrı kart yerine tek satır + sol kenar renk şeridi (mevcut color coding korunur) | Screenshot baz alınır; padding küçülür, kategoriler hâlâ üst başlık (INPUT / COLOR / PROCESS / …). **Renk yapımız onlardan daha iyi** — onlar tek renk; biz family color şeridini koruruz |
+| **Drag handle ergonomisi** — node satırı tam highlight, sürüklenebilir whole row | Mevcut drag mevcut, sadece görsel polish |
+
+### F13.2 — Canvas sağ-tık context menu
+| Kapsam | Notlar |
+|---|---|
+| Boş canvas'a sağ-tık → kategorilere ayrılmış node picker (palette'in mini versiyonu) | Tıklanan konuma node free-place edilir |
+| Node üstüne sağ-tık → mevcut context menu (delete, group, ungroup, duplicate, bypass) | Mevcut |
+| Edge üstüne sağ-tık → edge insert picker (node araya sokulur) | Mevcut insert flow daha keşfedilebilir hale gelir |
+
+### F13.3 — Interaction model rework (mouse + modifiers)
+Kullanıcının istediği yeni model:
+
+| Eylem | Tuş kombinasyonu |
+|---|---|
+| Box select (rectangle select) | **Sol-tık drag (boş alanda)** |
+| Node seç / multi-select | **Cmd/Ctrl+sol-tık** node üstünde |
+| Edge cut (kesme aracı) | **Option/Alt+sol-tık drag** (boş alanda) |
+| Canvas pan | **Space+sol-tık drag** (Photoshop pattern) + mevcut trackpad 2-finger pan (F6) |
+| Node move | Sol-tık node + drag (mevcut, değişmez) |
+
+> Mevcut model: sol-tık-drag = pan, Cmd+sol-tık-drag = edge cut. Yeni model
+> pan'i Space modifier'a alıyor; box select doğal sol-tık'a düşüyor. Bu
+> önemli bir kassel kıran değişiklik — eski kullanıcı kasları bozulur, ama
+> standart 2D editör paterniyle (Figma, Blender 2.8+) uyumlu hale geliyor.
+
+### F13.4 — Klavye kısayolları (genişletilmiş)
+| Tuş | Eylem |
+|---|---|
+| **G** | Seçili node'ları grupla (mevcut Cmd+G ile yan yana; Shift+G ungroup) |
+| **M** | Seçili node'lar için bypass toggle |
+| **X** veya **Delete/Backspace** | Seçili node'ları sil |
+| **T** | Solo: seçili node'u tek başına `viewer-output`'a route et (önceki bağlantı saklanır; T tekrar basılınca geri yüklenir) |
+| **F** | Selected node(s)'a frame (graph editor zoom + pan) |
+| **A** | Select all (current parent scope) |
+| **Escape** | Selection clear, drag iptal, popover kapat |
+| **Cmd/Ctrl+D** | Duplicate selected |
+| **R** | Rename selected node (label inline edit) |
+| **Cmd/Ctrl+Z / Cmd/Ctrl+Shift+Z** | Undo / Redo (mevcut) |
+
+**Solo (T) implementasyon notu:** seçili node'un primary output'u temporary
+olarak `viewer-output`'un primary input'una bağlanır. Mevcut bağlantı bir
+"solo stash"e kaydedilir. T'ye tekrar basıldığında stash geri yüklenir,
+solo edge silinir. Solo aktifken bir badge gösterilir.
+
+### F13.5 — Cursor + visual feedback
+| Kapsam | Notlar |
+|---|---|
+| Mod-specific cursor: box select → crosshair, pan → grab/grabbing, cut → scissors | F6'da pan grabbing zaten var |
+| Marquee rectangle: dashed outline + subtle fill | Cancel'lanabilir (Escape) |
+| Cut path: dashed red stroke (mevcut görünüm korunur) | Mevcut |
+
+**Kabul kriterleri:**
+1. Boş canvas'a sağ-tık → kategorize node picker açılır.
+2. Palette search box çalışır.
+3. Sol-tık drag → box select; Option/Alt drag → cut; Space+drag → pan.
+4. G grupla, M bypass, X delete, T solo — hepsi tek tuş.
+5. F frame, A select-all, Esc cancel, R rename çalışır.
+
+---
+
+## 6. F14 — Stretch (custom-shader + procedural sources)
 
 | PR | Kapsam | Notlar |
 |---|---|---|
-| F13.1 | `gradient` procedural source (mesh-gradient'in yanı sıra linear/radial/conic) | Üç ayrı shader; param schema benzer |
-| F13.2 | (Opsiyonel) `custom-shader` node type: kullanıcı GLSL fragment'ı yapıştırır, uniform UI auto-generated | `parameter-schema.ts` paterni; safety: compile error inline gösterimi. Advanced — son sırada |
-| F13.3 | (Opsiyonel) Fluid simulation source | Heavy; gerçekten ihtiyaç olursa |
+| F14.1 | `gradient` procedural source (mesh-gradient'in yanı sıra linear/radial/conic) | Üç ayrı shader; param schema benzer |
+| F14.2 | (Opsiyonel) `custom-shader` node type: kullanıcı GLSL fragment'ı yapıştırır, uniform UI auto-generated | `parameter-schema.ts` paterni; safety: compile error inline gösterimi. Advanced — son sırada |
+| F14.3 | (Opsiyonel) Fluid simulation source | Heavy; gerçekten ihtiyaç olursa |
 
 **Kapsam dışı bırakılanlar (kullanıcı kararı):** audio-reactive bindings.
 
 ---
 
-## 6. Bizim öne çıktığımız alanlar (regression yapmadan koruyalım)
+## 6b. F7 follow-up notları (küçük PR'lar, F9 öncesi de inebilir)
+
+| Kapsam | Notlar |
+|---|---|
+| **Dashed gizmo for falloff** — ring gizmo'larda inner radius solid, outer (falloff) ring dashed | Depth-of-field gibi inner/outer iki çapı olan node'lar için. SVG `stroke-dasharray="4 3"` ile küçük CSS değişikliği |
+| **Crop / transform box gizmo** (F7.3 P2'den deferred) | gizmo_gelisme.md §6 P2; F7 plumbing'i hazır |
+
+---
+
+## 7. Bizim öne çıktığımız alanlar (regression yapmadan koruyalım)
 
 * **Dithering catalog (27 algoritma + palette sistemi)** — shader-lab'da yok.
 * **Image-sequence + EXR workflow** — shader-lab pure web; bizde local-first Tauri.
@@ -194,28 +289,42 @@ yolumuzu güçlendirmek" üzerinedir.
 
 ---
 
-## 7. Önerilen sıra ve neden
+## 8. Önerilen sıra ve neden
 
 1. **F9 önce — kalite/performans** (kullanıcı önceliği): Bloom ring fix, blur
    perf, glow türevleri hep aynı altyapı eksikliğinden. Multi-pass FBO
    altyapısını yazdığımızda 5+ effect aynı anda düzelir.
-2. **F10 hemen sonra — UX**: Player+timeline yeniden tasarım. Kullanıcının
-   günlük temasına en görünür etkisi olan iş.
-3. **F11** — Composite/grading parite; graph editor üzerinde küçük PR'lar.
-4. **F12** — Export polish.
-5. **F13** — Stretch, opsiyonel.
+2. **F10 — Timeline+Player UI**: Kullanıcının günlük temasına en görünür
+   etkisi olan iş.
+3. **F11 — Composite/grading + UI primitive parity**: 16 blend mode + scene
+   grading + curves/xy-pad/color-picker/gradient-ramp upgrades.
+4. **F12 — Export polish**.
+5. **F13 — Graph editor UX overhaul**: search, sağ-tık menü, shortcut'lar
+   (G/M/X/T), mouse mode rework (box select on plain left-click).
+6. **F14 — Stretch**, opsiyonel.
 
-Tahmin: F9 ≈ 2-3 hafta, F10 ≈ 2-3 hafta (UX-ağırlıklı), F11 ≈ 1 hafta,
-F12 ≈ 1 hafta, F13 açık uçlu. Total ≈ 6-8 hafta tek dev.
+F7 follow-up'ları (dashed gizmo, crop/transform box) küçük PR'lar olarak
+F9'dan önce de inebilir.
+
+Tahmin: F9 ≈ 2-3 hafta, F10 ≈ 2-3 hafta, F11 ≈ 1-2 hafta (UI primitive port
+yükü), F12 ≈ 1 hafta, F13 ≈ 1-2 hafta, F14 açık uçlu. Total ≈ 7-10 hafta
+tek dev.
 
 ---
 
-## 8. Açık kararlar (kullanıcı tarafında)
+## 9. Açık kararlar (kullanıcı tarafında)
 
 * **WebCodecs hattı kurulsun mu** (F12.5), yoksa FFmpeg sidecar tek hat mı
   kalsın? Bizim hedef Tauri desktop olduğu için FFmpeg yeterli olabilir;
   WebCodecs daha çok web ön-izleme için anlamlı.
 * **HDR (RGBA16F) RT** (F9.6) ne zaman? F9'un içinde opsiyonel; bloom'u
   iyileştirmek için 8-bit RT'ler bile yeterli olabilir.
-* **Custom-shader user-API'si** (F13.2) güvenlik + compile error UX'i nedeniyle
+* **Mouse mode rework (F13.3)** — sol-tık'ın pan'dan box-select'e geçmesi
+  mevcut kullanıcının kas hafızasını kırar. Photoshop/Figma/Blender 2.8+
+  paterniyle uyumlu ama "always-pan" sevenler için pan'i fallback olarak
+  korumak isteyebilir misin? Settings flag opsiyonu sunulabilir.
+* **Solo (T) davranışı** — başka node solo'da iken T'ye tekrar basınca
+  diğeri unsolo olsun mu, yoksa yeni solo'ya mı geçsin? (Önerim: yeni
+  solo'ya geç; tek aktif solo aynı anda.)
+* **Custom-shader user-API'si** (F14.2) güvenlik + compile error UX'i nedeniyle
   ileri tarihe bırakılabilir.
