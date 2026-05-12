@@ -725,6 +725,53 @@ body.resizing-y * {
   fill: var(--accent, #6ea3ff);
 }
 
+.viewer-crop-box-gizmo__outline {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-width: 1.25;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-crop-box-gizmo__edge-hit,
+.viewer-crop-box-gizmo__corner-hit {
+  fill: transparent;
+}
+
+.viewer-crop-box-gizmo__edge-hit--t,
+.viewer-crop-box-gizmo__edge-hit--b {
+  cursor: ns-resize;
+}
+
+.viewer-crop-box-gizmo__edge-hit--l,
+.viewer-crop-box-gizmo__edge-hit--r {
+  cursor: ew-resize;
+}
+
+.viewer-crop-box-gizmo__corner-hit--tl,
+.viewer-crop-box-gizmo__corner-hit--br {
+  cursor: nwse-resize;
+}
+
+.viewer-crop-box-gizmo__corner-hit--tr,
+.viewer-crop-box-gizmo__corner-hit--bl {
+  cursor: nesw-resize;
+}
+
+.viewer-crop-box-gizmo__edge-dot,
+.viewer-crop-box-gizmo__corner-dot {
+  fill: rgba(255, 255, 255, 0.95);
+  stroke: rgba(0, 0, 0, 0.7);
+  stroke-width: 1;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-crop-box-gizmo[data-dragging="true"] .viewer-crop-box-gizmo__edge-dot,
+.viewer-crop-box-gizmo[data-dragging="true"] .viewer-crop-box-gizmo__corner-dot {
+  fill: var(--accent, #6ea3ff);
+}
+
 .split-divider {
   position: absolute;
   top: 18px;

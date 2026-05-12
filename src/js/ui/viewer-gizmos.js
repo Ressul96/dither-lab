@@ -30,6 +30,8 @@ let ringEllipse = null;
 let ringFalloffEllipse = null;
 let ringRimHit = null;
 let meshStopsContainer = null;
+let cropBoxGroup = null;
+let cropBoxOutline = null;
 let activeTarget = null;
 let dragState = null;
 let resyncQueued = false;
@@ -45,7 +47,8 @@ export function initViewerGizmos() {
   meshStopsContainer = document.createElementNS(SVG_NS, "g");
   meshStopsContainer.classList.add("viewer-mesh-stops-gizmo");
   meshStopsContainer.style.display = "none";
-  overlay.append(pointGroup, angleGroup, ringGroup, meshStopsContainer);
+  cropBoxGroup = createCropBoxGroup();
+  overlay.append(pointGroup, angleGroup, ringGroup, meshStopsContainer, cropBoxGroup);
 
   subscribe("graph", scheduleGizmoSync);
   subscribe("view", scheduleGizmoSync);
@@ -173,6 +176,7 @@ function syncGizmos() {
   else if (target.kind === "angle") syncAngle(node, target);
   else if (target.kind === "ring") syncRing(node, target);
   else if (target.kind === "mesh-stops") syncMeshStops(node);
+  else if (target.kind === "crop-box") syncCropBox(node);
 }
 
 function syncMeshStops(node) {
@@ -270,6 +274,7 @@ function hideAll() {
   if (angleGroup) angleGroup.style.display = "none";
   if (ringGroup) ringGroup.style.display = "none";
   if (meshStopsContainer) meshStopsContainer.style.display = "none";
+  if (cropBoxGroup) cropBoxGroup.style.display = "none";
 }
 
 function canDisplayGizmos() {
@@ -323,6 +328,11 @@ function resolveGizmoTarget(node) {
       };
     case "mesh-gradient":
       return { kind: "mesh-stops" };
+    case "crop":
+    case "transform":
+      // Transform shares left/right/top/bottom with crop. Rotate / translate /
+      // scale handles are deferred — F7.3 P2 only ships crop edges + corners.
+      return { kind: "crop-box" };
     default:
       return null;
   }
@@ -748,6 +758,231 @@ function commitMeshStopPatch(state, patch) {
   updateNodeParams(state.nodeId, { stops: nextStops });
   // Skip timeline autokey: stops is an array, individual fields aren't
   // tracked by the current timeline schema. Whole-array snapshots only.
+}
+
+// ---------------------------------------------------------------------------
+// Crop / transform box gizmo (F7.3 P2)
+// ---------------------------------------------------------------------------
+//
+// One rect outline for the cropped window, four corner hits and four edge
+// hits. Drag a corner to update two adjacent edges; drag an edge to update
+// one. Inspector keeps body-drag (translate the whole window) for now —
+// rotation / scale handles live on a future transform-box gizmo.
+
+const CROP_HANDLE_BOUNDS = { min: 0, max: 95 };
+
+function createCropBoxGroup() {
+  const group = document.createElementNS(SVG_NS, "g");
+  group.classList.add("viewer-crop-box-gizmo");
+  group.style.display = "none";
+
+  const outline = document.createElementNS(SVG_NS, "rect");
+  outline.classList.add("viewer-crop-box-gizmo__outline");
+  outline.setAttribute("rx", "0");
+  outline.setAttribute("ry", "0");
+
+  group.appendChild(outline);
+  cropBoxOutline = outline;
+
+  for (const edge of ["t", "r", "b", "l"]) {
+    const hit = document.createElementNS(SVG_NS, "rect");
+    hit.classList.add(
+      "gizmo-handle",
+      "viewer-crop-box-gizmo__edge-hit",
+      `viewer-crop-box-gizmo__edge-hit--${edge}`,
+    );
+    hit.dataset.cropEdge = edge;
+    hit.addEventListener("pointerdown", onCropEdgePointerDown);
+    group.appendChild(hit);
+
+    const dot = document.createElementNS(SVG_NS, "rect");
+    dot.classList.add(
+      "viewer-crop-box-gizmo__edge-dot",
+      `viewer-crop-box-gizmo__edge-dot--${edge}`,
+    );
+    dot.dataset.cropEdge = edge;
+    group.appendChild(dot);
+  }
+
+  for (const corner of ["tl", "tr", "bl", "br"]) {
+    const hit = document.createElementNS(SVG_NS, "rect");
+    hit.classList.add(
+      "gizmo-handle",
+      "viewer-crop-box-gizmo__corner-hit",
+      `viewer-crop-box-gizmo__corner-hit--${corner}`,
+    );
+    hit.dataset.cropCorner = corner;
+    hit.addEventListener("pointerdown", onCropCornerPointerDown);
+    group.appendChild(hit);
+
+    const dot = document.createElementNS(SVG_NS, "rect");
+    dot.classList.add(
+      "viewer-crop-box-gizmo__corner-dot",
+      `viewer-crop-box-gizmo__corner-dot--${corner}`,
+    );
+    dot.dataset.cropCorner = corner;
+    group.appendChild(dot);
+  }
+
+  return group;
+}
+
+function syncCropBox(node) {
+  if (!outputCanvas || !cropBoxGroup || !cropBoxOutline) return;
+  const left = clamp(Number(node.params?.left ?? 0), 0, 99);
+  const right = clamp(Number(node.params?.right ?? 0), 0, 99);
+  const top = clamp(Number(node.params?.top ?? 0), 0, 99);
+  const bottom = clamp(Number(node.params?.bottom ?? 0), 0, 99);
+
+  // Corners of the crop window in source pixels.
+  const x0Src = (left / 100) * outputCanvas.width;
+  const y0Src = (top / 100) * outputCanvas.height;
+  const x1Src = (1 - right / 100) * outputCanvas.width;
+  const y1Src = (1 - bottom / 100) * outputCanvas.height;
+
+  const tlPt = sourceToOverlayPoint(x0Src, y0Src, outputCanvas);
+  const brPt = sourceToOverlayPoint(x1Src, y1Src, outputCanvas);
+  if (!tlPt || !brPt) return;
+
+  const width = brPt.x - tlPt.x;
+  const height = brPt.y - tlPt.y;
+  // Negative width/height happen when the inspector winds left+right > 100;
+  // surface an empty box so the user sees the degenerate state rather than
+  // a flipped rect with confusing handles.
+  if (width <= 0 || height <= 0) {
+    cropBoxGroup.style.display = "none";
+    return;
+  }
+
+  cropBoxGroup.style.display = "";
+  cropBoxOutline.setAttribute("x", String(tlPt.x));
+  cropBoxOutline.setAttribute("y", String(tlPt.y));
+  cropBoxOutline.setAttribute("width", String(width));
+  cropBoxOutline.setAttribute("height", String(height));
+
+  const EDGE_HIT_THICKNESS = 16;
+  const DOT_SIZE = 6;
+  const halfDot = DOT_SIZE / 2;
+  const cx = tlPt.x + width / 2;
+  const cy = tlPt.y + height / 2;
+
+  // Edge hits: thin rect along each side, centred on the edge line. Edge
+  // dots: tiny square at midpoint for visual affordance.
+  const edges = {
+    t: { x: tlPt.x, y: tlPt.y - EDGE_HIT_THICKNESS / 2, w: width, h: EDGE_HIT_THICKNESS, dotX: cx - halfDot, dotY: tlPt.y - halfDot },
+    r: { x: brPt.x - EDGE_HIT_THICKNESS / 2, y: tlPt.y, w: EDGE_HIT_THICKNESS, h: height, dotX: brPt.x - halfDot, dotY: cy - halfDot },
+    b: { x: tlPt.x, y: brPt.y - EDGE_HIT_THICKNESS / 2, w: width, h: EDGE_HIT_THICKNESS, dotX: cx - halfDot, dotY: brPt.y - halfDot },
+    l: { x: tlPt.x - EDGE_HIT_THICKNESS / 2, y: tlPt.y, w: EDGE_HIT_THICKNESS, h: height, dotX: tlPt.x - halfDot, dotY: cy - halfDot },
+  };
+  for (const [edge, geo] of Object.entries(edges)) {
+    const hit = cropBoxGroup.querySelector(`.viewer-crop-box-gizmo__edge-hit--${edge}`);
+    const dot = cropBoxGroup.querySelector(`.viewer-crop-box-gizmo__edge-dot--${edge}`);
+    if (hit) {
+      hit.setAttribute("x", String(geo.x));
+      hit.setAttribute("y", String(geo.y));
+      hit.setAttribute("width", String(geo.w));
+      hit.setAttribute("height", String(geo.h));
+    }
+    if (dot) {
+      dot.setAttribute("x", String(geo.dotX));
+      dot.setAttribute("y", String(geo.dotY));
+      dot.setAttribute("width", String(DOT_SIZE));
+      dot.setAttribute("height", String(DOT_SIZE));
+    }
+  }
+
+  // Corner hits / dots
+  const CORNER_HIT_SIZE = 18;
+  const halfHit = CORNER_HIT_SIZE / 2;
+  const CORNER_DOT_SIZE = 8;
+  const halfCornerDot = CORNER_DOT_SIZE / 2;
+  const corners = {
+    tl: { x: tlPt.x, y: tlPt.y },
+    tr: { x: brPt.x, y: tlPt.y },
+    bl: { x: tlPt.x, y: brPt.y },
+    br: { x: brPt.x, y: brPt.y },
+  };
+  for (const [corner, pt] of Object.entries(corners)) {
+    const hit = cropBoxGroup.querySelector(`.viewer-crop-box-gizmo__corner-hit--${corner}`);
+    const dot = cropBoxGroup.querySelector(`.viewer-crop-box-gizmo__corner-dot--${corner}`);
+    if (hit) {
+      hit.setAttribute("x", String(pt.x - halfHit));
+      hit.setAttribute("y", String(pt.y - halfHit));
+      hit.setAttribute("width", String(CORNER_HIT_SIZE));
+      hit.setAttribute("height", String(CORNER_HIT_SIZE));
+    }
+    if (dot) {
+      dot.setAttribute("x", String(pt.x - halfCornerDot));
+      dot.setAttribute("y", String(pt.y - halfCornerDot));
+      dot.setAttribute("width", String(CORNER_DOT_SIZE));
+      dot.setAttribute("height", String(CORNER_DOT_SIZE));
+    }
+  }
+}
+
+function onCropEdgePointerDown(e) {
+  if (!activeTarget || activeTarget.kind !== "crop-box") return;
+  const edge = e.currentTarget.dataset.cropEdge;
+  if (!edge) return;
+  beginDrag(e.currentTarget, e, {
+    nodeId: activeTarget.node.id,
+    groupEl: cropBoxGroup,
+    cropEdges: [edge],
+    compute: computeCropDrag,
+    commit: commitCropPatch,
+  });
+}
+
+function onCropCornerPointerDown(e) {
+  if (!activeTarget || activeTarget.kind !== "crop-box") return;
+  const corner = e.currentTarget.dataset.cropCorner;
+  if (!corner) return;
+  // Two edges per corner. e.g. "tl" → top + left.
+  const edges = [];
+  if (corner.includes("t")) edges.push("t");
+  if (corner.includes("b")) edges.push("b");
+  if (corner.includes("l")) edges.push("l");
+  if (corner.includes("r")) edges.push("r");
+  beginDrag(e.currentTarget, e, {
+    nodeId: activeTarget.node.id,
+    groupEl: cropBoxGroup,
+    cropEdges: edges,
+    compute: computeCropDrag,
+    commit: commitCropPatch,
+  });
+}
+
+function computeCropDrag(e, state) {
+  if (!outputCanvas) return null;
+  const point = clientToSourcePoint(e.clientX, e.clientY, outputCanvas);
+  if (!point) return null;
+  const patch = {};
+  const node = activeTarget?.node;
+  if (!node) return null;
+  const params = node.params ?? {};
+
+  // For each edge being moved, derive the new inset % from the cursor's
+  // source-px coordinate, then clamp so opposing edges can't overlap.
+  for (const edge of state.cropEdges) {
+    if (edge === "l") {
+      const next = clamp(point.nx, 0, 100 - Number(params.right ?? 0) - 1);
+      patch.left = clamp(next, CROP_HANDLE_BOUNDS.min, CROP_HANDLE_BOUNDS.max);
+    } else if (edge === "r") {
+      const next = clamp(100 - point.nx, 0, 100 - Number(params.left ?? 0) - 1);
+      patch.right = clamp(next, CROP_HANDLE_BOUNDS.min, CROP_HANDLE_BOUNDS.max);
+    } else if (edge === "t") {
+      const next = clamp(point.ny, 0, 100 - Number(params.bottom ?? 0) - 1);
+      patch.top = clamp(next, CROP_HANDLE_BOUNDS.min, CROP_HANDLE_BOUNDS.max);
+    } else if (edge === "b") {
+      const next = clamp(100 - point.ny, 0, 100 - Number(params.top ?? 0) - 1);
+      patch.bottom = clamp(next, CROP_HANDLE_BOUNDS.min, CROP_HANDLE_BOUNDS.max);
+    }
+  }
+  return patch;
+}
+
+function commitCropPatch(state, patch) {
+  commitParamPatch(state.nodeId, patch);
 }
 
 // ---------------------------------------------------------------------------
