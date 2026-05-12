@@ -37,7 +37,7 @@ export async function requestWorkerRender({ graph, context, sourceImage }) {
 
   // Latest-wins: any in-flight request is now stale. Resolve its caller
   // with null so it can skip its commit, and let the worker's eventual
-  // result fall on the floor (onMessage closes the bitmap).
+  // result fall on the floor (onMessage closes the bitmaps).
   for (const entry of pending.values()) entry.resolve(null);
   pending.clear();
 
@@ -50,6 +50,15 @@ export async function requestWorkerRender({ graph, context, sourceImage }) {
       transfer,
     );
   });
+}
+
+function closeResultBitmaps(payload) {
+  if (payload?.viewerBitmap) {
+    try { payload.viewerBitmap.close(); } catch (_) {}
+  }
+  if (payload?.ditherBitmap) {
+    try { payload.ditherBitmap.close(); } catch (_) {}
+  }
 }
 
 export function clearWorkerCache() {
@@ -93,12 +102,15 @@ function onWorkerMessage(event) {
   const msg = event.data;
   if (msg?.type !== "result") return;
   const entry = pending.get(msg.requestId);
+  const payload = msg.error
+    ? null
+    : { viewerBitmap: msg.viewerBitmap ?? null, ditherBitmap: msg.ditherBitmap ?? null };
   if (entry) {
     pending.delete(msg.requestId);
-    entry.resolve(msg.error ? null : msg.bitmap ?? null);
-  } else if (msg.bitmap) {
-    // Discarded request — close the bitmap so the host can free the memory.
-    msg.bitmap.close();
+    entry.resolve(payload);
+  } else {
+    // Discarded request — close any bitmaps so the host can free the memory.
+    closeResultBitmaps(payload);
   }
 }
 

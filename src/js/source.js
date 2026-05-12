@@ -4,6 +4,11 @@ import { clearGraphCache, evaluateGraphOutputs, isOutputCached } from "./graph-r
 import { canUseNativeRender, evaluateNativeGraphOutputs } from "./native-render.js";
 import { acquireBuffer, releaseBuffer } from "./image-ops.js";
 import {
+  isWorkerAvailable,
+  requestWorkerRender,
+  clearWorkerCache,
+} from "./render-adapter.js";
+import {
   applyTimelineToGraph,
   snapTimeToFrame,
   timeToFrame,
@@ -16,7 +21,9 @@ const frameCache = new Map();
 let frameCacheCap = FRAME_CACHE_MIN;
 let frameCacheStamp = 0;
 
+const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif"];
 const VIDEO_EXTENSIONS = ["mp4", "mov", "webm", "m4v", "mkv", "avi"];
+const MEDIA_EXTENSIONS = [...VIDEO_EXTENSIONS, ...IMAGE_EXTENSIONS];
 const PREVIEW_BG = "#0f0f12";
 const PLAYBACK_LOOP_EPSILON = 1 / 120;
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
@@ -34,7 +41,6 @@ let ditherCanvas;
 let ditherCtx;
 let sampleLayout = null;
 let rafId = 0;
-let eventsWired = false;
 let previewSubscriptionsWired = false;
 let sourceDropWired = false;
 let hasDitherOutput = false;
@@ -50,6 +56,78 @@ let renderQueued = false;
 let previewSourceCanvas = null;
 let previewSourceCtx = null;
 const PLAYBACK_PREVIEW_SCALE = 0.5;
+
+class ImageMediaMock extends EventTarget {
+  constructor(img) {
+    super();
+    this.img = img;
+    this.videoWidth = img.naturalWidth;
+    this.videoHeight = img.naturalHeight;
+    this.duration = 10;
+    this._currentTime = 0;
+    this.paused = true;
+    this.ended = false;
+    this.playbackRate = 1;
+    this.readyState = 4;
+    this._lastTickTime = 0;
+    this._tickRaf = 0;
+    this.muted = true;
+    this.loop = false;
+  }
+  
+  get currentTime() { return this._currentTime; }
+  set currentTime(val) {
+    this._currentTime = val;
+    this.dispatchEvent(new Event("seeked"));
+  }
+  
+  get drawable() { return this.img; }
+  
+  get src() { return this.img.src; }
+  set src(val) { this.img.src = val; }
+
+  play() {
+    if (!this.paused) return Promise.resolve();
+    this.paused = false;
+    this.ended = false;
+    this._lastTickTime = performance.now();
+    this.dispatchEvent(new Event("play"));
+    this._tick();
+    return Promise.resolve();
+  }
+  
+  pause() {
+    if (this.paused) return;
+    this.paused = true;
+    this.dispatchEvent(new Event("pause"));
+    if (this._tickRaf) {
+      cancelAnimationFrame(this._tickRaf);
+      this._tickRaf = 0;
+    }
+  }
+
+  load() {}
+  removeAttribute() {}
+  
+  _tick() {
+    if (this.paused) return;
+    const now = performance.now();
+    const dt = (now - this._lastTickTime) / 1000;
+    this._lastTickTime = now;
+    
+    this._currentTime += dt * this.playbackRate;
+    if (this._currentTime >= this.duration) {
+      this._currentTime = this.duration;
+      this.ended = true;
+      this.paused = true;
+      this.dispatchEvent(new Event("timeupdate"));
+      this.dispatchEvent(new Event("ended"));
+      return;
+    }
+    this.dispatchEvent(new Event("timeupdate"));
+    this._tickRaf = requestAnimationFrame(() => this._tick());
+  }
+}
 
 export function initSource() {
   wireSourceDropTarget();
@@ -84,7 +162,7 @@ export async function openSource() {
       title: "Open Source",
       multiple: false,
       directory: false,
-      filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }],
+      filters: [{ name: "Media", extensions: MEDIA_EXTENSIONS }],
     });
   } catch (err) {
     console.error("[open-source] dialog failed", err);
@@ -100,11 +178,35 @@ export async function openSourcePath(path, options = {}) {
   const tauri = window.__TAURI__;
   if (!tauri || !path) return;
   const src = tauri.core.convertFileSrc(path);
-  await loadVideo(src, path, options);
+  
+  const ext = path.split(".").pop()?.toLowerCase();
+  const isImage = ext ? IMAGE_EXTENSIONS.includes(ext) : false;
+
+  await loadMedia(src, path, isImage, options);
 }
 
-async function loadVideo(src, path, options = {}) {
+async function loadMedia(src, path, isImage, options = {}) {
   const { autoplay = false } = options;
+  
+  if (isImage) {
+    if (video && video instanceof HTMLVideoElement) {
+      try { video.pause(); } catch {}
+    }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = src;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+    video = new ImageMediaMock(img);
+  } else {
+    if (video && !(video instanceof HTMLVideoElement)) {
+      video.pause();
+      video = document.getElementById("sourceVideo");
+    }
+  }
+
   const { video: v, canvas: outputCanvas, splitCanvas: outputSplitCanvas } = ensureEls();
   stopDrawLoop();
   disablePlayerControls();
@@ -115,15 +217,17 @@ async function loadVideo(src, path, options = {}) {
   } catch {}
 
   v.loop = false;
-  v.src = src;
-  v.load();
+  if (!isImage) {
+    v.src = src;
+    v.load();
 
-  try {
-    await waitFor(v, "loadeddata");
-  } catch (err) {
-    console.error("[open-source] video load failed", err);
-    clearSource();
-    return;
+    try {
+      await waitFor(v, "loadeddata");
+    } catch (err) {
+      console.error("[open-source] media load failed", err);
+      clearSource();
+      return;
+    }
   }
 
   ensureFrameBuffers(v.videoWidth, v.videoHeight);
@@ -131,7 +235,7 @@ async function loadVideo(src, path, options = {}) {
   outputSplitCanvas?.classList.remove("hidden");
   document.getElementById("emptyState")?.classList.add("hidden");
 
-  populateReadout(v, path);
+  populateReadout(v, path, isImage);
   wireVideoEvents(v);
   ensureBootGraph();
 
@@ -250,7 +354,7 @@ function wireSourceDropTarget() {
     );
   };
   const loadDroppedPaths = async (paths) => {
-    const nextPath = pickSupportedVideoPath(paths);
+    const nextPath = pickSupportedMediaPath(paths);
     if (!nextPath) return;
     await openSourcePath(nextPath);
   };
@@ -371,6 +475,13 @@ function ensureFrameBuffers(width, height) {
   } = ensureEls();
   if (!width || !height) return;
 
+  const maxDim = 4096;
+  if (width > maxDim || height > maxDim) {
+    const scale = maxDim / Math.max(width, height);
+    width = Math.round(width * scale);
+    height = Math.round(height * scale);
+  }
+
   if (sourceBuffer.width !== width || sourceBuffer.height !== height) {
     sourceBuffer.width = width;
     sourceBuffer.height = height;
@@ -395,8 +506,8 @@ function ensureFrameBuffers(width, height) {
 }
 
 function wireVideoEvents(v) {
-  if (eventsWired) return;
-  eventsWired = true;
+  if (v._eventsWired) return;
+  v._eventsWired = true;
 
   v.addEventListener("timeupdate", () => {
     if (playbackSyncSuspended) return;
@@ -564,13 +675,13 @@ function normalizeDroppedPaths(paths) {
   return paths.filter((path) => typeof path === "string" && path.length > 0);
 }
 
-function pickSupportedVideoPath(paths) {
-  return normalizeDroppedPaths(paths).find(isVideoPath) ?? null;
+function pickSupportedMediaPath(paths) {
+  return normalizeDroppedPaths(paths).find(isMediaPath) ?? null;
 }
 
-function isVideoPath(path) {
+function isMediaPath(path) {
   const ext = path.split(".").pop()?.toLowerCase();
-  return Boolean(ext && VIDEO_EXTENSIONS.includes(ext));
+  return Boolean(ext && MEDIA_EXTENSIONS.includes(ext));
 }
 
 // Transport API ----------------------------------------------------
@@ -788,7 +899,7 @@ export function samplePixel(u, vCoord) {
 
 // Internals --------------------------------------------------------
 
-function renderCurrentFrame() {
+async function renderCurrentFrame() {
   const { video: v } = ensureEls();
   const graph = ensureBootGraph();
   const proceduralSource = findViewerProceduralSource(graph);
@@ -848,6 +959,35 @@ function renderCurrentFrame() {
       fps: timelineContext.fps,
     }
   );
+
+  // F8.5 preview/export split. Export must stay synchronous and
+  // deterministic on the main thread — the encoder waits for a fully-
+  // committed frame before stepping to the next. Preview opts in via the
+  // `view.workerRender` flag; "on" routes evaluation through the adapter
+  // with latest-wins discard, so a stale frame never lands on the canvas.
+  const useWorker =
+    !exportSessionActive &&
+    (getState().view?.workerRender ?? "off") === "on" &&
+    isWorkerAvailable();
+
+  if (useWorker) {
+    const result = await requestWorkerRender({
+      graph,
+      context: {
+        sourceVersion,
+        ...timelineContext,
+      },
+      sourceImage: sourceForEval,
+    });
+    if (!result) return; // stale or worker failed — leave the last good frame on screen
+    commitProcessedFrame(result.viewerBitmap);
+    commitDitherFrame(result.ditherBitmap);
+    if (result.viewerBitmap) result.viewerBitmap.close();
+    if (result.ditherBitmap) result.ditherBitmap.close();
+    presentPreview();
+    return;
+  }
+
   const graphOutputs = evaluateGraphOutputs(graph, {
     sourceImage: sourceForEval,
     sourceVersion,
@@ -1001,7 +1141,7 @@ function drawSourceFrame(v) {
     }
   }
   sourceCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-  sourceCtx.drawImage(v, 0, 0, sourceCanvas.width, sourceCanvas.height);
+  sourceCtx.drawImage(v.drawable || v, 0, 0, sourceCanvas.width, sourceCanvas.height);
   if (key !== null) cacheCurrentFrame(key);
 }
 
@@ -1038,6 +1178,9 @@ function clearFrameCache() {
   // intermediate canvases is also stale — drop it now instead of letting next
   // eval discover the mismatch.
   clearGraphCache();
+  // Mirror the wipe in the render worker; it has its own per-instance cache
+  // that would otherwise keep serving stale outputs after a source swap.
+  clearWorkerCache();
 }
 
 function recomputeFrameCacheCap(width, height) {
@@ -1265,8 +1408,8 @@ function setPlayerControlsEnabled(enabled) {
   });
 }
 
-function populateReadout(v, path) {
-  setReadout("type", "Video");
+function populateReadout(v, path, isImage = false) {
+  setReadout("type", isImage ? "Image" : "Video");
   setReadout("resolution", `${v.videoWidth}×${v.videoHeight}`);
   setReadout("duration", formatTime(v.duration));
   setReadout("missing", "—");

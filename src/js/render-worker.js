@@ -32,26 +32,36 @@ function handleRender({ requestId, graph, context, sourceBitmap }) {
     sourceBitmap.close();
   }
 
-  let bitmap = null;
+  let viewerBitmap = null;
+  let ditherBitmap = null;
   let error = null;
   try {
-    const { viewerOutput } = evaluateGraphOutputs(graph, {
+    const outputs = evaluateGraphOutputs(graph, {
       ...context,
       sourceImage,
     });
-    if (viewerOutput) {
-      // Copy the cached output to a throwaway canvas before transferring it.
-      // transferToImageBitmap on the cached canvas would detach it from the
-      // pool — the worker's nodeCache still holds the reference and would
-      // produce a blank frame on the next request.
-      const out = new OffscreenCanvas(viewerOutput.width, viewerOutput.height);
-      out.getContext("2d", { alpha: false }).drawImage(viewerOutput, 0, 0);
-      bitmap = out.transferToImageBitmap();
-    }
+    viewerBitmap = transferCanvasOutput(outputs?.viewerOutput);
+    ditherBitmap = transferCanvasOutput(outputs?.ditherOutput);
   } catch (err) {
     error = err?.message ?? String(err);
   }
 
-  const transfer = bitmap ? [bitmap] : [];
-  self.postMessage({ type: "result", requestId, bitmap, error }, transfer);
+  const transfer = [];
+  if (viewerBitmap) transfer.push(viewerBitmap);
+  if (ditherBitmap) transfer.push(ditherBitmap);
+  self.postMessage(
+    { type: "result", requestId, viewerBitmap, ditherBitmap, error },
+    transfer,
+  );
+}
+
+// Copy the cached output to a throwaway canvas before transferring it.
+// transferToImageBitmap on the cached canvas would detach it from the pool —
+// the worker's nodeCache still holds the reference and the next request
+// would produce a blank frame.
+function transferCanvasOutput(canvas) {
+  if (!canvas || !canvas.width || !canvas.height) return null;
+  const out = new OffscreenCanvas(canvas.width, canvas.height);
+  out.getContext("2d", { alpha: false }).drawImage(canvas, 0, 0);
+  return out.transferToImageBitmap();
 }
