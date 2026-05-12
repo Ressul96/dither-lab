@@ -27,6 +27,7 @@ let angleTipHit = null;
 let ringGroup = null;
 let ringCenterHit = null;
 let ringEllipse = null;
+let ringFalloffEllipse = null;
 let ringRimHit = null;
 let meshStopsContainer = null;
 let activeTarget = null;
@@ -106,6 +107,14 @@ function createRingGroup() {
   ellipse.setAttribute("cx", "0");
   ellipse.setAttribute("cy", "0");
 
+  // Outer dashed ring shows where falloff fully takes effect (radius + falloff)
+  // — gives users immediate visual feedback when tuning DoF's soft edge.
+  const falloff = document.createElementNS(SVG_NS, "ellipse");
+  falloff.classList.add("viewer-ring-gizmo__falloff");
+  falloff.setAttribute("cx", "0");
+  falloff.setAttribute("cy", "0");
+  falloff.style.display = "none";
+
   const centerRing = svgCircle(8.5, ["viewer-ring-gizmo__center-ring"]);
   const centerDot = svgCircle(3.5, ["viewer-ring-gizmo__center-dot"]);
   const centerHit = svgCircle(18, ["gizmo-handle", "viewer-ring-gizmo__center-hit"]);
@@ -113,11 +122,12 @@ function createRingGroup() {
   const rimDot = svgCircle(4, ["viewer-ring-gizmo__rim-dot"]);
   const rimHit = svgCircle(18, ["gizmo-handle", "viewer-ring-gizmo__rim-hit"]);
 
-  group.append(ellipse, centerHit, centerRing, centerDot, rimHit, rimDot);
+  group.append(ellipse, falloff, centerHit, centerRing, centerDot, rimHit, rimDot);
   centerHit.addEventListener("pointerdown", onRingCenterPointerDown);
   centerHit.addEventListener("dblclick", onRingCenterDoubleClick);
   rimHit.addEventListener("pointerdown", onRingRimPointerDown);
   ringEllipse = ellipse;
+  ringFalloffEllipse = falloff;
   ringCenterHit = centerHit;
   ringRimHit = rimHit;
   return group;
@@ -309,6 +319,7 @@ function resolveGizmoTarget(node) {
         paramRadius: "radius",
         paramAspect: "aspect",
         paramRotation: "rotation",
+        paramFalloff: "falloff",
       };
     case "mesh-gradient":
       return { kind: "mesh-stops" };
@@ -360,6 +371,9 @@ function syncRing(node, target) {
   const radiusPct = Number(node.params?.[target.paramRadius] ?? 35);
   const aspectPct = Number(node.params?.[target.paramAspect] ?? 100);
   const rotationDeg = Number(node.params?.[target.paramRotation] ?? 0);
+  const falloffPct = target.paramFalloff
+    ? Number(node.params?.[target.paramFalloff] ?? 0)
+    : 0;
 
   // Mirror the shader math: y-axis radius = radius% * H, x-axis radius scales
   // by aspect. The decorative ellipse therefore matches the actual focus
@@ -385,6 +399,42 @@ function syncRing(node, target) {
   ringGroup.setAttribute("transform", `translate(${centerPt.x} ${centerPt.y}) rotate(${rotationDeg})`);
   ringEllipse.setAttribute("rx", String(rxOverlay));
   ringEllipse.setAttribute("ry", String(ryOverlay));
+
+  // Falloff outline at (radius + falloff). Shader uses smoothstep(radius,
+  // radius+feather, dist) so the outer ring is where the mask is fully
+  // applied. Hide when falloff is effectively zero — keeps a clean look
+  // for nodes that don't expose falloff at all.
+  if (ringFalloffEllipse) {
+    if (falloffPct > 0.5) {
+      const outerYPxRadius = ((radiusPct + falloffPct) / 100) * outputCanvas.height;
+      const outerXPxRadius = outerYPxRadius * (aspectPct / 100);
+      const outerRxRefPt = sourceToOverlayPoint(
+        centerSrcX + outerXPxRadius,
+        centerSrcY,
+        outputCanvas,
+      );
+      const outerRyRefPt = sourceToOverlayPoint(
+        centerSrcX,
+        centerSrcY + outerYPxRadius,
+        outputCanvas,
+      );
+      if (outerRxRefPt && outerRyRefPt) {
+        ringFalloffEllipse.setAttribute(
+          "rx",
+          String(Math.abs(outerRxRefPt.x - centerPt.x)),
+        );
+        ringFalloffEllipse.setAttribute(
+          "ry",
+          String(Math.abs(outerRyRefPt.y - centerPt.y)),
+        );
+        ringFalloffEllipse.style.display = "";
+      } else {
+        ringFalloffEllipse.style.display = "none";
+      }
+    } else {
+      ringFalloffEllipse.style.display = "none";
+    }
+  }
   // Rim handle sits on the major axis tip (the +x side after rotation).
   for (const el of [ringRimHit, ringGroup.querySelector(".viewer-ring-gizmo__rim-dot")]) {
     el.setAttribute("cx", String(rxOverlay));

@@ -637,6 +637,15 @@ body.resizing-y * {
   vector-effect: non-scaling-stroke;
 }
 
+.viewer-ring-gizmo__falloff {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.45);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
 .viewer-ring-gizmo__center-hit,
 .viewer-ring-gizmo__rim-hit {
   fill: transparent;
