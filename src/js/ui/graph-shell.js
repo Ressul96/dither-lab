@@ -1,5 +1,6 @@
 import { DEFAULT_GRAPH_VIEW, dispatch, getState, subscribe } from "../state.js";
 import {
+  MESH_GRADIENT_MAX_STOPS,
   ROOT_PARENT_ID,
   addEdge,
   createFreeNode,
@@ -1109,6 +1110,20 @@ function onNodeDoubleClick(event) {
 }
 
 function onInspectorInput(event) {
+  const meshStopControl = event.target.closest("[data-mesh-stop-field]");
+  if (meshStopControl) {
+    const node = getSelectedNode();
+    if (!node || node.type !== "mesh-gradient") return;
+    if (meshStopControl.dataset.inputKind === "mesh-stop-hex") {
+      // Skip mid-typing commits — onInspectorChange fires on blur/Enter.
+      inspectorEditing = true;
+      return;
+    }
+    inspectorEditing = true;
+    commitMeshStopField(node, meshStopControl);
+    return;
+  }
+
   const gradientStopControl = event.target.closest("[data-gradient-map-stop-color]");
   if (gradientStopControl) {
     const node = getSelectedNode();
@@ -1174,6 +1189,21 @@ function onInspectorInput(event) {
 }
 
 function onInspectorChange(event) {
+  const meshStopControl = event.target.closest("[data-mesh-stop-field]");
+  if (meshStopControl) {
+    inspectorEditing = false;
+    const node = getSelectedNode();
+    if (
+      node?.type === "mesh-gradient" &&
+      (meshStopControl.dataset.inputKind === "mesh-stop-hex" ||
+        meshStopControl.dataset.inputKind === "mesh-stop-swatch")
+    ) {
+      commitMeshStopField(node, meshStopControl);
+    }
+    renderInspector();
+    return;
+  }
+
   const gradientStopControl = event.target.closest("[data-gradient-map-stop-color]");
   if (gradientStopControl) {
     inspectorEditing = false;
@@ -1223,6 +1253,14 @@ function onInspectorChange(event) {
 }
 
 function onInspectorClick(event) {
+  const meshAction = event.target.closest("[data-mesh-action]");
+  if (meshAction) {
+    event.preventDefault();
+    const node = getSelectedNode();
+    if (node?.type === "mesh-gradient") handleMeshAction(node, meshAction);
+    return;
+  }
+
   const graphAction = event.target.closest("[data-graph-action]");
   if (graphAction) {
     handleGraphInspectorAction(graphAction);
@@ -1981,10 +2019,9 @@ function renderSourceNode() {
 
 function renderMeshGradientNode(node) {
   const params = node.params;
-  const colorA = params.colorA ?? "#ff0055";
-  const colorB = params.colorB ?? "#00ff99";
-  const colorC = params.colorC ?? "#0055ff";
-  const colorD = params.colorD ?? "#ffcc00";
+  const stops = Array.isArray(params.stops) ? params.stops : [];
+  const canAdd = stops.length < MESH_GRADIENT_MAX_STOPS;
+  const canRemove = stops.length > 1;
   const complexity = Number(params.complexity ?? 50);
   const warp = Number(params.warp ?? 35);
   const speed = Number(params.speed ?? 25);
@@ -1993,11 +2030,15 @@ function renderMeshGradientNode(node) {
   const height = Number(params.height ?? 1080);
   return `
     <section class="node-panel-section node-panel-section--titled">
-      <header class="node-panel-section-title">Colors</header>
-      ${renderColorField("Color A", "colorA", colorA, { fallback: "#ff0055" })}
-      ${renderColorField("Color B", "colorB", colorB, { fallback: "#00ff99" })}
-      ${renderColorField("Color C", "colorC", colorC, { fallback: "#0055ff" })}
-      ${renderColorField("Color D", "colorD", colorD, { fallback: "#ffcc00" })}
+      <header class="node-panel-section-title mesh-stops-header">
+        <span>Color Stops</span>
+        ${
+          canAdd
+            ? `<button class="mesh-stops-add" type="button" data-mesh-action="add-stop" title="Add color stop">+ Add</button>`
+            : ""
+        }
+      </header>
+      ${stops.map((stop, i) => renderMeshStopRow(stop, i, canRemove)).join("")}
     </section>
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Shape</header>
@@ -2012,6 +2053,131 @@ function renderMeshGradientNode(node) {
       ${renderRangeField("Height", "height", height, 256, 4096, `${height}px`)}
     </section>
   `;
+}
+
+function renderMeshStopRow(stop, index, canRemove) {
+  const idx = String(index);
+  const color = normalizeHex(stop?.color, "#ffffff");
+  const x = Math.round(Math.max(0, Math.min(1, Number(stop?.x ?? 0.5))) * 100);
+  const y = Math.round(Math.max(0, Math.min(1, Number(stop?.y ?? 0.5))) * 100);
+  const radiusPct = Math.round(Math.max(0.02, Math.min(2, Number(stop?.radius ?? 0.6))) * 100);
+  return `
+    <div class="mesh-stop-row" data-mesh-stop-index="${escapeHtml(idx)}">
+      <header class="mesh-stop-row-head">
+        <span class="mesh-stop-row-title">
+          <span class="mesh-stop-swatch-dot" style="background:${escapeHtml(color)};"></span>
+          Stop ${index + 1}
+        </span>
+        ${
+          canRemove
+            ? `<button class="mesh-stop-row-remove" type="button" data-mesh-action="remove-stop" data-mesh-stop-index="${escapeHtml(idx)}" title="Remove stop" aria-label="Remove stop ${index + 1}">×</button>`
+            : ""
+        }
+      </header>
+      <div class="color-row">
+        <input type="color" class="color-swatch"
+          value="${escapeHtml(color)}"
+          data-mesh-stop-field="color"
+          data-mesh-stop-index="${escapeHtml(idx)}"
+          data-input-kind="mesh-stop-swatch"
+          aria-label="Stop ${index + 1} color" />
+        <input type="text" class="color-hex"
+          value="${escapeHtml(color)}"
+          data-mesh-stop-field="color"
+          data-mesh-stop-index="${escapeHtml(idx)}"
+          data-input-kind="mesh-stop-hex"
+          maxlength="7" spellcheck="false" autocomplete="off" autocapitalize="off" />
+      </div>
+      ${renderMeshStopRange("X", "x", index, x, 0, 100, `${x}%`)}
+      ${renderMeshStopRange("Y", "y", index, y, 0, 100, `${y}%`)}
+      ${renderMeshStopRange("Radius", "radius", index, radiusPct, 1, 200, `${radiusPct}%`)}
+    </div>
+  `;
+}
+
+function renderMeshStopRange(label, field, index, value, min, max, readout) {
+  const safeField = escapeHtml(field);
+  const safeIdx = String(index);
+  return `
+    <div class="field range-field">
+      <label>
+        <span class="field-label-row">
+          <span class="field-label-text">${escapeHtml(label)}</span>
+        </span>
+        <span class="field-suffix">${escapeHtml(readout)}</span>
+      </label>
+      <div class="range-row">
+        <input type="range" min="${min}" max="${max}" value="${value}"
+          data-mesh-stop-field="${safeField}"
+          data-mesh-stop-index="${safeIdx}"
+          data-input-kind="mesh-stop-range" />
+        <input type="number" class="num-edit" min="${min}" max="${max}" value="${value}"
+          data-mesh-stop-field="${safeField}"
+          data-mesh-stop-index="${safeIdx}"
+          data-input-kind="mesh-stop-number" />
+      </div>
+    </div>
+  `;
+}
+
+function commitMeshStopField(node, control) {
+  const index = Number(control.dataset.meshStopIndex);
+  const field = control.dataset.meshStopField;
+  if (!Number.isFinite(index) || !field) return;
+  const stops = Array.isArray(node.params?.stops) ? node.params.stops : [];
+  if (index < 0 || index >= stops.length) return;
+  const kind = control.dataset.inputKind;
+  let next;
+  if (field === "color") {
+    next = normalizeHex(control.value, stops[index].color ?? "#ffffff");
+  } else if (field === "radius") {
+    const raw = Number(control.value);
+    if (!Number.isFinite(raw)) return;
+    next = Math.max(1, Math.min(200, raw)) / 100;
+  } else {
+    const raw = Number(control.value);
+    if (!Number.isFinite(raw)) return;
+    next = Math.max(0, Math.min(100, raw)) / 100;
+  }
+  const nextStops = stops.map((s, i) => (i === index ? { ...s, [field]: next } : s));
+  updateNodeParams(node.id, { stops: nextStops });
+  // Sibling range/number share data-mesh-stop-field+index — keep them in sync
+  // without a full re-render so the user's drag does not lose focus.
+  if (inspectorEl && (kind === "mesh-stop-range" || kind === "mesh-stop-number")) {
+    const siblings = inspectorEl.querySelectorAll(
+      `[data-mesh-stop-field="${cssEscape(field)}"][data-mesh-stop-index="${cssEscape(String(index))}"]`
+    );
+    for (const sib of siblings) {
+      if (sib !== control && sib.value !== control.value) sib.value = control.value;
+    }
+  }
+}
+
+function handleMeshAction(node, control) {
+  const action = control.dataset.meshAction;
+  const stops = Array.isArray(node.params?.stops) ? node.params.stops : [];
+  if (action === "add-stop") {
+    if (stops.length >= MESH_GRADIENT_MAX_STOPS) return;
+    const palette = [
+      "#ff77aa", "#88ddff", "#ffe066", "#a78bfa",
+      "#34d399", "#fb923c", "#60a5fa", "#f472b6",
+    ];
+    const newStop = {
+      x: 0.5,
+      y: 0.5,
+      radius: 0.45,
+      color: palette[stops.length % palette.length],
+    };
+    updateNodeParams(node.id, { stops: [...stops, newStop] });
+    renderInspector();
+  } else if (action === "remove-stop") {
+    if (stops.length <= 1) return;
+    const index = Number(control.dataset.meshStopIndex);
+    if (!Number.isFinite(index) || index < 0 || index >= stops.length) return;
+    const next = stops.filter((_, i) => i !== index);
+    updateNodeParams(node.id, { stops: next });
+    renderInspector();
+  }
 }
 
 function renderAdjustNode(node) {

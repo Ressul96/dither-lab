@@ -16,18 +16,20 @@ void main() {
 }
 `;
 
+const MESH_GRADIENT_MAX_STOPS = 8;
 const MESH_GRADIENT_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
+
+const int MAX_STOPS = ${MESH_GRADIENT_MAX_STOPS};
 
 uniform vec2 u_resolution;
 uniform float u_time;
 uniform float u_complexity;
 uniform float u_warp;
 uniform float u_zoom;
-uniform vec3 u_colorA;
-uniform vec3 u_colorB;
-uniform vec3 u_colorC;
-uniform vec3 u_colorD;
+uniform float u_stopCount;
+uniform vec4 u_meshStops[MAX_STOPS];      // (x, y, radius, _)
+uniform vec3 u_meshStopColors[MAX_STOPS];
 
 in vec2 v_uv;
 out vec4 out_color;
@@ -46,17 +48,28 @@ void main() {
     wave(centered.yx + vec2(0.17, 0.31), f * 3.1, t),
     wave(centered.xy + vec2(0.43, 0.11), f * 2.7, t * 1.13)
   );
-  vec2 uv = clamp(v_uv + warpVec * (0.035 + 0.055 * u_warp) * u_warp, 0.0, 1.0);
+  vec2 uv = v_uv + warpVec * (0.035 + 0.055 * u_warp) * u_warp;
 
-  vec3 top = mix(u_colorA, u_colorB, smoothstep(0.0, 1.0, uv.x));
-  vec3 bottom = mix(u_colorC, u_colorD, smoothstep(0.0, 1.0, uv.x));
-  vec3 base = mix(top, bottom, smoothstep(0.0, 1.0, uv.y));
+  // Each stop contributes a Gaussian-weighted colour by distance. Normalising
+  // by total weight keeps the mix bounded — no individual stop can blow out
+  // even if multiple radii overlap.
+  vec3 acc = vec3(0.0);
+  float totalW = 0.0;
+  for (int i = 0; i < MAX_STOPS; i++) {
+    if (float(i) >= u_stopCount) break;
+    vec4 stop = u_meshStops[i];
+    vec2 diff = uv - stop.xy;
+    // Aspect-correct so a "radius" reads as a fraction of the short side
+    // and the spot stays circular on landscape/portrait canvases.
+    diff.x *= aspect.x;
+    float dist = length(diff);
+    float r = max(stop.z, 0.001);
+    float w = exp(-(dist * dist) / (r * r));
+    acc += u_meshStopColors[i] * w;
+    totalW += w;
+  }
 
-  float flow = 0.5 + 0.5 * sin((centered.x + centered.y) * f * 5.0 + t * 0.9);
-  vec3 accent = mix(mix(u_colorD, u_colorC, uv.x), mix(u_colorB, u_colorA, uv.y), flow);
-  float veil = smoothstep(-0.25, 1.0, wave(centered + vec2(flow), f * 1.8, t * 0.4) * 0.5);
-  vec3 color = mix(base, accent, veil * (0.18 + u_warp * 0.22));
-
+  vec3 color = acc / max(totalW, 0.0001);
   out_color = vec4(clamp(color, 0.0, 1.0), 1.0);
 }
 `;
@@ -1433,15 +1446,31 @@ function meshGradientUniforms(params, context) {
   const timelineTime = Number(context?.timeSeconds);
   const time = Number.isFinite(timelineTime) ? timelineTime : 0;
   const speed = clamp(Number(params?.speed ?? 25) / 25, 0, 4);
+  const rawStops = Array.isArray(params?.stops) ? params.stops : [];
+  const stops = rawStops.slice(0, MESH_GRADIENT_MAX_STOPS);
+  const posRadius = new Float32Array(MESH_GRADIENT_MAX_STOPS * 4);
+  const colors = new Float32Array(MESH_GRADIENT_MAX_STOPS * 3);
+  for (let i = 0; i < stops.length; i++) {
+    const s = stops[i] ?? {};
+    posRadius[i * 4 + 0] = clamp(Number(s.x ?? 0.5), -0.5, 1.5);
+    // Flip y so param y=0 reads as "top of image" (intuitive in inspector
+    // and matches the gizmo's screen-space drag direction).
+    posRadius[i * 4 + 1] = 1 - clamp(Number(s.y ?? 0.5), -0.5, 1.5);
+    posRadius[i * 4 + 2] = Math.max(0.01, Math.min(2, Number(s.radius ?? 0.6)));
+    posRadius[i * 4 + 3] = 0;
+    const rgb = hexToRgb01(s.color ?? "#ffffff", [1, 1, 1]);
+    colors[i * 3 + 0] = rgb[0];
+    colors[i * 3 + 1] = rgb[1];
+    colors[i * 3 + 2] = rgb[2];
+  }
   return {
     u_time: time * speed,
     u_complexity: 0.5 + clamp(Number(params?.complexity ?? 50) / 100, 0, 1) * 5.5,
     u_warp: clamp(Number(params?.warp ?? 35) / 100, 0, 1),
     u_zoom: clamp(Number(params?.zoom ?? 100) / 100, 0.25, 4),
-    u_colorA: hexToRgb01(params?.colorA ?? "#ff0055", [1, 0, 0.333]),
-    u_colorB: hexToRgb01(params?.colorB ?? "#00ff99", [0, 1, 0.6]),
-    u_colorC: hexToRgb01(params?.colorC ?? "#0055ff", [0, 0.333, 1]),
-    u_colorD: hexToRgb01(params?.colorD ?? "#ffcc00", [1, 0.8, 0]),
+    u_stopCount: stops.length,
+    u_meshStops: { type: "vec4[]", data: posRadius },
+    u_meshStopColors: { type: "vec3[]", data: colors },
   };
 }
 
@@ -2091,6 +2120,18 @@ function applyUniforms(gl, program, uniforms) {
   for (const [name, value] of Object.entries(uniforms ?? {})) {
     const location = getUniformLocation(gl, program, name);
     if (location === null) continue;
+    // Typed array uniforms: a uniform builder can return
+    // { type: "vec3[]" | "vec4[]" | "float[]", data: Float32Array }
+    // to bind a uniform array in one call instead of per-element.
+    if (value && typeof value === "object" && !Array.isArray(value) && typeof value.type === "string") {
+      const data = value.data;
+      if (!data) continue;
+      if (value.type === "vec4[]") gl.uniform4fv(location, data);
+      else if (value.type === "vec3[]") gl.uniform3fv(location, data);
+      else if (value.type === "vec2[]") gl.uniform2fv(location, data);
+      else if (value.type === "float[]") gl.uniform1fv(location, data);
+      continue;
+    }
     if (Array.isArray(value)) {
       if (value.length === 2) gl.uniform2f(location, value[0], value[1]);
       else if (value.length === 3) gl.uniform3f(location, value[0], value[1], value[2]);

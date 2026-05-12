@@ -155,41 +155,37 @@ function applyMeshGradientCpu(params = {}, context = {}) {
   const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
   if (!ctx) return null;
 
-  const colorA = params.colorA ?? "#ff0055";
-  const colorB = params.colorB ?? "#00ff99";
-  const colorC = params.colorC ?? "#0055ff";
-  const colorD = params.colorD ?? "#ffcc00";
+  const stops = Array.isArray(params.stops) ? params.stops : [];
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, width, height);
+  if (stops.length === 0) return output;
+
   const time = Number.isFinite(Number(context?.timeSeconds)) ? Number(context.timeSeconds) : 0;
   const speed = clamp(Number(params.speed ?? 25) / 25, 0, 4);
   const warp = clamp(Number(params.warp ?? 35) / 100, 0, 1);
   const t = time * speed;
 
-  const base = ctx.createLinearGradient(0, 0, width, height);
-  base.addColorStop(0, colorA);
-  base.addColorStop(0.45, colorB);
-  base.addColorStop(0.72, colorC);
-  base.addColorStop(1, colorD);
-  ctx.fillStyle = base;
-  ctx.fillRect(0, 0, width, height);
-
+  // Screen-blend a soft radial blob per stop. Cheaper than per-pixel weighted
+  // accumulation (which the GPU path does) but visually close enough for the
+  // CPU fallback — and orders of magnitude faster than a JS pixel loop.
   ctx.globalCompositeOperation = "screen";
-  paintMeshBlob(ctx, width, height, colorB, 0.22 + Math.sin(t * 0.41) * 0.12, 0.25, 0.58 + warp * 0.2);
-  paintMeshBlob(ctx, width, height, colorC, 0.78, 0.3 + Math.cos(t * 0.33) * 0.12, 0.5 + warp * 0.22);
-  ctx.globalCompositeOperation = "multiply";
-  paintMeshBlob(ctx, width, height, colorD, 0.5 + Math.sin(t * 0.19) * 0.18, 0.78, 0.42 + warp * 0.16);
+  const baseR = Math.max(width, height);
+  for (let i = 0; i < stops.length; i++) {
+    const s = stops[i];
+    const phase = i * 1.27;
+    const wobbleX = Math.sin(t * 0.41 + phase) * warp * 0.06;
+    const wobbleY = Math.cos(t * 0.33 + phase) * warp * 0.06;
+    const cx = clamp(Number(s.x ?? 0.5) + wobbleX, -0.2, 1.2) * width;
+    const cy = clamp(Number(s.y ?? 0.5) + wobbleY, -0.2, 1.2) * height;
+    const r = Math.max(0.02, Math.min(2, Number(s.radius ?? 0.6))) * baseR;
+    const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    gradient.addColorStop(0, s.color ?? "#ffffff");
+    gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+  }
   ctx.globalCompositeOperation = "source-over";
   return output;
-}
-
-function paintMeshBlob(ctx, width, height, color, x, y, radius) {
-  const r = Math.max(width, height) * radius;
-  const cx = clamp(x, -0.2, 1.2) * width;
-  const cy = clamp(y, -0.2, 1.2) * height;
-  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-  gradient.addColorStop(0, color);
-  gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, width, height);
 }
 
 export function applyBlurNode(input, params) {

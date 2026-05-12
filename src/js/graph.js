@@ -33,14 +33,16 @@ const NODE_DEFINITIONS = Object.freeze({
   "mesh-gradient": {
     label: "Mesh Gradient",
     family: "Input",
-    description: "Generates a procedural animated multi-color gradient for source-free grading and dither tests.",
+    description: "Animated multi-color radial mesh. Each stop is a soft spot at (x, y) with its own radius and color.",
     inputs: [],
     outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
-      colorA: "#ff0055",
-      colorB: "#00ff99",
-      colorC: "#0055ff",
-      colorD: "#ffcc00",
+      stops: [
+        { x: 0.22, y: 0.28, radius: 0.65, color: "#ff0055" },
+        { x: 0.78, y: 0.28, radius: 0.65, color: "#00ff99" },
+        { x: 0.22, y: 0.72, radius: 0.65, color: "#0055ff" },
+        { x: 0.78, y: 0.72, radius: 0.65, color: "#ffcc00" },
+      ],
       complexity: 50,
       warp: 35,
       speed: 25,
@@ -2245,10 +2247,20 @@ function normalizeNodeParams(type, defaultParams, incomingParams) {
     delete incoming.highlightColor;
   }
   if (type === "mesh-gradient") {
-    incoming.colorA = normalizeHex(incoming.colorA, defaultParams.colorA);
-    incoming.colorB = normalizeHex(incoming.colorB, defaultParams.colorB);
-    incoming.colorC = normalizeHex(incoming.colorC, defaultParams.colorC);
-    incoming.colorD = normalizeHex(incoming.colorD, defaultParams.colorD);
+    incoming.stops = normalizeMeshGradientStops(
+      incoming.stops,
+      defaultParams.stops,
+      {
+        colorA: incoming.colorA,
+        colorB: incoming.colorB,
+        colorC: incoming.colorC,
+        colorD: incoming.colorD,
+      }
+    );
+    delete incoming.colorA;
+    delete incoming.colorB;
+    delete incoming.colorC;
+    delete incoming.colorD;
   }
   return {
     ...clone(defaultParams),
@@ -2293,6 +2305,54 @@ function normalizeGradientMapStops(stops, fallbackStops, legacyShadow, legacyHig
 function clamp01(value) {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
+}
+
+export const MESH_GRADIENT_MAX_STOPS = 8;
+const MESH_LEGACY_POS = [
+  { x: 0.22, y: 0.28 },
+  { x: 0.78, y: 0.28 },
+  { x: 0.22, y: 0.72 },
+  { x: 0.78, y: 0.72 },
+];
+
+function normalizeMeshGradientStops(rawStops, fallbackStops, legacyColors) {
+  const fallback = Array.isArray(fallbackStops) && fallbackStops.length > 0
+    ? fallbackStops
+    : [{ x: 0.5, y: 0.5, radius: 0.6, color: "#ffffff" }];
+
+  // Older projects stored four hex strings (colorA…D) instead of a stops
+  // array. Synthesise the canonical 4-corner layout from them so existing
+  // graphs keep their look after the schema swap.
+  if (!Array.isArray(rawStops) || rawStops.length === 0) {
+    const legacyHexes = [
+      legacyColors?.colorA,
+      legacyColors?.colorB,
+      legacyColors?.colorC,
+      legacyColors?.colorD,
+    ];
+    const hasLegacy = legacyHexes.some((h) => typeof h === "string" && h.length > 0);
+    if (hasLegacy) {
+      return legacyHexes.map((hex, i) => ({
+        x: MESH_LEGACY_POS[i].x,
+        y: MESH_LEGACY_POS[i].y,
+        radius: 0.65,
+        color: normalizeHex(hex, fallback[i % fallback.length]?.color ?? "#ffffff"),
+      }));
+    }
+    return clone(fallback);
+  }
+
+  return rawStops
+    .slice(0, MESH_GRADIENT_MAX_STOPS)
+    .map((stop, i) => {
+      const ref = fallback[i % fallback.length] ?? fallback[0];
+      return {
+        x: clamp01(Number(stop?.x)),
+        y: clamp01(Number(stop?.y)),
+        radius: Math.max(0.02, Math.min(2, Number(stop?.radius ?? ref.radius ?? 0.6))),
+        color: normalizeHex(stop?.color, ref.color ?? "#ffffff"),
+      };
+    });
 }
 
 function getLinearChain(graph) {
