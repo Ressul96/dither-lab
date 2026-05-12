@@ -375,13 +375,24 @@ export function hasTimelineTrackForParam(nodeId, paramKey, timeline = getState()
   return Boolean(findParamTrack(normalizeTimeline(timeline), nodeId, paramKey));
 }
 
+export function hasTimelineTrackForBinding(nodeId, binding, timeline = getState().timeline) {
+  return Boolean(findTrackForBinding(normalizeTimeline(timeline), nodeId, binding));
+}
+
 export function hasParamKeyframeAtCurrentTime(nodeId, paramKey) {
+  return hasTimelineKeyframeAtCurrentTime(nodeId, {
+    type: TIMELINE_BINDING_NODE_PARAM,
+    key: paramKey,
+  });
+}
+
+export function hasTimelineKeyframeAtCurrentTime(nodeId, binding) {
   const state = getState();
   const timeline = normalizeTimeline(state.timeline, {
     duration: state.source.duration,
     fps: state.source.fps,
   });
-  const track = findParamTrack(timeline, nodeId, paramKey);
+  const track = findTrackForBinding(timeline, nodeId, binding);
   if (!track) return false;
   return findKeyframeIndexAtTime(
     track,
@@ -414,6 +425,38 @@ export function toggleParamKeyframeAtCurrentTime(nodeId, paramKey) {
   const value = node?.params?.[paramKey];
 
   dispatch("timeline", setParamKeyframe(timeline, { nodeId, paramKey, time, value }));
+  return true;
+}
+
+export function toggleTimelineKeyframeAtCurrentTime({ nodeId, binding, value }) {
+  if (!nodeId) return false;
+  const normalizedBinding = normalizeBinding(binding);
+  if (!normalizedBinding?.key) return false;
+
+  const state = getState();
+  const timeline = normalizeTimeline(state.timeline, {
+    duration: state.source.duration,
+    fps: state.source.fps,
+  });
+  const time = snapTimeToFrame(resolveTimelineTime(timeline, state.playback.currentTime), timeline.fps);
+  const track = findTrackForBinding(timeline, nodeId, normalizedBinding);
+
+  if (track && findKeyframeIndexAtTime(track, time, timeline.fps) >= 0) {
+    dispatch("timeline", removeTimelineKeyframe(timeline, { nodeId, binding: normalizedBinding, time }));
+    return true;
+  }
+
+  dispatch(
+    "timeline",
+    setTimelineKeyframe(timeline, {
+      nodeId,
+      binding: normalizedBinding,
+      time,
+      value,
+    })
+  );
+  const touched = findTrackForBinding(getState().timeline, nodeId, normalizedBinding);
+  if (touched) setTrackExpanded(touched.id, true);
   return true;
 }
 
@@ -474,21 +517,27 @@ export function updateParamKeyframeAtCurrentTime(nodeId, paramKey, value) {
 }
 
 export function setParamKeyframe(timeline, { nodeId, paramKey, time, value }) {
+  return setTimelineKeyframe(timeline, {
+    nodeId,
+    binding: { type: TIMELINE_BINDING_NODE_PARAM, key: paramKey },
+    time,
+    value,
+  });
+}
+
+export function setTimelineKeyframe(timeline, { nodeId, binding, time, value }) {
   const normalized = normalizeTimeline(timeline);
   const nextTracks = normalized.tracks.map((track) => clone(track));
-  let track = nextTracks.find(
-    (item) =>
-      item.nodeId === nodeId &&
-      item.binding.type === TIMELINE_BINDING_NODE_PARAM &&
-      item.binding.key === paramKey
-  );
+  const normalizedBinding = normalizeBinding(binding);
+  if (!nodeId || !normalizedBinding?.key) return normalized;
+  let track = nextTracks.find((item) => isSameBinding(item, nodeId, normalizedBinding));
 
   if (!track) {
     track = {
-      id: createTrackId(nodeId, paramKey),
+      id: createTrackId(nodeId, normalizedBinding),
       enabled: true,
       nodeId,
-      binding: { type: TIMELINE_BINDING_NODE_PARAM, key: paramKey },
+      binding: normalizedBinding,
       interpolation: "linear",
       keyframes: [],
     };
@@ -521,15 +570,21 @@ export function setParamKeyframe(timeline, { nodeId, paramKey, time, value }) {
 }
 
 export function removeParamKeyframe(timeline, { nodeId, paramKey, time }) {
+  return removeTimelineKeyframe(timeline, {
+    nodeId,
+    binding: { type: TIMELINE_BINDING_NODE_PARAM, key: paramKey },
+    time,
+  });
+}
+
+export function removeTimelineKeyframe(timeline, { nodeId, binding, time }) {
   const normalized = normalizeTimeline(timeline);
   const nextTracks = [];
+  const normalizedBinding = normalizeBinding(binding);
+  if (!nodeId || !normalizedBinding?.key) return normalized;
 
   for (const track of normalized.tracks) {
-    if (
-      track.nodeId !== nodeId ||
-      track.binding.type !== TIMELINE_BINDING_NODE_PARAM ||
-      track.binding.key !== paramKey
-    ) {
+    if (!isSameBinding(track, nodeId, normalizedBinding)) {
       nextTracks.push(track);
       continue;
     }
@@ -610,7 +665,7 @@ export function removeTimelineKeyframeById(timeline, { trackId, keyframeId }) {
  * Duplicate a list of keyframes by one frame each. Returns the new timeline
  * along with the ids of the freshly-created keyframes so the UI can reroute
  * the multi-select to them. Items pointing at non-existent keyframes or
- * non-param bindings are skipped silently.
+ * missing keyframes are skipped silently.
  *
  * If the +1 frame slot is already occupied, that occupant is overwritten —
  * matches the setParamKeyframe semantics. Future improvement: shift to the
@@ -629,13 +684,11 @@ export function duplicateTimelineKeyframes(timeline, items) {
     const found = getTimelineKeyframe(next, item.trackId, item.keyframeId);
     if (!found) continue;
     const { track, keyframe } = found;
-    if (track.binding?.type !== TIMELINE_BINDING_NODE_PARAM) continue;
-    const paramKey = track.binding.key;
     const newTime = snapTimeToFrame(keyframe.time + oneFrame, fps);
 
-    next = setParamKeyframe(next, {
+    next = setTimelineKeyframe(next, {
       nodeId: track.nodeId,
-      paramKey,
+      binding: track.binding,
       time: newTime,
       value: keyframe.value,
     });
@@ -682,7 +735,7 @@ function normalizeTrack(raw, context) {
   if (keyframes.length === 0) return null;
 
   return {
-    id: String(raw.id ?? createTrackId(nodeId, binding.key)),
+    id: String(raw.id ?? createTrackId(nodeId, binding)),
     enabled: raw.enabled !== false,
     collapsed: raw.collapsed === true,
     nodeId,
@@ -905,6 +958,18 @@ function findParamTrack(timeline, nodeId, paramKey) {
   ) ?? null;
 }
 
+function findTrackForBinding(timeline, nodeId, binding) {
+  const normalizedBinding = normalizeBinding(binding);
+  if (!nodeId || !normalizedBinding?.key) return null;
+  return timeline.tracks.find((track) => isSameBinding(track, nodeId, normalizedBinding)) ?? null;
+}
+
+function isSameBinding(track, nodeId, binding) {
+  return track?.nodeId === nodeId &&
+    track?.binding?.type === binding.type &&
+    track?.binding?.key === binding.key;
+}
+
 function findKeyframeIndexAtTime(track, time, fps = DEFAULT_FPS) {
   const tolerance = Math.max(KEYFRAME_TIME_EPSILON, 0.5 / clampFps(fps));
   const target = normalizeDuration(time);
@@ -1043,8 +1108,15 @@ function normalizeEasing(raw, fallback = "linear") {
   return createBezierEasing();
 }
 
-function createTrackId(nodeId, paramKey) {
-  return `track:${nodeId}:param:${paramKey}`;
+export function createTimelineTrackId(nodeId, binding) {
+  const normalizedBinding = normalizeBinding(binding);
+  const type = normalizedBinding?.type === TIMELINE_BINDING_NODE_PROPERTY ? "property" : "param";
+  const key = normalizedBinding?.key ?? "";
+  return `track:${nodeId}:${type}:${key}`;
+}
+
+function createTrackId(nodeId, binding) {
+  return createTimelineTrackId(nodeId, binding);
 }
 
 function createKeyframeId(trackId, time) {

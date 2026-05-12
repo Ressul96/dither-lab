@@ -1902,9 +1902,9 @@ body.cutting-edges * {
 
 .property-card {
   display: grid;
-  grid-template-columns: 18px 8px minmax(0, 1fr) auto;
+  grid-template-columns: 18px 18px 8px minmax(0, 1fr) 20px minmax(38px, auto);
   align-items: center;
-  column-gap: 8px;
+  column-gap: 6px;
   min-height: 34px;
   padding: 3px 8px 3px 4px;
   border: 1px solid transparent;
@@ -1928,6 +1928,10 @@ body.cutting-edges * {
 
 .property-card.is-expanded {
   border-color: rgba(255, 255, 255, 0.06);
+}
+
+.property-card.is-disabled {
+  opacity: 0.56;
 }
 
 .property-chevron {
@@ -1957,12 +1961,53 @@ body.cutting-edges * {
   transform: rotate(90deg);
 }
 
+.property-key-toggle {
+  position: relative;
+  width: 18px;
+  height: 22px;
+  min-width: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.property-key-toggle::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  border: 1px solid color-mix(in srgb, var(--track-color, var(--accent)) 68%, rgba(255, 255, 255, 0.18));
+  border-radius: 2px;
+  background: transparent;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.02);
+}
+
+.property-key-toggle:hover,
+.property-enable-toggle:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.property-key-toggle.is-animated::before {
+  background: color-mix(in srgb, var(--track-color, var(--accent)) 42%, transparent);
+}
+
+.property-key-toggle.is-keyed::before {
+  background: var(--track-color, var(--accent));
+  border-color: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--track-color, var(--accent)) 18%, transparent);
+}
+
 .property-color {
   width: 8px;
   height: 8px;
   flex: 0 0 8px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--track-color, var(--accent));
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
 }
 
@@ -1995,12 +2040,64 @@ body.cutting-edges * {
 }
 
 .property-value {
-  max-width: 72px;
+  max-width: 56px;
   overflow: hidden;
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.property-enable-toggle {
+  position: relative;
+  width: 20px;
+  height: 22px;
+  min-width: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.property-enable-toggle:disabled {
+  cursor: default;
+  opacity: 0.32;
+}
+
+.property-enable-toggle span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 7px;
+  transform: translate(-50%, -50%);
+  border: 1px solid currentColor;
+  border-radius: 999px / 70%;
+  color: var(--text-muted);
+}
+
+.property-enable-toggle span::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.property-card.is-disabled .property-enable-toggle span::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -1px;
+  right: -1px;
+  height: 1px;
+  transform: rotate(-28deg);
+  background: currentColor;
 }
 
 .animation-timeline-empty {
@@ -2273,6 +2370,10 @@ body.cutting-edges * {
   background: rgba(74, 158, 255, 0.06);
 }
 
+.animation-lane-row.is-disabled {
+  opacity: 0.5;
+}
+
 .animation-track-lane {
   position: relative;
   height: 22px;
@@ -2501,21 +2602,21 @@ body.cutting-edges * {
   transform: translate(-50%, -50%) rotate(45deg);
   border: 1px solid rgba(12, 13, 18, 0.82);
   border-radius: 2px;
-  background: rgba(240, 181, 95, 0.95);
-  box-shadow: 0 0 0 2px rgba(240, 181, 95, 0.14);
+  background: var(--track-color, rgba(240, 181, 95, 0.95));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--track-color, #f0b55f) 20%, transparent);
   cursor: pointer;
 }
 
 .animation-keyframe:hover {
-  background: #ffd08a;
-  box-shadow: 0 0 0 4px rgba(240, 181, 95, 0.18);
+  background: color-mix(in srgb, var(--track-color, #f0b55f) 82%, white);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--track-color, #f0b55f) 22%, transparent);
 }
 
 .animation-keyframe.is-selected {
-  background: #ffe1aa;
+  background: color-mix(in srgb, var(--track-color, #f0b55f) 72%, white);
   border-color: rgba(255, 255, 255, 0.85);
   box-shadow:
-    0 0 0 2px rgba(240, 181, 95, 0.22),
+    0 0 0 2px color-mix(in srgb, var(--track-color, #f0b55f) 26%, transparent),
     0 0 0 5px rgba(74, 158, 255, 0.12);
 }
 

@@ -111,6 +111,12 @@ eder ve inline zaman/frame tooltip'i gösterir.
 | Playhead drag (pointer capture; pause sırasında) | Drag esnasında numeric tooltip |
 
 ### F10.4 — Property tracks (otomatik liste)
+**Durum (2026-05-12): ✅ İndi.** Timeline properties paneli artık seçili
+node'dan otomatik target listesi üretir: layer-level opacity/hue/saturation
+slot'ları en üste gelir, ardından numeric ve HEX color param'ları görünür.
+Her satır color-coded diamond key toggle, geçici enable/disable göz toggle'ı
+ve expand edilebilir lane ile aynı track id üzerinden çalışır.
+
 | Kapsam | Notlar |
 |---|---|
 | Seçili node için: önce 3 layer-level property (opacity/hue/saturation) — color-coded; sonra `visible params` (parameter-schema'ya göre filtreli) | shader-lab'in `buildTimelineProperties` paterni |

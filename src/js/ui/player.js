@@ -1,5 +1,5 @@
 import { getState, subscribe, dispatch, pushHistory } from "../state.js";
-import { getNodeDefinition } from "../graph.js";
+import { getNodeDefinition, getNodeParamBounds } from "../graph.js";
 import {
   togglePlay,
   restart,
@@ -17,14 +17,16 @@ import {
   TIMELINE_BINDING_NODE_PARAM,
   TIMELINE_BINDING_NODE_PROPERTY,
   TIMELINE_EASING_PRESETS,
+  createTimelineTrackId,
   duplicateTimelineKeyframes,
   durationToFrames,
   findMatchingEasingPreset,
   formatFrameReadout,
   formatSecondReadout,
   getTimelineKeyframe,
-  getTimelineTrackValue,
   getTimelineEasingPreset,
+  getTimelineTrackValue,
+  hasTimelineKeyframeAtCurrentTime,
   moveTimelineKeyframe,
   normalizeTimeline,
   removeTimelineKeyframeById,
@@ -38,8 +40,10 @@ import {
   snapTimeToFrame,
   timeToFrame,
   timelineFrameRate,
+  toggleTimelineKeyframeAtCurrentTime,
   toggleTrackExpanded,
   updateTimelineKeyframe,
+  updateTimelineTrack,
 } from "../timeline.js";
 
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
@@ -48,6 +52,13 @@ const GRAPH_EDITOR_WIDTH = 1000;
 const GRAPH_EDITOR_HEIGHT = 136;
 const GRAPH_EDITOR_PADDING = 18;
 const GRAPH_MIN_VALUE_RANGE = 1;
+const LAYER_TRACKS = Object.freeze([
+  { key: "opacity", label: "Opacity", color: "#8DB1FF", defaultValue: 100, bounds: { min: 0, max: 100 } },
+  { key: "hue", label: "Hue", color: "#A4E0A0", defaultValue: 0, bounds: { min: -180, max: 180 } },
+  { key: "saturation", label: "Saturation", color: "#F7B365", defaultValue: 100, bounds: { min: 0, max: 200 } },
+]);
+const COLOR_PARAM_TRACK_COLOR = "#FF8CAB";
+const DEFAULT_PARAM_TRACK_COLOR = "#B697FF";
 
 // Multi-select keyframe state. `selectedKeyframes` is the full set of
 // "trackId|keyframeId" keys; `selectedTimelineKeyframe` always points at the
@@ -294,6 +305,22 @@ function wireAnimationTimeline() {
       return;
     }
 
+    const keyToggle = event.target.closest("[data-track-key-toggle]");
+    if (keyToggle) {
+      event.preventDefault();
+      event.stopPropagation();
+      togglePropertyKeyframe(keyToggle);
+      return;
+    }
+
+    const enableToggle = event.target.closest("[data-track-enable-toggle]");
+    if (enableToggle) {
+      event.preventDefault();
+      event.stopPropagation();
+      togglePropertyTrackEnabled(enableToggle);
+      return;
+    }
+
     const trackToggle = event.target.closest("[data-track-toggle]");
     if (trackToggle) {
       event.preventDefault();
@@ -447,6 +474,43 @@ function createCurvePresetPatches(track, index, preset) {
     keyframeId: from.id,
     patch: createEasingPatch(preset),
   }];
+}
+
+function togglePropertyKeyframe(button) {
+  const nodeId = button.dataset.nodeId;
+  const binding = {
+    type: button.dataset.bindingType === TIMELINE_BINDING_NODE_PROPERTY
+      ? TIMELINE_BINDING_NODE_PROPERTY
+      : TIMELINE_BINDING_NODE_PARAM,
+    key: button.dataset.bindingKey,
+  };
+  const { graph } = getState();
+  const node = graph.nodes.find((item) => item.id === nodeId);
+  if (!node || !binding.key) return;
+
+  const value = getTimelineTargetBaseValue(node, binding);
+  const changed = toggleTimelineKeyframeAtCurrentTime({ nodeId, binding, value });
+  if (!changed) return;
+  const trackId = createTimelineTrackId(nodeId, binding);
+  selectedPropertyTrackId = trackId;
+  setSelectedProperty(trackId);
+  setTrackExpanded(trackId, true);
+}
+
+function togglePropertyTrackEnabled(button) {
+  const trackId = button.dataset.trackEnableToggle;
+  if (!trackId) return;
+  const track = getState().timeline.tracks.find((item) => item.id === trackId);
+  if (!track) return;
+  dispatch(
+    "timeline",
+    updateTimelineTrack(getState().timeline, {
+      trackId,
+      patch: { enabled: track.enabled === false },
+    })
+  );
+  selectedPropertyTrackId = trackId;
+  setSelectedProperty(trackId);
 }
 
 function syncTimelineRulerScroll() {
@@ -716,7 +780,7 @@ function renderAnimationTimeline() {
   });
   const duration = resolveTimelineDuration(normalized, source);
   const fps = timelineFrameRate(normalized, source.fps);
-  const tracks = normalized.tracks;
+  const targets = buildTimelineProperties(graph, normalized, playback, source);
 
   const autokey = normalized.autokey === true;
   if (playerEls.autokeyPill) {
@@ -726,22 +790,24 @@ function renderAnimationTimeline() {
 
   updateTimelineChrome(normalized);
 
-  const selectedId = tracks.some((track) => track.id === normalized.selectedPropertyId)
+  const selectedId = targets.some((target) => target.id === normalized.selectedPropertyId)
     ? normalized.selectedPropertyId
     : selectedPropertyTrackId;
-  const activeTrack = tracks.find((track) => track.id === selectedId) || (tracks.length > 0 ? tracks[0] : null);
-  if (activeTrack && selectedPropertyTrackId !== activeTrack.id) {
-    selectedPropertyTrackId = activeTrack.id;
+  const activeTarget = targets.find((target) => target.id === selectedId) || (targets.length > 0 ? targets[0] : null);
+  if (activeTarget && selectedPropertyTrackId !== activeTarget.id) {
+    selectedPropertyTrackId = activeTarget.id;
   }
-  const activeId = activeTrack?.id ?? null;
+  const activeTrack = activeTarget?.track ?? null;
+  const activeId = activeTarget?.id ?? null;
   const expandedIds = new Set(normalized.expandedTrackIds ?? []);
-  const visibleTracks = tracks.filter((track) => expandedIds.has(track.id));
+  const visibleTargets = targets.filter((target) => expandedIds.has(target.id));
+  const visibleTracks = visibleTargets.map((target) => target.track);
 
-  playerEls.propertyList.innerHTML = tracks.length === 0
-    ? `<li class="animation-timeline-empty">No tracks</li>`
-    : tracks
-        .map((track) =>
-          renderPropertyCard(track, {
+  playerEls.propertyList.innerHTML = targets.length === 0
+    ? `<li class="animation-timeline-empty">${graph.selectedNodeId ? "No animatable properties" : "Select a node"}</li>`
+    : targets
+        .map((target) =>
+          renderPropertyCard(target, {
             graph,
             timeline: normalized,
             playback,
@@ -756,9 +822,9 @@ function renderAnimationTimeline() {
   renderTimeRuler(duration, fps, normalized.durationUnit, normalized.zoom);
   const selected = getSelectedTimelineKeyframe(normalized);
 
-  if (tracks.length === 0) {
+  if (targets.length === 0) {
     playerEls.laneHost.innerHTML = "";
-    playerEls.emptyState.textContent = "No keyframes";
+    playerEls.emptyState.textContent = graph.selectedNodeId ? "No animatable properties" : "Select a node";
     playerEls.emptyState.classList.remove("hidden");
   } else if (normalized.viewMode === "graph") {
     const graphTrack = pickGraphTrack(activeTrack, visibleTracks);
@@ -780,8 +846,8 @@ function renderAnimationTimeline() {
     playerEls.emptyState.classList.add("hidden");
     playerEls.laneHost.innerHTML =
       renderRenderRangeOverlay(duration, playback) +
-      visibleTracks
-        .map((track) => renderAnimationLane(track, duration, fps, selected, graph))
+      visibleTargets
+        .map((target) => renderAnimationLane(target, duration, fps, selected, graph))
         .join("");
   }
 
@@ -819,41 +885,160 @@ function updateTimelineChrome(timeline) {
   }
 }
 
-function renderPropertyCard(track, context) {
-  const { graph, timeline, playback, source, activeId, expandedIds } = context;
-  const meta = getTrackDisplayMeta(track, graph);
-  const baseValue = getTrackBaseValue(track, meta.node);
-  const currentValue = getTimelineTrackValue(
-    timeline,
-    track.id,
-    playback.currentTime,
-    baseValue,
-    { duration: source.duration, fps: source.fps }
+function buildTimelineProperties(graph, timeline, playback, source) {
+  const node = graph.nodes.find((item) => item.id === graph.selectedNodeId);
+  if (!node || node.type === "source" || node.type === "viewer-output") return [];
+
+  const definition = getNodeDefinition(node.type);
+  const targets = [];
+  const seenBindings = new Set();
+  const pushTarget = (config) => {
+    const binding = {
+      type: config.bindingType ?? TIMELINE_BINDING_NODE_PARAM,
+      key: config.key,
+    };
+    const bindingKey = `${binding.type}:${binding.key}`;
+    if (!binding.key || seenBindings.has(bindingKey)) return;
+    seenBindings.add(bindingKey);
+    targets.push(createTimelinePropertyTarget({
+      node,
+      definition,
+      binding,
+      label: config.label ?? formatParamLabel(config.key),
+      group: config.group ?? "Parameter",
+      color: config.color ?? getTimelineBindingColor(binding, node),
+      defaultValue: config.defaultValue,
+      bounds: config.bounds,
+      timeline,
+      playback,
+      source,
+    }));
+  };
+
+  for (const layerTrack of LAYER_TRACKS) {
+    pushTarget({
+      ...layerTrack,
+      bindingType: TIMELINE_BINDING_NODE_PROPERTY,
+      group: "Layer",
+      label: `Layer ${layerTrack.label}`,
+    });
+  }
+
+  const paramKeys = [
+    ...Object.keys(definition?.defaultParams ?? {}),
+    ...Object.keys(node.params ?? {}),
+  ];
+  for (const key of [...new Set(paramKeys)]) {
+    if (!isTimelineVisibleParam(node, key)) continue;
+    pushTarget({
+      key,
+      group: "Param",
+      color: getTimelineBindingColor({ type: TIMELINE_BINDING_NODE_PARAM, key }, node),
+      bounds: getNodeParamBounds(node, key),
+    });
+  }
+
+  return targets;
+}
+
+function createTimelinePropertyTarget(config) {
+  const { node, definition, binding, timeline, playback, source } = config;
+  const id = createTimelineTrackId(node.id, binding);
+  const track = timeline.tracks.find((item) =>
+    item.nodeId === node.id &&
+    item.binding?.type === binding.type &&
+    item.binding?.key === binding.key
   );
-  const valueLabel = formatPropertyValue(currentValue);
-  const isActive = track.id === activeId;
-  const isExpanded = expandedIds.has(track.id);
+  const displayTrack = track ?? {
+    id,
+    enabled: true,
+    nodeId: node.id,
+    binding,
+    interpolation: "linear",
+    keyframes: [],
+  };
+  const baseValue = getTimelineTargetBaseValue(node, binding, config.defaultValue);
+  const currentValue = track
+    ? getTimelineTrackValue(timeline, track.id, playback.currentTime, baseValue, {
+      duration: source.duration,
+      fps: source.fps,
+    })
+    : baseValue;
+
+  return {
+    id,
+    binding,
+    bounds: config.bounds,
+    color: config.color,
+    currentValue,
+    group: config.group,
+    hasTrack: Boolean(track),
+    keyed: hasTimelineKeyframeAtCurrentTime(node.id, binding),
+    label: config.label,
+    meta: {
+      node,
+      nodeLabel: node.label ?? definition?.label ?? node.id,
+      paramLabel: config.label,
+      label: `${node.label ?? definition?.label ?? node.id} · ${config.label}`,
+      family: normalizeFamilyName(definition?.family ?? node.type),
+    },
+    nodeId: node.id,
+    track: displayTrack,
+  };
+}
+
+function renderPropertyCard(target, context) {
+  const { activeId, expandedIds } = context;
+  const track = target.track;
+  const meta = target.meta;
+  const valueLabel = formatPropertyValue(target.currentValue);
+  const isActive = target.id === activeId;
+  const isExpanded = expandedIds.has(target.id);
+  const isDisabled = target.hasTrack && track.enabled === false;
+  const keyLabel = target.keyed ? "Remove keyframe" : "Set keyframe";
+  const enableLabel = track.enabled === false ? "Enable track" : "Disable track";
 
   return `
     <li
-      class="property-card ${isActive ? "is-active" : ""} ${isExpanded ? "is-expanded" : ""}"
-      data-track-id="${escapeHtml(track.id)}"
+      class="property-card ${isActive ? "is-active" : ""} ${isExpanded ? "is-expanded" : ""} ${isDisabled ? "is-disabled" : ""} ${target.hasTrack ? "" : "is-virtual"}"
+      style="--track-color:${escapeHtml(target.color)}"
+      data-track-id="${escapeHtml(target.id)}"
       aria-selected="${isActive ? "true" : "false"}"
     >
       <button
         class="property-chevron"
         type="button"
-        data-track-toggle="${escapeHtml(track.id)}"
+        data-track-toggle="${escapeHtml(target.id)}"
         aria-label="Toggle ${escapeHtml(meta.label)} lane"
         aria-expanded="${isExpanded ? "true" : "false"}"
       >
         <span aria-hidden="true">›</span>
       </button>
-      <div class="property-color" style="background: var(--family-${meta.family}, var(--accent))"></div>
+      <button
+        class="property-key-toggle${target.hasTrack ? " is-animated" : ""}${target.keyed ? " is-keyed" : ""}"
+        type="button"
+        data-track-key-toggle="${escapeHtml(target.id)}"
+        data-node-id="${escapeHtml(target.nodeId)}"
+        data-binding-type="${escapeHtml(target.binding.type)}"
+        data-binding-key="${escapeHtml(target.binding.key)}"
+        aria-label="${keyLabel}"
+        title="${keyLabel}"
+      ></button>
+      <div class="property-color"></div>
       <span class="property-copy" title="${escapeHtml(meta.nodeLabel)} · ${escapeHtml(meta.paramLabel)}">
         <span class="property-name">${escapeHtml(meta.paramLabel)}</span>
-        <span class="property-node">${escapeHtml(meta.nodeLabel)}</span>
+        <span class="property-node">${escapeHtml(meta.nodeLabel)} · ${escapeHtml(target.group)}</span>
       </span>
+      <button
+        class="property-enable-toggle"
+        type="button"
+        data-track-enable-toggle="${escapeHtml(track.id)}"
+        aria-label="${enableLabel}"
+        title="${enableLabel}"
+        ${target.hasTrack ? "" : "disabled"}
+      >
+        <span aria-hidden="true"></span>
+      </button>
       <span class="property-value" title="${escapeHtml(valueLabel)}">${escapeHtml(valueLabel)}</span>
     </li>
   `;
@@ -904,11 +1089,15 @@ function renderTimeRuler(duration, fps, unit, zoom) {
   syncTimelineRulerScroll();
 }
 
-function renderAnimationLane(track, duration, fps, selected, graph) {
-  const meta = getTrackDisplayMeta(track, graph);
+function renderAnimationLane(target, duration, fps, selected, graph) {
+  const track = target.track ?? target;
+  const meta = target.meta ?? getTrackDisplayMeta(track, graph);
   const selectedHere = selected && selected.track.id === track.id;
   const laneHtml = `
-    <div class="animation-lane-row ${selectedHere ? "is-active" : ""}">
+    <div
+      class="animation-lane-row ${selectedHere ? "is-active" : ""} ${track.enabled === false ? "is-disabled" : ""}"
+      style="--track-color:${escapeHtml(target.color ?? getTimelineBindingColor(track.binding, meta.node))}"
+    >
       <div
         class="animation-track-lane"
         data-timeline-lane="${escapeHtml(track.id)}"
@@ -1303,6 +1492,9 @@ function isLinearControlPoints(controlPoints) {
 }
 
 function graphCurveColor(track, graph, index = 0) {
+  const node = graph.nodes.find((item) => item.id === track.nodeId);
+  const trackColor = getTimelineBindingColor(track.binding, node);
+  if (trackColor) return trackColor;
   const meta = getTrackDisplayMeta(track, graph);
   const fallback = ["#f0b55f", "#6ab0ff", "#7ddf95", "#f07ab6", "#a78bfa"][index % 5];
   const familyMap = {
@@ -1323,7 +1515,10 @@ function getTrackDisplayMeta(track, graph) {
   const node = graph.nodes.find((item) => item.id === track.nodeId);
   const definition = getNodeDefinition(node?.type);
   const nodeLabel = node?.label ?? definition?.label ?? track.nodeId;
-  const paramLabel = formatParamLabel(track.binding?.key ?? "value");
+  const bindingKey = track.binding?.key ?? "value";
+  const paramLabel = track.binding?.type === TIMELINE_BINDING_NODE_PROPERTY
+    ? `Layer ${formatParamLabel(bindingKey)}`
+    : formatParamLabel(bindingKey);
   const family = normalizeFamilyName(definition?.family ?? node?.type);
   return {
     node,
@@ -1337,9 +1532,49 @@ function getTrackDisplayMeta(track, graph) {
 function getTrackBaseValue(track, node) {
   const key = track.binding?.key;
   if (!key || !node) return undefined;
-  if (track.binding?.type === TIMELINE_BINDING_NODE_PROPERTY) return node[key];
-  if (track.binding?.type === TIMELINE_BINDING_NODE_PARAM) return node.params?.[key];
+  if (track.binding?.type === TIMELINE_BINDING_NODE_PROPERTY) return getTimelineTargetBaseValue(node, track.binding);
+  if (track.binding?.type === TIMELINE_BINDING_NODE_PARAM) return getTimelineTargetBaseValue(node, track.binding);
   return node.params?.[key] ?? node[key];
+}
+
+function getTimelineTargetBaseValue(node, binding, fallback) {
+  const key = binding?.key;
+  if (!key || !node) return fallback;
+  if (binding?.type === TIMELINE_BINDING_NODE_PROPERTY) {
+    return node[key] ?? getLayerTrackDefaultValue(key) ?? fallback;
+  }
+  const definition = getNodeDefinition(node.type);
+  return node.params?.[key] ?? definition?.defaultParams?.[key] ?? fallback;
+}
+
+function isTimelineVisibleParam(node, key) {
+  const value = getTimelineTargetBaseValue(node, {
+    type: TIMELINE_BINDING_NODE_PARAM,
+    key,
+  });
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") return isColorParamValue(value);
+  return false;
+}
+
+function getTimelineBindingColor(binding, node = null) {
+  const key = binding?.key;
+  const layerTrack = LAYER_TRACKS.find((item) => item.key === key);
+  if (binding?.type === TIMELINE_BINDING_NODE_PROPERTY && layerTrack) return layerTrack.color;
+  if (binding?.type === TIMELINE_BINDING_NODE_PARAM) {
+    const value = node ? getTimelineTargetBaseValue(node, binding) : undefined;
+    if (isColorParamValue(value) || /color/i.test(key ?? "")) return COLOR_PARAM_TRACK_COLOR;
+    if (layerTrack) return layerTrack.color;
+  }
+  return DEFAULT_PARAM_TRACK_COLOR;
+}
+
+function getLayerTrackDefaultValue(key) {
+  return LAYER_TRACKS.find((item) => item.key === key)?.defaultValue;
+}
+
+function isColorParamValue(value) {
+  return typeof value === "string" && /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value.trim());
 }
 
 function normalizeFamilyName(value) {
