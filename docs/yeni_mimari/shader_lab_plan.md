@@ -4,7 +4,7 @@
 > (2026-05-12 itibarıyla shallow clone üzerinde survey.)
 >
 > F8 tamamlandı; bu doküman, shader-lab'den taşıyacağımız yapıtaşlarını ve
-> önerilen sırayı F9–F14 olarak organize ediyor. Her fazın altındaki PR
+> önerilen sırayı F9–F13 olarak organize ediyor. Her fazın altındaki PR
 > kalemleri atomik tutulup `00_uygulama_plani.md` tablosuna işlenecektir.
 
 ## 0. Genel Karşılaştırma
@@ -17,11 +17,9 @@
 | Blend modes | 16 (incl. hue/sat/color/luminosity) | Yok; mix node sınırlı |
 | Layer composite | "filter" / "mask"; per-layer mask config | mask-combine + mask-apply node'ları |
 | Color grading | Scene-wide post: color curves (M+RGB), clamp gamma, color-map LUT | rgb-curves node tek başına; scene-wide pass yok |
-| Easing | 18 preset + per-keyframe cubic-bezier (CSS) + step | Linear + her keyframe için bazı tek-tip easing değerleri |
+| Easing | 18 preset + per-keyframe cubic-bezier (CSS) + step | Linear + kısmi easing |
+| Timeline/Player UI | Tek floating overlay panel — transport + adaptive ruler + per-property track + per-keyframe inline bezier editor + marquee multi-select + keyboard nudge + clipboard | Ayrı player card + properties paneli; transport satırı zayıf; per-keyframe easing UI yok |
 | Mask sources | luminance / alpha / R / G / B (+ invert, multiply/stencil) | mask node'ları image kanalına göre |
-| Effects only theirs | 17 (edge-detect, fluid, ink, slice, smear, voxel, plotter, magnify-lens, particle-grid, displacement-map, directional-blur, circuit-bent, fluted-glass, pixel-trail, gradient-source, text, custom-shader…) | — |
-| Effects only ours | 7 (depth-of-field, gradient-map, halation, led-screen, modulation, star-glow, vhs) | — |
-| Custom shaders | `custom-shader` layer: kullanıcı GLSL/TSL yazıp pipeline'a ekliyor | Yok |
 | Export | WebCodecs `VideoEncoder` + `mp4-muxer`/`webm-muxer`; preset'li quality/aspect | FFmpeg sidecar via Rust/Tauri |
 | Dithering | 4 pattern (bayer-2/4/8 + noise) | 27 algoritma + tam palette sistemi + error-diffusion ✅ önde |
 | Project file | Versioned JSON; Zustand store snapshot | Versioned JSON; merkezi state store |
@@ -30,7 +28,13 @@
 yapmıyoruz. Tauri WebView'ında WebGPU desteği henüz tutarsız ve mevcut node
 graph paradigmamız (layer stack yerine DAG) zaten farklı bir tasarım. Bu
 plandaki ports renderer altyapımız WebGL2 GLSL üzerinde kalarak alınacak;
-sadece konseptler ve algoritmalar taşınıyor.
+sadece konseptler, algoritmalar ve UI/UX yaklaşımı taşınıyor.
+
+**Kapsam dışı bırakılanlar (kullanıcı kararı 2026-05-12):**
+- Effect catalog ports (edge-detect, smear, ink, slice, vs.): node setimiz
+  farklı — kopya gereksiz. Kalite/performans odaklı kalıyoruz.
+- Audio-reactive parametre bindings.
+- Custom-shader user-API'si: araştırma fazına bırakıldı.
 
 ---
 
@@ -38,7 +42,8 @@ sadece konseptler ve algoritmalar taşınıyor.
 
 Bloom ring artifact'i, blur perf sorunu, glow türevleri (DoF, halation) — hepsi
 aynı altyapı eksikliğine bağlı: tek-pass shader + LDR canvas. Bu faz, motoru
-multi-pass etkin renderer haline getirir.
+multi-pass etkin renderer haline getirir. **Kullanıcının kalite/performans
+önceliği bu fazda başlar.**
 
 | PR | Kapsam | Notlar |
 |---|---|---|
@@ -47,7 +52,7 @@ multi-pass etkin renderer haline getirir.
 | F9.2 | Bloom multi-pass (threshold → downsample N kez → upsample bilinear → add back) | Single-pass disk shader'ı fallback olarak kalsın |
 | F9.3 | Halation aynı multi-pass altyapısı üzerine taşınsın | Tint hâlâ luma-only sample'lar üstünde uygulanır |
 | F9.4 | Glare / star-glow streaks: directional downsample chain | Streak iterasyonları mip seviyelerine bindirilir |
-| F9.5 | Blur node (Gauss): separable two-pass (H, V) — F9.0 altyapısı kullanır | Mevcut CPU box blur'a göre 5-10× hızlanma |
+| F9.5 | Blur node (Gauss): separable two-pass (H, V) — F9.0 altyapısı kullanır | Mevcut CPU box blur'a göre 5-10× hızlanma; kullanıcının raporladığı blur kasması burada çözülür |
 | F9.6 | HDR RT desteği (RGBA16F) — opsiyonel, capability detect ile | Saturate'i geciktirmek, bloom highlight korumak için |
 
 Kabul kriterleri: bloom artifact'siz çıkar, blur node 1080p'de < 8ms/frame,
@@ -55,90 +60,128 @@ DoF / halation tek pass yerine multi-pass'ten faydalanır.
 
 ---
 
-## 2. F10 — Effect ports (kolaydan zora)
+## 2. F10 — Timeline + Player UI yeniden tasarım (en geniş UX fazı)
 
-| PR | Effect | Kaynak (Shader Lab) | Notlar |
-|---|---|---|---|
-| F10.1 | `edge-detect` | `edge-detect-pass.ts` | Sobel / DoG; CPU/GPU pair |
-| F10.2 | `directional-blur` | `directional-blur-pass.ts` | F9.5 sonrası yön + uzunluk param'ı |
-| F10.3 | `smear` | `smear-pass.ts` | Trail benzeri; geçmiş frame buffer şart |
-| F10.4 | `displacement-map` | `displacement-map-pass.ts` | Bizdeki `displace` node'unu zenginleştir (xy ayrı strength, channel select) |
-| F10.5 | `slice` | `slice-pass.ts` | Yatay/dikey rastgele kaydırma; klasik glitch |
-| F10.6 | `ink` | `ink-pass.ts` | Adaptive threshold + dilation; mürekkep efekti |
-| F10.7 | `plotter` | `plotter-pass.ts` | Çizgi-temelli render; saturasyon zayıf alanlarda boş bırakır |
-| F10.8 | `magnify-lens` | `magnify-lens-pass.ts` | Lens distortion + zoom region; bizim lens-distort üstüne genişletilebilir |
-| F10.9 | `circuit-bent` | `circuit-bent-pass.ts` | Yarı rastgele renk swap + glitch; analog'un kuzeni |
-| F10.10 | `pixel-trail` | `pixel-trail-pass.ts` | Smear ile aynı geçmiş buffer altyapısı |
-| F10.11 | `voxel` | `voxel-pass.ts` | Quantize edilmiş 3D blok görünümü (heavy; opsiyonel) |
-| F10.12 | `particle-grid` | `particle-grid-pass.ts` | Cell merkezleri parçacık konumları (depth gerekirse) |
-| F10.13 | `text` (source layer) | `text-pass.ts` | Canvas2D ile yazı texture'ı; mesh-gradient gibi source |
+Kullanıcı feedback'i (2026-05-12): "playerin baştan aşağı değişmesi lazım",
+"timelineın tipini çok seviyorum, olabildiğince kopyalayabilir miyiz".
+Shader-lab'in unified floating panel'i (transport + ruler + per-property
+track + per-keyframe bezier editor + multi-select + clipboard) bizim ayrı
+player card + properties paneli + zayıf transport satırı kombinasyonundan
+çok daha sağlam. **Bu faz mevcut player.js + properties paneli + timeline
+view'ını tek floating overlay altında yeniden inşa eder.**
 
-Halftone enrichment ayrıca:
+### F10.1 — Schema: per-keyframe bezier easing + step
+| Kapsam | Notlar |
+|---|---|
+| `KeyframeEasing = { type: "bezier"; controlPoints: [x1,y1,x2,y2] } \| { type: "step" }` | Mevcut `interpolation` string'ini bezier'a migrate eden `migrateInterpolationToEasing` |
+| 18 preset (Linear, Smooth, Quick Out, Anticipate, Back In/Out, …) | Shader-lab'in `EASING_PRESETS` listesini aynen al |
+| `evaluateTrack` cubic-bezier sampler (Newton iteration) | shader-lab'in `easings.ts` örneği baz alınır |
 
-| PR | Kapsam | Notlar |
-|---|---|---|
-| F10.14 | `halftone` → `dotMin`, `softness` (AA), `contrast`, custom 4-color palette, subtractive/overprint CMYK toggle | Mevcut shader üstüne |
+### F10.2 — Unified floating overlay (transport şeridi)
+| Kapsam | Notlar |
+|---|---|
+| Player card + timeline panel + properties bölmeleri kaldırılır; tek floating panel gelir | `editor-timeline-overlay.tsx` paterni — collapsed (~580×46) + expanded (~820×380) iki mod |
+| Transport row: Play/Pause • Stop • Loop • Auto-Key • Dur [num] sec • time/total readout • expand/collapse caret | `IconButton` + vertical divider çubukları |
+| Mevcut autokey/loop pill'leri elenir; minimal icon toggle'lar yerine geçer (kullanıcının "sevmedim" feedback'i) | Active state için subtle accent background |
+| Klavye kısayolları: Space (play/pause), L (loop toggle), K (auto-key toggle), Home/End | shader-lab'da yok ama yapmamız mantıklı |
 
----
+### F10.3 — Adaptive ruler + playhead
+| Kapsam | Notlar |
+|---|---|
+| Major/minor tick step'leri duration'a bağlı (`getMajorTickStep(duration)`) | duration ≤ 6s → 1s, ≤ 12s → 2s, ≤ 30s → 5s, … |
+| Major tick'lerde saniye etiketi, minor tick'lerde küçük dik çizgi | Mono font readout |
+| Playhead drag (pointer capture; pause sırasında) | Drag esnasında numeric tooltip |
 
-## 3. F11 — Timeline & easing parity
+### F10.4 — Property tracks (otomatik liste)
+| Kapsam | Notlar |
+|---|---|
+| Seçili node için: önce 3 layer-level property (opacity/hue/saturation) — color-coded; sonra `visible params` (parameter-schema'ya göre filtreli) | shader-lab'in `buildTimelineProperties` paterni |
+| Color coding: opacity #8DB1FF, hue #A4E0A0, saturation #F7B365, color params #FF8CAB, diğer #B697FF | Direkt al |
+| Per-track satır: solda label + diamond keyframe ikonu (toggle key at current time) + sağda track lane | `data-track-id` |
+| Track enable/disable (göz ikonu) — track silmeden geçici devre dışı bırakma | Mevcut tek bayrak `enabled` |
 
-Onların animasyon hissi bizden daha "filmsel"; çünkü per-keyframe bezier
-easing ve `step` (hold) seçeneği var. Mevcut sistemimizde easing alan var ama
-preset/UI eksik.
+### F10.5 — Keyframe operasyonları
+| Kapsam | Notlar |
+|---|---|
+| Tek keyframe drag (pointer capture, snap-to-frame opsiyonu) | Mevcut `snapTimeToFrame` |
+| Marquee selection (rectangle select) | shader-lab'in `DragState.type === "marquee"` paterni |
+| Multi-select (Shift-click toggle, Cmd/Ctrl-click extend) | `selectedKeyframeIds` mevcut, UI bağla |
+| Arrow nudge: ←/→ = 1/60s, Shift+←/→ = 10/60s | `SMALL_NUDGE_TIME` / `LARGE_NUDGE_TIME` |
+| Delete: seçili keyframe'ler tek aksiyonda silinir | Undo entry tek olur |
+| Clipboard: Cmd/Ctrl+C kopyalar, Cmd/Ctrl+V playhead'e relative paste | `TimelineKeyframeClipboard` module-level var pattern'i — basit ama yeterli |
 
-| PR | Kapsam | Notlar |
-|---|---|---|
-| F11.1 | `KeyframeEasing` schema: `{ type: "bezier"; controlPoints: [x1,y1,x2,y2] }` veya `{ type: "step" }` | Eski `interpolation` string'i migrate (`linear → bezier [0,0,1,1]` vs.) |
-| F11.2 | 18 preset (Linear, Smooth, Quick Out, Anticipate, Back In/Out, …) inspector dropdown'ı | `EASING_PRESETS` adapt edilir |
-| F11.3 | Inspector'da per-keyframe easing düzenleyici (mini bezier curve picker) | F5.1'deki curve primitive yeniden kullanılabilir |
-| F11.4 | Color value tweening (hex'i RGB'e çevirip lerp; vec2/vec3 component-wise) | `evaluateTrack` zaten parça parça çalışıyor, eksik branch'ları ekle |
-| F11.5 | Property bindings: `visible`, `opacity`, `hue`, `saturation` per-layer animatable | Mesh-gradient stops dahil; F8.4 timeline ayrımı sürdürülür |
-| F11.6 | Timeline clipboard: keyframe copy/paste (relative time preservation) | Multi-select keyframe operations |
+### F10.6 — Per-keyframe inline bezier editor (popover)
+| Kapsam | Notlar |
+|---|---|
+| Keyframe seçildiğinde sağ-alt köşede curve editor popover butonu | `CurveEditorPopover` |
+| Popover içinde: cubic bezier görselleştirme + preset listesi + manuel control point drag (4 nokta) + Step toggle | F5.1 curve primitive yeniden kullanılabilir |
+| Easing değişikliği tek undo entry'sine düşer | Live preview drag esnasında |
 
----
+### F10.7 — Color/vec interpolation parity
+| Kapsam | Notlar |
+|---|---|
+| Hex string'ler RGB'ye lerp + tekrar hex (`parseHexColor` + `rgbToHex`) | shader-lab'in `interpolateValue` switch'i |
+| vec2/vec3 component-wise lerp | Mesh-gradient stops dahil (ileri faz) |
+| Boolean: step (cross >0.5 noktasında flip) | Mevcut |
 
-## 4. F12 — Layer / composite system parity
+### F10.8 — Mobile-friendly layout (opsiyonel)
+| Kapsam | Notlar |
+|---|---|
+| Dar viewport'ta (≤ 720px) timeline overlay tam-genişlik dock'a düşer | shader-lab'in `mobile-editor-dock.tsx` paterni; Tauri dev mode için low-priority |
 
-Onların layer modeli bizim node graph'tan farklı (linear stack), ama bazı
-konseptler graph'a uyarlanabilir:
-
-| PR | Kapsam | Notlar |
-|---|---|---|
-| F12.1 | 16 blend mode katalogu (normal, multiply, screen, overlay, darken, lighten, color-dodge/burn, hard/soft-light, difference, exclusion, hue, saturation, color, luminosity) | `mix` node'unda + `viewer-output` üstünde blend selector |
-| F12.2 | Mask config: source (luma/alpha/R/G/B), mode (multiply/stencil), invert | `mask-apply` node'una zenginleştirme |
-| F12.3 | Layer compositeMode "filter" vs "mask" semantiği | Group node parite (F6.4 olarak ayrıca; bkz. node_gelisme.md) |
-| F12.4 | Scene-wide post-process: master color curves (R/G/B + master) + clamp gamma + opsiyonel color map LUT | `viewer-output`'tan önce uygulanan global node |
-
----
-
-## 5. F13 — Export pipeline (WebCodecs alternatifi)
-
-Mevcut FFmpeg sidecar'ı kalır (gerçek codec desteği güçlü); ancak WebCodecs
-yolu hızlı preview-quality export için cazip. İkili strateji önerilir:
-
-| PR | Kapsam | Notlar |
-|---|---|---|
-| F13.1 | Export quality preset'leri: draft 1280, standard 1920, high 3840, ultra 7680 long-edge | UI dropdown + Tauri sidecar args |
-| F13.2 | Aspect preset'leri: 16:9, 1:1, 4:5, 9:16, original | Crop math `composition.ts` örnek alınır |
-| F13.3 | Still image export PNG/JPG quality slider | Mevcut snapshot path'i polish |
-| F13.4 | (Opsiyonel) WebCodecs preview-export hattı (mp4/webm), fallback FFmpeg | F8.5 worker entegrasyonu ile uyumlu |
-| F13.5 | Export progress UI parity: phase ("preparing", "encoding"), ETA, cancel | Mevcut export sheet üstüne |
-
----
-
-## 6. F14 — Stretch (custom-shader + procedural sources + fluid)
-
-| PR | Kapsam | Notlar |
-|---|---|---|
-| F14.1 | `custom-shader` node type: kullanıcı GLSL fragment'ı yapıştırır, uniform UI auto-generated | `parameter-schema.ts` paterni; safety: compile error inline gösterimi |
-| F14.2 | `gradient` procedural source (mesh-gradient'in yanı sıra linear/radial/conic) | Üç ayrı shader |
-| F14.3 | Fluid simulation source (`fluid-pass.ts` veya benzeri stable-fluid impl) | Heavy; opsiyonel |
-| F14.4 | Audio-reactive parametre bindings | shader-lab'ın audio store/patches'ten ilham; param'a "audio amplitude" / "audio band" source ekle |
+**Kabul kriterleri:**
+1. Mevcut player card + properties + ayrı timeline panel kalkar; tek floating overlay'e iner.
+2. Collapsed mod tek satır transport + readout; expanded mod tam timeline.
+3. Per-keyframe bezier easing düzenlenebilir; 18 preset listesi var.
+4. Multi-select keyframe drag + delete + clipboard tek-aksiyon undo.
+5. Klavye nudge çalışır.
+6. Color/vec animasyonu doğru lerp eder.
 
 ---
 
-## 7. Bizim öne çıktığımız alanlar (regression yapmadan koruyalım)
+## 3. F11 — Composite & scene grading parity
+
+Onların `pass-node` mimarisi her layer'a 16 blend mode + mask config + per-layer
+hue/saturation/opacity veriyor; bizim mix node'umuz sınırlı, scene-wide grading
+yok. Bu faz graph editor üzerinde küçük PR'larla parite alır.
+
+| PR | Kapsam | Notlar |
+|---|---|---|
+| F11.1 | 16 blend mode katalogu (normal, multiply, screen, overlay, darken, lighten, color-dodge/burn, hard/soft-light, difference, exclusion, hue, saturation, color, luminosity) | `mix` node'unda + opsiyonel olarak `viewer-output` üstünde blend selector. CPU + GPU pair |
+| F11.2 | Mask config zenginleştirme: source (luma/alpha/R/G/B), mode (multiply/stencil), invert | `mask-apply` node'una param ekleme |
+| F11.3 | Scene-wide post-process node: master color curves (R/G/B + master) + clamp gamma + opsiyonel color-map LUT | `viewer-output`'tan önce uygulanan global node; F5.2 rgb-curves altyapısı + F1.2 gradient LUT helper'ı yeniden kullanılır |
+| F11.4 | Layer-level color adjustments (per-node hue/saturation/opacity bayrakları) | Property tracks'in (F10.4) animasyon hedefi olur |
+
+---
+
+## 4. F12 — Export polish
+
+Mevcut FFmpeg sidecar'ı kalır (production-grade codec desteği güçlü); ancak
+quality/aspect preset'leri ve UI polish UX'i ciddi iyileştirir.
+
+| PR | Kapsam | Notlar |
+|---|---|---|
+| F12.1 | Quality preset'leri: draft 1280, standard 1920, high 3840, ultra 7680 long-edge | shader-lab'in `EXPORT_QUALITY_LONG_EDGE` listesi |
+| F12.2 | Aspect preset'leri: 16:9, 1:1, 4:5, 9:16, original (+ custom WxH) | Crop math `composition.ts` örnek alınır |
+| F12.3 | Still image export: PNG/JPG seçici + JPG quality slider | Mevcut snapshot path'i polish |
+| F12.4 | Export progress UI: phase ("preparing", "encoding"), ETA, cancel button | Mevcut export sheet üstüne |
+| F12.5 | (Opsiyonel) WebCodecs preview-export hattı — küçük dosya / hızlı preview için, fallback FFmpeg | F8.5 worker entegrasyonu uyumlu; production export için FFmpeg sidecar kalır |
+
+---
+
+## 5. F13 — Stretch (custom-shader + procedural sources)
+
+| PR | Kapsam | Notlar |
+|---|---|---|
+| F13.1 | `gradient` procedural source (mesh-gradient'in yanı sıra linear/radial/conic) | Üç ayrı shader; param schema benzer |
+| F13.2 | (Opsiyonel) `custom-shader` node type: kullanıcı GLSL fragment'ı yapıştırır, uniform UI auto-generated | `parameter-schema.ts` paterni; safety: compile error inline gösterimi. Advanced — son sırada |
+| F13.3 | (Opsiyonel) Fluid simulation source | Heavy; gerçekten ihtiyaç olursa |
+
+**Kapsam dışı bırakılanlar (kullanıcı kararı):** audio-reactive bindings.
+
+---
+
+## 6. Bizim öne çıktığımız alanlar (regression yapmadan koruyalım)
 
 * **Dithering catalog (27 algoritma + palette sistemi)** — shader-lab'da yok.
 * **Image-sequence + EXR workflow** — shader-lab pure web; bizde local-first Tauri.
@@ -151,31 +194,28 @@ yolumuzu güçlendirmek" üzerinedir.
 
 ---
 
-## 8. Önerilen sıra ve neden
+## 7. Önerilen sıra ve neden
 
-1. **F9 önce** — Bloom ring fix, blur perf, glow türevleri hep aynı altyapı
-   eksikliğinden. Multi-pass FBO altyapısını yazdığımızda 5+ effect aynı anda
-   düzelir.
-2. **F10 sonra** — F9'un üstüne effect port'ları (yeni efektler ekstra
-   altyapıyı zaten F9'da hazırlamış olacağız).
-3. **F11 paralel** — Timeline parity F9/F10'a paralel ilerletilebilir; UI work
-   ayrı dosyalarda, çakışma riski düşük.
-4. **F12** — Blend modes + mask polish; graph editor üzerinde küçük PR'lar.
-5. **F13** — Export polish.
-6. **F14** — Stretch / araştırma fazı; product mature olunca.
+1. **F9 önce — kalite/performans** (kullanıcı önceliği): Bloom ring fix, blur
+   perf, glow türevleri hep aynı altyapı eksikliğinden. Multi-pass FBO
+   altyapısını yazdığımızda 5+ effect aynı anda düzelir.
+2. **F10 hemen sonra — UX**: Player+timeline yeniden tasarım. Kullanıcının
+   günlük temasına en görünür etkisi olan iş.
+3. **F11** — Composite/grading parite; graph editor üzerinde küçük PR'lar.
+4. **F12** — Export polish.
+5. **F13** — Stretch, opsiyonel.
 
-Tahmin: F9 ≈ 2-3 hafta, F10 ≈ 3-4 hafta (effect başına ortalama 1-2 gün),
-F11 ≈ 1 hafta, F12 ≈ 1 hafta, F13 ≈ 1 hafta, F14 ≈ açık uçlu. Total ≈ 8-10
-hafta tek dev.
+Tahmin: F9 ≈ 2-3 hafta, F10 ≈ 2-3 hafta (UX-ağırlıklı), F11 ≈ 1 hafta,
+F12 ≈ 1 hafta, F13 açık uçlu. Total ≈ 6-8 hafta tek dev.
 
 ---
 
-## 9. Açık kararlar (kullanıcı tarafında)
+## 8. Açık kararlar (kullanıcı tarafında)
 
-* **WebCodecs hattı kurulsun mu**, yoksa FFmpeg sidecar tek hat mı kalsın? (web
-  preview yoksa WebCodecs gereksiz.)
-* **Custom-shader node** kullanıcı API'sine girer mi? (advanced; ileri tarihe
-  bırakılabilir.)
-* **Fluid simulation** ihtiyacı var mı? (Effect Lab değiliz; opsiyonel.)
-* **HDR (RGBA16F) RT** ne zaman? F9.6 opsiyonel olarak işaretli; bloom'u
+* **WebCodecs hattı kurulsun mu** (F12.5), yoksa FFmpeg sidecar tek hat mı
+  kalsın? Bizim hedef Tauri desktop olduğu için FFmpeg yeterli olabilir;
+  WebCodecs daha çok web ön-izleme için anlamlı.
+* **HDR (RGBA16F) RT** (F9.6) ne zaman? F9'un içinde opsiyonel; bloom'u
   iyileştirmek için 8-bit RT'ler bile yeterli olabilir.
+* **Custom-shader user-API'si** (F13.2) güvenlik + compile error UX'i nedeniyle
+  ileri tarihe bırakılabilir.
