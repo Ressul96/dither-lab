@@ -2598,13 +2598,19 @@ function onInspectorPointerDown(event) {
   if (handle) {
     activeIndex = Number(handle.dataset.curveHandle);
   } else {
+    // Empty-area click: drop a new point and keep the pointer "live" so the
+    // user can fine-tune it without releasing. indexOf works because the
+    // pushed cursor object survives the sort by reference, and the runtime
+    // preserves x-order through sanitizeCurvePoints on later reads.
     const cursor = toCurve(event.clientX, event.clientY);
     points.push(cursor);
     points.sort((a, b) => a.x - b.x);
+    activeIndex = points.indexOf(cursor);
     updateNodeParams(node.id, { [target.paramKey]: points });
     renderInspector();
-    return;
   }
+
+  if (!Number.isFinite(activeIndex) || activeIndex < 0) return;
 
   inspectorEditing = true;
   try {
