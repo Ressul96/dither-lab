@@ -866,19 +866,45 @@ function startSocketDrag(e, socketEl) {
     ghost.remove();
 
     const target = findSocketAt(ev.clientX, ev.clientY, fromKind);
-    if (!target) return;
-    if (target.kind === fromKind) return;
+    if (target) {
+      if (target.kind === fromKind) return;
+      if (fromKind === "output") {
+        addEdge(fromNodeId, fromSocketName, target.nodeId, target.socketName);
+      } else {
+        addEdge(target.nodeId, target.socketName, fromNodeId, fromSocketName);
+      }
+      return;
+    }
 
-    if (fromKind === "output") {
-      addEdge(fromNodeId, fromSocketName, target.nodeId, target.socketName);
-    } else {
-      addEdge(target.nodeId, target.socketName, fromNodeId, fromSocketName);
+    // Fallback: pointer landed on a node body, not a specific socket. Try the
+    // node's sockets in declaration order so dropping anywhere on the node
+    // wires up to its first compatible pin — addEdge already validates type
+    // compatibility, so we just walk until one sticks.
+    const targetNodeId = findNodeAt(ev.clientX, ev.clientY);
+    if (!targetNodeId || targetNodeId === fromNodeId) return;
+    const targetNode = getNodeById(targetNodeId);
+    if (!targetNode) return;
+    const candidates = fromKind === "output" ? targetNode.inputs : targetNode.outputs;
+    for (const socket of candidates ?? []) {
+      const ok = fromKind === "output"
+        ? addEdge(fromNodeId, fromSocketName, targetNodeId, socket.name)
+        : addEdge(targetNodeId, socket.name, fromNodeId, fromSocketName);
+      if (ok) return;
     }
   };
 
   document.addEventListener("pointermove", onMove);
   document.addEventListener("pointerup", onUp);
   document.addEventListener("pointercancel", onUp);
+}
+
+function findNodeAt(clientX, clientY) {
+  const stack = document.elementsFromPoint(clientX, clientY);
+  for (const el of stack) {
+    const node = el.closest?.("[data-node-id]");
+    if (node && nodesEl?.contains(node)) return node.dataset.nodeId;
+  }
+  return null;
 }
 
 function findSocketAt(clientX, clientY, fromKind = "") {
