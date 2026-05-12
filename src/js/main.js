@@ -3,8 +3,11 @@ import { initGraphShell } from "./ui/graph-shell.js";
 import {
   initPlayer,
   goToLastFrame,
+  copySelectedKeyframes,
   deleteSelectedKeyframes,
   duplicateSelectedKeyframes,
+  nudgeSelectedKeyframes,
+  pasteKeyframesAtPlayhead,
 } from "./ui/player.js";
 import { initStage, resetZoom, togglePixelInspector } from "./ui/stage.js";
 import { newProject, openProject, saveProject, saveProjectAs } from "./project.js";
@@ -108,11 +111,18 @@ function initKeyboard() {
         break;
       case "ArrowLeft":
         e.preventDefault();
-        stepFrame(e.shiftKey ? -FRAME_BIG_STEP : -1);
+        // Selection wins: arrows nudge the selected keyframes by 1 frame
+        // (Shift = 10). With no selection, fall through to playhead stepping
+        // so users without active keyframes still get the AE-style scrub.
+        if (!nudgeSelectedKeyframes(-1, e.shiftKey)) {
+          stepFrame(e.shiftKey ? -FRAME_BIG_STEP : -1);
+        }
         break;
       case "ArrowRight":
         e.preventDefault();
-        stepFrame(e.shiftKey ? FRAME_BIG_STEP : 1);
+        if (!nudgeSelectedKeyframes(1, e.shiftKey)) {
+          stepFrame(e.shiftKey ? FRAME_BIG_STEP : 1);
+        }
         break;
       case "Home":
         e.preventDefault();
@@ -153,6 +163,21 @@ function initKeyboard() {
         if (meta) {
           e.preventDefault();
           duplicateSelectedKeyframes();
+        }
+        break;
+      case "c":
+      case "C":
+        // Only swallow Cmd+C when we actually copied keyframes. If nothing
+        // is selected, let the browser's native copy handler take over so
+        // users can still copy text from labels or the dev console.
+        if (meta && !e.shiftKey && !e.altKey && copySelectedKeyframes()) {
+          e.preventDefault();
+        }
+        break;
+      case "v":
+      case "V":
+        if (meta && !e.shiftKey && !e.altKey && pasteKeyframesAtPlayhead()) {
+          e.preventDefault();
         }
         break;
     }

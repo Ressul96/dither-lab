@@ -28,7 +28,9 @@ import {
   getTimelineTrackValue,
   hasTimelineKeyframeAtCurrentTime,
   moveTimelineKeyframe,
+  moveTimelineKeyframes,
   normalizeTimeline,
+  pasteTimelineKeyframes,
   removeTimelineKeyframeById,
   setDurationUnit,
   setSelectedProperty,
@@ -38,6 +40,7 @@ import {
   setTimelineAutokey,
   setViewMode,
   snapTimeToFrame,
+  snapshotTimelineKeyframes,
   timeToFrame,
   timelineFrameRate,
   toggleTimelineKeyframeAtCurrentTime,
@@ -1733,7 +1736,7 @@ function onAnimationTimelinePointerDown(event) {
   // Pointerdown selection rules:
   //   - shift / cmd / ctrl: toggle this keyframe in/out of the set
   //   - otherwise, if it's already selected (multi-drag scenario), keep
-  //     the existing set; the drag will only move the picked one for now
+  //     the existing set so the whole selection drags as a chord
   //   - plain click on an unselected keyframe: replace selection with it
   if (event.shiftKey || event.metaKey || event.ctrlKey) {
     toggleKeyframeSelection(picked.trackId, picked.keyframeId);
@@ -1746,6 +1749,29 @@ function onAnimationTimelinePointerDown(event) {
   const selected = getSelectedTimelineKeyframe(normalized);
   if (!selected) return;
 
+  // Snapshot every selected keyframe's starting time so the drag can apply a
+  // single delta across the chord. Falls back to just the picked one when the
+  // multi-set is empty (defensive — shouldn't happen because we just selected
+  // it, but keeps the single-drag path identical to before).
+  const selectionSnapshot = [];
+  for (const key of selectedKeyframes) {
+    const { trackId: sTrackId, keyframeId: sKeyframeId } = parseSelectionKey(key);
+    const found = getTimelineKeyframe(normalized, sTrackId, sKeyframeId);
+    if (!found) continue;
+    selectionSnapshot.push({
+      trackId: sTrackId,
+      keyframeId: sKeyframeId,
+      originalTime: found.keyframe.time,
+    });
+  }
+  if (selectionSnapshot.length === 0) {
+    selectionSnapshot.push({
+      trackId: selected.track.id,
+      keyframeId: selected.keyframe.id,
+      originalTime: selected.keyframe.time,
+    });
+  }
+
   keyframeDrag = {
     trackId: selected.track.id,
     keyframeId: selected.keyframe.id,
@@ -1754,6 +1780,8 @@ function onAnimationTimelinePointerDown(event) {
     fps,
     laneRect: lane.getBoundingClientRect(),
     moved: false,
+    pickedOriginalTime: selected.keyframe.time,
+    selectionSnapshot,
   };
 
   document.body.classList.add("dragging-keyframe");
@@ -1775,15 +1803,25 @@ function onAnimationTimelinePointerMove(event) {
     1
   );
   const time = snapTimeToFrame(ratio * keyframeDrag.duration, keyframeDrag.fps);
+  const delta = time - keyframeDrag.pickedOriginalTime;
   const { timeline } = getState();
-  dispatch(
-    "timeline",
-    moveTimelineKeyframe(timeline, {
-      trackId: keyframeDrag.trackId,
-      keyframeId: keyframeDrag.keyframeId,
-      time,
-    })
-  );
+  if (keyframeDrag.selectionSnapshot.length > 1) {
+    const moves = keyframeDrag.selectionSnapshot.map((item) => ({
+      trackId: item.trackId,
+      keyframeId: item.keyframeId,
+      time: Math.max(0, item.originalTime + delta),
+    }));
+    dispatch("timeline", moveTimelineKeyframes(timeline, moves));
+  } else {
+    dispatch(
+      "timeline",
+      moveTimelineKeyframe(timeline, {
+        trackId: keyframeDrag.trackId,
+        keyframeId: keyframeDrag.keyframeId,
+        time,
+      })
+    );
+  }
   seek(time);
 }
 
@@ -2234,6 +2272,88 @@ export function duplicateSelectedKeyframes() {
   // Reroute the multi-select to the new keyframes BEFORE dispatching, since
   // dispatch synchronously triggers renderAnimationTimeline which reads
   // isKeyframeSelected.
+  selectedKeyframes.clear();
+  for (const { trackId, keyframeId } of newKeys) {
+    selectedKeyframes.add(selectionKey(trackId, keyframeId));
+  }
+  selectedTimelineKeyframe = newKeys[newKeys.length - 1];
+  dispatch("timeline", next);
+  return true;
+}
+
+// Module-level clipboard (shader-lab pattern). Holds the last copied snapshot
+// so paste can repeat across multiple presses without re-copying. Persists for
+// the session — cleared only when overwritten by another copy.
+let timelineKeyframeClipboard = [];
+
+// Nudge every selected keyframe by `direction` (+1 or -1) frame units. With
+// `big`, the step jumps to 10 frames — same scale shader-lab's SMALL/LARGE
+// nudge uses, anchored to the timeline's fps so the result is always a clean
+// integer-frame shift. Returns true when something moved so the caller can
+// fall back to playhead-step when no selection exists.
+export function nudgeSelectedKeyframes(direction, big = false) {
+  if (selectedKeyframes.size === 0) return false;
+  const sign = direction < 0 ? -1 : 1;
+  const { timeline, source } = getState();
+  const normalized = normalizeTimeline(timeline, {
+    duration: source.duration,
+    fps: source.fps,
+  });
+  const fps = normalized.fps;
+  const dt = (sign * (big ? 10 : 1)) / fps;
+  const moves = [];
+  for (const key of selectedKeyframes) {
+    const { trackId, keyframeId } = parseSelectionKey(key);
+    const found = getTimelineKeyframe(normalized, trackId, keyframeId);
+    if (!found) continue;
+    moves.push({
+      trackId,
+      keyframeId,
+      time: Math.max(0, found.keyframe.time + dt),
+    });
+  }
+  if (moves.length === 0) return false;
+  dispatch("timeline", moveTimelineKeyframes(timeline, moves));
+  return true;
+}
+
+// Capture the current multi-selection into the module-level clipboard. Stores
+// the keyframes' full value/easing/tangent payload so paste survives even if
+// the originals get moved or deleted between Cmd+C and Cmd+V. Returns true
+// when at least one keyframe was captured.
+export function copySelectedKeyframes() {
+  if (selectedKeyframes.size === 0) return false;
+  const items = [...selectedKeyframes].map(parseSelectionKey);
+  const snapshot = snapshotTimelineKeyframes(getState().timeline, items);
+  if (snapshot.length === 0) return false;
+  timelineKeyframeClipboard = snapshot;
+  return true;
+}
+
+// Paste the clipboard at the current playhead. Earliest clipboard time lands
+// on the playhead frame; the remaining items preserve their relative offsets
+// (so a 0.5s gap between two copied keyframes stays a 0.5s gap when pasted).
+// Reroutes the multi-selection onto the freshly created keyframes — same UX
+// as duplicate, so the user can immediately drag/nudge what they just pasted.
+export function pasteKeyframesAtPlayhead() {
+  if (!Array.isArray(timelineKeyframeClipboard) || timelineKeyframeClipboard.length === 0) {
+    return false;
+  }
+  const { timeline, playback, source } = getState();
+  const normalized = normalizeTimeline(timeline, {
+    duration: source.duration,
+    fps: source.fps,
+  });
+  const targetTime = snapTimeToFrame(
+    Math.max(0, Number(playback.currentTime) || 0),
+    normalized.fps
+  );
+  const { timeline: next, newKeys } = pasteTimelineKeyframes(
+    timeline,
+    timelineKeyframeClipboard,
+    targetTime
+  );
+  if (newKeys.length === 0) return false;
   selectedKeyframes.clear();
   for (const { trackId, keyframeId } of newKeys) {
     selectedKeyframes.add(selectionKey(trackId, keyframeId));

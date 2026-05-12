@@ -623,6 +623,39 @@ export function moveTimelineKeyframe(timeline, { trackId, keyframeId, time }) {
   return changed ? normalizeTimeline({ ...normalized, tracks: nextTracks }) : normalized;
 }
 
+/**
+ * Batch counterpart of `moveTimelineKeyframe`. Applies every `(trackId,
+ * keyframeId) -> time` move against a single normalized timeline so callers
+ * can shift the entire multi-selection in one pass without re-normalising per
+ * keyframe. Each new time is clamped to duration and snapped to the frame
+ * grid, matching the single-move behaviour.
+ */
+export function moveTimelineKeyframes(timeline, items) {
+  const normalized = normalizeTimeline(timeline);
+  if (!Array.isArray(items) || items.length === 0) return normalized;
+  const duration = normalized.duration > 0 ? normalized.duration : Infinity;
+  const targets = new Map();
+  for (const item of items) {
+    if (!item?.trackId || !item?.keyframeId) continue;
+    const nextTime = Math.min(duration, snapTimeToFrame(item.time, normalized.fps));
+    if (!targets.has(item.trackId)) targets.set(item.trackId, new Map());
+    targets.get(item.trackId).set(item.keyframeId, nextTime);
+  }
+  if (targets.size === 0) return normalized;
+  let changed = false;
+  const nextTracks = normalized.tracks.map((track) => {
+    const updates = targets.get(track.id);
+    if (!updates) return track;
+    const keyframes = track.keyframes.map((keyframe) => {
+      if (!updates.has(keyframe.id)) return keyframe;
+      changed = true;
+      return { ...keyframe, time: updates.get(keyframe.id) };
+    });
+    return { ...track, keyframes: sortKeyframes(keyframes) };
+  });
+  return changed ? normalizeTimeline({ ...normalized, tracks: nextTracks }) : normalized;
+}
+
 export function updateTimelineKeyframe(timeline, { trackId, keyframeId, patch }) {
   const normalized = normalizeTimeline(timeline);
   let changed = false;
@@ -706,6 +739,82 @@ export function duplicateTimelineKeyframes(timeline, items) {
     newKeys.push({ trackId: track.id, keyframeId });
   }
 
+  return { timeline: next, newKeys };
+}
+
+/**
+ * Snapshot a list of timeline keyframes for the clipboard. Returns plain
+ * value objects (binding clones, deep-cloned values, easing copies) that are
+ * decoupled from the live timeline, so the original keyframes can be moved
+ * or deleted without disturbing the captured set. `items` is the same
+ * `{ trackId, keyframeId }` shape the multi-selection state uses.
+ */
+export function snapshotTimelineKeyframes(timeline, items) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const normalized = normalizeTimeline(timeline);
+  const snapshots = [];
+  for (const item of items) {
+    const found = getTimelineKeyframe(normalized, item?.trackId, item?.keyframeId);
+    if (!found) continue;
+    snapshots.push({
+      nodeId: found.track.nodeId,
+      binding: { ...found.track.binding },
+      time: found.keyframe.time,
+      value: clone(found.keyframe.value),
+      easing: cloneEasing(found.keyframe.easing),
+      interpolation: found.keyframe.interpolation,
+      inTangent: found.keyframe.inTangent ? { ...found.keyframe.inTangent } : null,
+      outTangent: found.keyframe.outTangent ? { ...found.keyframe.outTangent } : null,
+    });
+  }
+  return snapshots;
+}
+
+/**
+ * Paste a clipboard snapshot at `targetTime`. The earliest item lands on
+ * `targetTime`; the rest preserve their relative offsets — so copying a chord
+ * of keyframes around frame 90 and pasting at frame 30 keeps their spacing.
+ * Reuses `setTimelineKeyframe` + `updateTimelineKeyframe` so easing/tangents
+ * survive the round-trip identically to `duplicateTimelineKeyframes`.
+ */
+export function pasteTimelineKeyframes(timeline, items, targetTime) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return { timeline: normalizeTimeline(timeline), newKeys: [] };
+  }
+  let next = normalizeTimeline(timeline);
+  let earliest = Infinity;
+  for (const item of items) {
+    if (Number.isFinite(item?.time)) earliest = Math.min(earliest, item.time);
+  }
+  if (!Number.isFinite(earliest)) {
+    return { timeline: next, newKeys: [] };
+  }
+  const base = snapTimeToFrame(Math.max(0, Number(targetTime) || 0), next.fps);
+  const newKeys = [];
+  for (const item of items) {
+    if (!item?.nodeId || !item?.binding?.key) continue;
+    const offset = Number.isFinite(item.time) ? item.time - earliest : 0;
+    const nextTime = snapTimeToFrame(base + offset, next.fps);
+    next = setTimelineKeyframe(next, {
+      nodeId: item.nodeId,
+      binding: item.binding,
+      time: nextTime,
+      value: item.value,
+    });
+    const trackId = createTimelineTrackId(item.nodeId, item.binding);
+    const keyframeId = createKeyframeId(trackId, nextTime);
+    next = updateTimelineKeyframe(next, {
+      trackId,
+      keyframeId,
+      patch: {
+        easing: item.easing,
+        interpolation: item.interpolation,
+        inTangent: item.inTangent,
+        outTangent: item.outTangent,
+      },
+    });
+    newKeys.push({ trackId, keyframeId });
+  }
   return { timeline: next, newKeys };
 }
 

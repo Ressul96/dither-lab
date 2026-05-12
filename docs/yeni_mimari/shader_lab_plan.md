@@ -125,14 +125,23 @@ ve expand edilebilir lane ile aynı track id üzerinden çalışır.
 | Track enable/disable (göz ikonu) — track silmeden geçici devre dışı bırakma | Mevcut tek bayrak `enabled` |
 
 ### F10.5 — Keyframe operasyonları
+**Durum (2026-05-12): ✅ İndi.** Single + multi keyframe drag, marquee
+selection, shift/cmd multi-select, Delete, Cmd+D duplicate, ←/→ nudge
+(1 frame; Shift = 10 frame), ve Cmd+C/Cmd+V clipboard tamam. Multi-drag
+artık chord'u tek delta ile kaydırıyor; ok-tuşları seçim varsa keyframe'i
+nudgler, yoksa playhead step'e düşer; clipboard module-level
+`timelineKeyframeClipboard` üzerinden çalışır ve paste playhead'e en erken
+zamanı koyar — gerisi göreli offset'leri korur.
+
 | Kapsam | Notlar |
 |---|---|
 | Tek keyframe drag (pointer capture, snap-to-frame opsiyonu) | Mevcut `snapTimeToFrame` |
 | Marquee selection (rectangle select) | shader-lab'in `DragState.type === "marquee"` paterni |
 | Multi-select (Shift-click toggle, Cmd/Ctrl-click extend) | `selectedKeyframeIds` mevcut, UI bağla |
-| Arrow nudge: ←/→ = 1/60s, Shift+←/→ = 10/60s | `SMALL_NUDGE_TIME` / `LARGE_NUDGE_TIME` |
-| Delete: seçili keyframe'ler tek aksiyonda silinir | Undo entry tek olur |
-| Clipboard: Cmd/Ctrl+C kopyalar, Cmd/Ctrl+V playhead'e relative paste | `TimelineKeyframeClipboard` module-level var pattern'i — basit ama yeterli |
+| Multi-select drag: chord tek delta ile birlikte hareket eder | `moveTimelineKeyframes` batch helper |
+| Arrow nudge: ←/→ = 1 frame, Shift+←/→ = 10 frame (fps-tabanlı) | `nudgeSelectedKeyframes` — selection yokken playhead step'e düşer |
+| Delete: seçili keyframe'ler tek aksiyonda silinir | Mevcut `deleteSelectedKeyframes` |
+| Clipboard: Cmd/Ctrl+C kopyalar, Cmd/Ctrl+V playhead'e relative paste | Module-level `timelineKeyframeClipboard` + `pasteTimelineKeyframes` helper'ı; en erken zamanlı item playhead frame'ine düşer |
 
 ### F10.6 — Per-keyframe inline bezier editor (popover)
 | Kapsam | Notlar |
