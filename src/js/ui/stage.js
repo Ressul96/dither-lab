@@ -73,12 +73,28 @@ function wireZoom(stage, outputs) {
   stage.addEventListener(
     "wheel",
     (e) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      e.preventDefault();
-      const delta = -e.deltaY * 0.002;
+      if (e.ctrlKey || e.metaKey) {
+        // macOS trackpad pinch-to-zoom synthesises wheel+ctrlKey; same handler
+        // covers the explicit Cmd/Ctrl+scroll path.
+        e.preventDefault();
+        const delta = -e.deltaY * 0.002;
+        const { view } = getState();
+        const next = clamp(view.zoom * Math.exp(delta), 0.25, 8);
+        dispatch("view", { zoom: next, fit: false });
+        applyTransform(outputs);
+        return;
+      }
+      // Two-finger trackpad scroll → pan. Fit mode would render the pan
+      // invisible since the canvas is centred-and-scaled anyway, so the
+      // gesture is a no-op there to keep "Fit" feeling sticky.
       const { view } = getState();
-      const next = clamp(view.zoom * Math.exp(delta), 0.25, 8);
-      dispatch("view", { zoom: next, fit: false });
+      if (view.fit) return;
+      if (e.deltaX === 0 && e.deltaY === 0) return;
+      e.preventDefault();
+      dispatch("view", {
+        panX: view.panX - e.deltaX,
+        panY: view.panY - e.deltaY,
+      });
       applyTransform(outputs);
     },
     { passive: false }
