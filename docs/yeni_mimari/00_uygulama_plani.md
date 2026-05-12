@@ -157,7 +157,7 @@ sırasıyla.
 
 | PR | Kapsam | Durum |
 |---|---|---|
-| F8.0 | Ölçüm + feature flag (`workerRender: off / auto / on`) | ⬜ |
+| F8.0 | Ölçüm + feature flag (`workerRender: off / auto / on`) | ✅ |
 | F8.1 | Canvas factory | ⬜ |
 | F8.2 | `image-ops.js` pool taşıma | ⬜ |
 | F8.3 | `gpu-effects.js` Worker uyumu (ASCII atlas dahil) | ⬜ |
