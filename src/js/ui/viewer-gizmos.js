@@ -28,6 +28,7 @@ let ringGroup = null;
 let ringCenterHit = null;
 let ringEllipse = null;
 let ringRimHit = null;
+let meshStopsContainer = null;
 let activeTarget = null;
 let dragState = null;
 let resyncQueued = false;
@@ -40,7 +41,10 @@ export function initViewerGizmos() {
   pointGroup = createPointGroup();
   angleGroup = createAngleGroup();
   ringGroup = createRingGroup();
-  overlay.append(pointGroup, angleGroup, ringGroup);
+  meshStopsContainer = document.createElementNS(SVG_NS, "g");
+  meshStopsContainer.classList.add("viewer-mesh-stops-gizmo");
+  meshStopsContainer.style.display = "none";
+  overlay.append(pointGroup, angleGroup, ringGroup, meshStopsContainer);
 
   subscribe("graph", scheduleGizmoSync);
   subscribe("view", scheduleGizmoSync);
@@ -158,12 +162,104 @@ function syncGizmos() {
   if (target.kind === "point") syncPoint(node);
   else if (target.kind === "angle") syncAngle(node, target);
   else if (target.kind === "ring") syncRing(node, target);
+  else if (target.kind === "mesh-stops") syncMeshStops(node);
+}
+
+function syncMeshStops(node) {
+  const stops = Array.isArray(node.params?.stops) ? node.params.stops : [];
+  if (stops.length === 0) return;
+
+  // Reconcile the SVG children with the stop count — cheap diff so we don't
+  // rebuild the DOM each time the user nudges a slider.
+  while (meshStopsContainer.children.length < stops.length) {
+    meshStopsContainer.append(createMeshStopGroup());
+  }
+  while (meshStopsContainer.children.length > stops.length) {
+    meshStopsContainer.lastChild.remove();
+  }
+
+  meshStopsContainer.style.display = "";
+  for (let i = 0; i < stops.length; i++) {
+    const stopGroup = meshStopsContainer.children[i];
+    stopGroup.dataset.meshStopIndex = String(i);
+    positionMeshStopGroup(stopGroup, stops[i]);
+  }
+}
+
+function createMeshStopGroup() {
+  const group = document.createElementNS(SVG_NS, "g");
+  group.classList.add("viewer-mesh-stop");
+
+  const ellipse = document.createElementNS(SVG_NS, "ellipse");
+  ellipse.classList.add("viewer-mesh-stop__ring");
+  ellipse.setAttribute("cx", "0");
+  ellipse.setAttribute("cy", "0");
+
+  const centerHit = svgCircle(16, ["gizmo-handle", "viewer-mesh-stop__center-hit"]);
+  const centerDot = svgCircle(4.5, ["viewer-mesh-stop__center-dot"]);
+  const rimHit = svgCircle(16, ["gizmo-handle", "viewer-mesh-stop__rim-hit"]);
+  const rimDot = svgCircle(3.5, ["viewer-mesh-stop__rim-dot"]);
+
+  centerHit.addEventListener("pointerdown", onMeshStopCenterDown);
+  rimHit.addEventListener("pointerdown", onMeshStopRimDown);
+
+  group.append(ellipse, centerHit, centerDot, rimHit, rimDot);
+  return group;
+}
+
+function positionMeshStopGroup(group, stop) {
+  if (!outputCanvas || !outputCanvas.width || !outputCanvas.height) {
+    group.style.display = "none";
+    return;
+  }
+  const stopX = clamp(Number(stop.x ?? 0.5), 0, 1);
+  const stopY = clamp(Number(stop.y ?? 0.5), 0, 1);
+  const srcX = stopX * outputCanvas.width;
+  const srcY = stopY * outputCanvas.height;
+  const centerPt = sourceToOverlayPoint(srcX, srcY, outputCanvas);
+  if (!centerPt) {
+    group.style.display = "none";
+    return;
+  }
+  // Shader treats `radius` as a fraction of canvas height with aspect
+  // correction so spots stay circular. Match that exactly in the gizmo so
+  // the ring outlines the actual mask shape.
+  const radius = Math.max(0.02, Math.min(2, Number(stop.radius ?? 0.6)));
+  const srcRadius = radius * outputCanvas.height;
+  const refXPt = sourceToOverlayPoint(srcX + srcRadius, srcY, outputCanvas);
+  const refYPt = sourceToOverlayPoint(srcX, srcY + srcRadius, outputCanvas);
+  if (!refXPt || !refYPt) {
+    group.style.display = "none";
+    return;
+  }
+  const rxOverlay = Math.abs(refXPt.x - centerPt.x);
+  const ryOverlay = Math.abs(refYPt.y - centerPt.y);
+
+  group.style.display = "";
+  group.setAttribute("transform", `translate(${centerPt.x} ${centerPt.y})`);
+  const ellipse = group.querySelector(".viewer-mesh-stop__ring");
+  ellipse.setAttribute("rx", String(rxOverlay));
+  ellipse.setAttribute("ry", String(ryOverlay));
+
+  const centerDot = group.querySelector(".viewer-mesh-stop__center-dot");
+  centerDot.style.fill = String(stop.color ?? "#ffffff");
+  centerDot.style.stroke = "rgba(0, 0, 0, 0.7)";
+
+  // Rim handle: at the +x rim. Drag uses absolute distance from centre, so
+  // any direction works for the user — visual placement is just affordance.
+  const rimDot = group.querySelector(".viewer-mesh-stop__rim-dot");
+  const rimHit = group.querySelector(".viewer-mesh-stop__rim-hit");
+  for (const el of [rimDot, rimHit]) {
+    el.setAttribute("cx", String(rxOverlay));
+    el.setAttribute("cy", "0");
+  }
 }
 
 function hideAll() {
   if (pointGroup) pointGroup.style.display = "none";
   if (angleGroup) angleGroup.style.display = "none";
   if (ringGroup) ringGroup.style.display = "none";
+  if (meshStopsContainer) meshStopsContainer.style.display = "none";
 }
 
 function canDisplayGizmos() {
@@ -214,6 +310,8 @@ function resolveGizmoTarget(node) {
         paramAspect: "aspect",
         paramRotation: "rotation",
       };
+    case "mesh-gradient":
+      return { kind: "mesh-stops" };
     default:
       return null;
   }
@@ -336,11 +434,21 @@ function scheduleDragFlush() {
   requestAnimationFrame(() => {
     if (dragState !== local) return;
     local.flushQueued = false;
-    if (!local.pending) return;
-    const patch = local.pending;
-    local.pending = null;
-    commitParamPatch(local.nodeId, patch);
+    flushPendingPatch(local);
   });
+}
+
+function flushPendingPatch(local) {
+  if (!local || !local.pending) return;
+  const patch = local.pending;
+  local.pending = null;
+  // Gizmos that touch derived state (an array entry, a nested object) pass a
+  // custom `commit` callback; everything else updates a flat param patch.
+  if (typeof local.commit === "function") {
+    local.commit(local, patch);
+  } else {
+    commitParamPatch(local.nodeId, patch);
+  }
 }
 
 function onDragEnd(e) {
@@ -351,7 +459,7 @@ function onDragEnd(e) {
   dragState.handle.removeEventListener("pointermove", onDragMove);
   dragState.handle.removeEventListener("pointerup", onDragEnd);
   dragState.handle.removeEventListener("pointercancel", onDragEnd);
-  if (dragState.pending) commitParamPatch(dragState.nodeId, dragState.pending);
+  flushPendingPatch(dragState);
   if (dragState.groupEl) delete dragState.groupEl.dataset.dragging;
   document.body.classList.remove("dragging-gizmo");
   dragState = null;
@@ -518,6 +626,78 @@ function computeRingRimDrag(e, state) {
   if (denom <= 0) return null;
   const radiusPct = clamp(Math.abs(along / denom) * 100, 0, 100);
   return { [target.paramRadius]: radiusPct };
+}
+
+// ---------------------------------------------------------------------------
+// Mesh-gradient stops gizmo handlers
+// ---------------------------------------------------------------------------
+
+function onMeshStopCenterDown(e) {
+  if (!activeTarget || activeTarget.kind !== "mesh-stops") return;
+  const handle = e.currentTarget;
+  const stopGroup = handle.closest(".viewer-mesh-stop");
+  if (!stopGroup) return;
+  const stopIndex = Number(stopGroup.dataset.meshStopIndex);
+  if (!Number.isFinite(stopIndex)) return;
+  beginDrag(handle, e, {
+    nodeId: activeTarget.node.id,
+    groupEl: stopGroup,
+    stopIndex,
+    compute: computeMeshStopCenter,
+    commit: commitMeshStopPatch,
+  });
+}
+
+function computeMeshStopCenter(e, _state) {
+  const point = clientToSourcePoint(e.clientX, e.clientY, outputCanvas);
+  if (!point) return null;
+  return { x: point.nx / 100, y: point.ny / 100 };
+}
+
+function onMeshStopRimDown(e) {
+  if (!activeTarget || activeTarget.kind !== "mesh-stops") return;
+  const handle = e.currentTarget;
+  const stopGroup = handle.closest(".viewer-mesh-stop");
+  if (!stopGroup) return;
+  const stopIndex = Number(stopGroup.dataset.meshStopIndex);
+  if (!Number.isFinite(stopIndex)) return;
+  beginDrag(handle, e, {
+    nodeId: activeTarget.node.id,
+    groupEl: stopGroup,
+    stopIndex,
+    compute: computeMeshStopRadius,
+    commit: commitMeshStopPatch,
+  });
+}
+
+function computeMeshStopRadius(e, state) {
+  const point = clientToSourcePoint(e.clientX, e.clientY, outputCanvas);
+  if (!point || !outputCanvas) return null;
+  // Read the live stop so the centre stays pinned even if the user nudged it
+  // via the inspector mid-drag (rare but cheap to defend).
+  const stops = activeTarget?.node?.params?.stops ?? [];
+  const stop = stops[state.stopIndex];
+  if (!stop) return null;
+  const centerSrcX = clamp(Number(stop.x ?? 0.5), 0, 1) * outputCanvas.width;
+  const centerSrcY = clamp(Number(stop.y ?? 0.5), 0, 1) * outputCanvas.height;
+  const dx = point.x - centerSrcX;
+  const dy = point.y - centerSrcY;
+  const dist = Math.hypot(dx, dy);
+  // Shader treats radius as a fraction of canvas height, so back-solve from
+  // source-pixel distance / H.
+  const radius = clamp(dist / Math.max(outputCanvas.height, 1), 0.02, 2);
+  return { radius };
+}
+
+function commitMeshStopPatch(state, patch) {
+  const node = activeTarget?.node;
+  if (!node || node.id !== state.nodeId) return;
+  const stops = Array.isArray(node.params?.stops) ? node.params.stops : [];
+  if (state.stopIndex < 0 || state.stopIndex >= stops.length) return;
+  const nextStops = stops.map((s, i) => (i === state.stopIndex ? { ...s, ...patch } : s));
+  updateNodeParams(state.nodeId, { stops: nextStops });
+  // Skip timeline autokey: stops is an array, individual fields aren't
+  // tracked by the current timeline schema. Whole-array snapshots only.
 }
 
 // ---------------------------------------------------------------------------

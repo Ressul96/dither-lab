@@ -677,6 +677,45 @@ body.resizing-y * {
   fill: var(--accent, #6ea3ff);
 }
 
+.viewer-mesh-stop__ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-mesh-stop__center-hit,
+.viewer-mesh-stop__rim-hit {
+  fill: transparent;
+  cursor: grab;
+}
+
+.viewer-mesh-stop[data-dragging="true"] .viewer-mesh-stop__center-hit,
+.viewer-mesh-stop[data-dragging="true"] .viewer-mesh-stop__rim-hit {
+  cursor: grabbing;
+}
+
+.viewer-mesh-stop__center-dot {
+  /* fill set inline from stop.color so each handle reads as its own colour */
+  stroke: rgba(0, 0, 0, 0.7);
+  stroke-width: 1.5;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-mesh-stop__rim-dot {
+  fill: rgba(255, 255, 255, 0.95);
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 1;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.viewer-mesh-stop[data-dragging="true"] .viewer-mesh-stop__rim-dot {
+  fill: var(--accent, #6ea3ff);
+}
+
 .split-divider {
   position: absolute;
   top: 18px;
