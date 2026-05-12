@@ -963,13 +963,19 @@ uniform float u_intensity;
 uniform float u_radius;
 uniform float u_saturation;
 uniform vec3 u_tint;
+uniform float u_taps;  // 24..96, scales with radius (set by uniform builder)
 
 in vec2 v_uv;
 out vec4 out_color;
 
 const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
-const int TAPS = 24;
+const int MAX_TAPS = 96;
 const float GOLDEN = 2.39996323;
+const float TAU = 6.28318530718;
+
+float hash21(vec2 p) {
+  return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
 
 void main() {
   vec3 src = texture(u_image, v_uv).rgb;
@@ -988,14 +994,17 @@ void main() {
   float threshLow = max(u_threshold - u_knee, 0.0);
   float threshHigh = u_threshold + u_knee + 0.001;
 
-  // Same golden-spiral disk as Bloom, but we accumulate brightness only —
-  // not the source color. Halation is defined by a uniform tint over the
-  // bloom mass (film backing red glow / CRT phosphor red leak), so the
-  // per-tap source color must be discarded.
-  for (int i = 0; i < TAPS; i++) {
+  float taps = clamp(u_taps, 4.0, float(MAX_TAPS));
+  float jitterAngle = hash21(v_uv * u_resolution) * TAU;
+
+  // Same adaptive disk + per-pixel jitter as Bloom (see the longer note
+  // there). Halation accumulates brightness only — the tint colour is
+  // applied below to the monochrome halo.
+  for (int i = 0; i < MAX_TAPS; i++) {
+    if (float(i) >= taps) break;
     float fi = float(i);
-    float angle = fi * GOLDEN;
-    float r = sqrt((fi + 0.5) / float(TAPS));
+    float angle = fi * GOLDEN + jitterAngle;
+    float r = sqrt((fi + 0.5) / taps);
     vec2 offs = vec2(cos(angle), sin(angle)) * r;
     vec3 tap = texture(u_image, v_uv + offs * px).rgb;
     float lum = dot(tap, LUMA_W);
@@ -1023,16 +1032,25 @@ uniform float u_knee;        // 0-0.5 soft transition width
 uniform float u_intensity;   // 0-4 bloom multiplier
 uniform float u_radius;      // pixels
 uniform float u_saturation;  // 0-2 pre-process
+uniform float u_taps;        // 24..96, scales with radius (set by uniform builder)
 
 in vec2 v_uv;
 out vec4 out_color;
 
 const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
-const int TAPS = 24;
+const int MAX_TAPS = 96;
 // Golden ratio in radians (137.5°). Picks an "incommensurate" angle so
 // successive samples in the spiral never line up — spreads tap energy
 // uniformly across the disk and avoids visible banding from regular grids.
 const float GOLDEN = 2.39996323;
+const float TAU = 6.28318530718;
+
+// Cheap hash for per-pixel angle jitter. Without it, neighbouring pixels
+// share the same spiral pattern and the discrete sample positions show up
+// as visible rings around bright clusters at large radii.
+float hash21(vec2 p) {
+  return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
 
 void main() {
   vec3 src = texture(u_image, v_uv).rgb;
@@ -1057,13 +1075,20 @@ void main() {
   float threshLow = max(u_threshold - u_knee, 0.0);
   float threshHigh = u_threshold + u_knee + 0.001;
 
-  // Golden-spiral sampling across the unit disk; closer taps weigh more
-  // so the bloom feels like a proper Gaussian even though we're doing it
-  // in a single pass.
-  for (int i = 0; i < TAPS; i++) {
+  float taps = clamp(u_taps, 4.0, float(MAX_TAPS));
+  float jitterAngle = hash21(v_uv * u_resolution) * TAU;
+
+  // Golden-spiral sampling across the unit disk; closer taps weigh more so
+  // the bloom feels like a proper Gaussian even though we're doing it in a
+  // single pass. Adaptive tap count keeps the sample density roughly
+  // constant as the radius grows — large-radius blooms got a halftone-style
+  // ring pattern at the fixed 24-tap budget. The per-pixel jitter rotates
+  // the whole spiral, decorrelating neighbouring pixels.
+  for (int i = 0; i < MAX_TAPS; i++) {
+    if (float(i) >= taps) break;
     float fi = float(i);
-    float angle = fi * GOLDEN;
-    float r = sqrt((fi + 0.5) / float(TAPS));
+    float angle = fi * GOLDEN + jitterAngle;
+    float r = sqrt((fi + 0.5) / taps);
     vec2 offs = vec2(cos(angle), sin(angle)) * r;
     vec3 tap = texture(u_image, v_uv + offs * px).rgb;
     float lum = dot(tap, LUMA_W);
@@ -1571,13 +1596,15 @@ const SHADER_PASSES = Object.freeze({
   bloom: {
     fragment: BLOOM_FRAGMENT_SHADER,
     uniforms(params) {
+      const radius = clamp(Number(params?.radius ?? 16), 0, 64);
       return {
         u_opacity: clamp(Number(params?.opacity ?? 100) / 100, 0, 1),
         u_threshold: clamp(Number(params?.threshold ?? 70) / 100, 0, 1),
         u_knee: clamp(Number(params?.knee ?? 20) / 100, 0, 0.5),
         u_intensity: clamp(Number(params?.intensity ?? 100) / 100, 0, 4),
-        u_radius: clamp(Number(params?.radius ?? 16), 0, 64),
+        u_radius: radius,
         u_saturation: clamp(Number(params?.saturation ?? 100) / 100, 0, 2),
+        u_taps: bloomDiskTapCount(radius),
       };
     },
   },
@@ -1614,14 +1641,16 @@ const SHADER_PASSES = Object.freeze({
             clamp(Number(params?.tintG ?? 120) / 255, 0, 1),
             clamp(Number(params?.tintB ?? 60) / 255, 0, 1),
           ];
+      const radius = clamp(Number(params?.radius ?? 24), 0, 96);
       return {
         u_opacity: clamp(Number(params?.opacity ?? 100) / 100, 0, 1),
         u_threshold: clamp(Number(params?.threshold ?? 70) / 100, 0, 1),
         u_knee: clamp(Number(params?.knee ?? 20) / 100, 0, 0.5),
         u_intensity: clamp(Number(params?.intensity ?? 120) / 100, 0, 4),
-        u_radius: clamp(Number(params?.radius ?? 24), 0, 96),
+        u_radius: radius,
         u_saturation: clamp(Number(params?.saturation ?? 100) / 100, 0, 2),
         u_tint: tint,
+        u_taps: bloomDiskTapCount(radius),
       };
     },
   },
@@ -2154,6 +2183,14 @@ function getUniformLocation(gl, program, name) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+// Adaptive tap budget for the bloom / halation disk. With a fixed 24-tap
+// spiral the disk gets too sparse past ~radius 30, surfacing as a halftone
+// ring pattern around bright clusters. Scale roughly with radius and cap at
+// the shader's MAX_TAPS so the loop bound stays compile-time-bounded.
+function bloomDiskTapCount(radius) {
+  return clamp(Math.round(radius * 1.5 + 16), 24, 96);
 }
 
 function colorModeIndex(value) {

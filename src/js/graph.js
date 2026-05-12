@@ -553,7 +553,7 @@ const NODE_DEFINITIONS = Object.freeze({
   bloom: {
     label: "Bloom",
     family: "Effect",
-    description: "Soft glow on bright pixels — luminance threshold with a soft knee, single-pass golden-spiral 24-tap blur, additive add-back at intensity.",
+    description: "Soft glow on bright pixels — luminance threshold with a soft knee, single-pass golden-spiral disk (adaptive 24–96 taps), per-pixel jittered to keep large radii artifact-free; additive add-back at intensity.",
     inputs: [{ name: "image", label: "Image", type: "image" }],
     outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
