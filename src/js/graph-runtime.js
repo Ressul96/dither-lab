@@ -50,6 +50,16 @@ import { applyTimelineToGraph } from "./timeline.js";
 const nodeCache = new Map();
 let versionCounter = 0;
 
+// F8.0 measurement. Populated once per evaluateGraphOutputs call so devtools
+// or future timing overlays can read per-node durations without hooking the
+// runtime itself. Module-level rather than dispatched into state on purpose:
+// we'd otherwise wake every state subscriber every frame.
+let lastEvaluationProfile = null;
+
+export function getLastEvaluationProfile() {
+  return lastEvaluationProfile;
+}
+
 // Node types whose output depends on the current playhead time even when no
 // param is animated (procedural noise, scrolling tracking lines, etc.). The
 // runtime salts the cache key with the current frame so they re-evaluate per
@@ -147,93 +157,112 @@ export function evaluateGraphOutputs(graph, context) {
   const versions = new Map();
   const reachableIds = new Set();
 
+  const evalStart = performance.now();
+  const nodeTimings = {};
+
   for (const nodeId of order) {
     const node = index.nodesById.get(nodeId);
     if (!node) continue;
     reachableIds.add(node.id);
 
+    const t0 = performance.now();
+    let cacheHit = false;
+    let producedOutput = null;
+
     if (node.type === "source") {
-      const output = applySourceNode(context?.sourceImage ?? null, node.params);
-      results.set(node.id, output);
+      producedOutput = applySourceNode(context?.sourceImage ?? null, node.params);
+      results.set(node.id, producedOutput);
       versions.set(node.id, `source@${sourceVersion};${hashParams(node.params)}`);
-      continue;
-    }
-
-    if (node.type === "viewer-output") {
-      const output = resolveInputImage(node, "image", index, results);
-      results.set(node.id, output);
+    } else if (node.type === "viewer-output") {
+      producedOutput = resolveInputImage(node, "image", index, results);
+      results.set(node.id, producedOutput);
       versions.set(node.id, inputVersionKey(node, index, versions, "image"));
-      continue;
-    }
-
-    const effectiveParams = applyParamEdges(node, index, results);
-    const inputSockets = inputSocketsFor(node);
-    const inputVersions = inputSockets.map((socket) =>
-      inputVersionKey(node, index, versions, socket)
-    );
-    const paramVersions = paramSocketsFor(node).map((socket) =>
-      inputVersionKey(node, index, versions, socket)
-    );
-    const timeSalt = TIME_AWARE_TYPES.has(node.type)
-      ? `;t=${frameSalt(context?.timeSeconds, context?.fps)}`
-      : "";
-    const paramsHash = `${hashParams(effectiveParams)}bypass=${node.bypassed ? 1 : 0}${timeSalt};`;
-    const cached = nodeCache.get(node.id);
-    if (
-      cached &&
-      cached.type === node.type &&
-      cached.paramsHash === paramsHash &&
-      arraysEqual(cached.inputVersions, inputVersions) &&
-      arraysEqual(cached.paramVersions ?? [], paramVersions)
-    ) {
-      results.set(node.id, cached.output);
-      versions.set(node.id, cached.version);
-      continue;
-    }
-
-    const output = computeNodeOutput({ ...node, params: effectiveParams }, index, results, context);
-    if (output !== null && output !== undefined) {
-      // A node may pass its input through unchanged (blur radius=0, lens-
-      // distort with no effect, etc.). Caching that buffer would mean the
-      // node "owns" a canvas it doesn't actually own — clearGraphCache or
-      // eviction would then return the source/upstream canvas to the pool
-      // while another node still holds it, and the next acquireBuffer
-      // would clearRect it out from under them.
-      const sourceImage = context?.sourceImage ?? null;
-      const passthrough =
-        output === sourceImage || (isCanvasLike(output) && sharesOutputWithCachedNode(output));
-      if (passthrough) {
-        if (cached) {
-          if (cached.output) releaseBuffer(cached.output);
-          nodeCache.delete(node.id);
-        }
-        results.set(node.id, output);
-        versions.set(node.id, `pass@${inputVersions.join("|")}`);
-      } else {
-        const version = `n${++versionCounter}`;
-        if (cached?.output && cached.output !== output) {
-          releaseBuffer(cached.output);
-        }
-        nodeCache.set(node.id, {
-          type: node.type,
-          paramsHash,
-          inputVersions,
-          paramVersions,
-          output,
-          version,
-        });
-        results.set(node.id, output);
-        versions.set(node.id, version);
-      }
     } else {
-      if (cached) {
-        if (cached.output) releaseBuffer(cached.output);
-        nodeCache.delete(node.id);
+      const effectiveParams = applyParamEdges(node, index, results);
+      const inputSockets = inputSocketsFor(node);
+      const inputVersions = inputSockets.map((socket) =>
+        inputVersionKey(node, index, versions, socket)
+      );
+      const paramVersions = paramSocketsFor(node).map((socket) =>
+        inputVersionKey(node, index, versions, socket)
+      );
+      const timeSalt = TIME_AWARE_TYPES.has(node.type)
+        ? `;t=${frameSalt(context?.timeSeconds, context?.fps)}`
+        : "";
+      const paramsHash = `${hashParams(effectiveParams)}bypass=${node.bypassed ? 1 : 0}${timeSalt};`;
+      const cached = nodeCache.get(node.id);
+      if (
+        cached &&
+        cached.type === node.type &&
+        cached.paramsHash === paramsHash &&
+        arraysEqual(cached.inputVersions, inputVersions) &&
+        arraysEqual(cached.paramVersions ?? [], paramVersions)
+      ) {
+        cacheHit = true;
+        producedOutput = cached.output;
+        results.set(node.id, cached.output);
+        versions.set(node.id, cached.version);
+      } else {
+        const output = computeNodeOutput({ ...node, params: effectiveParams }, index, results, context);
+        producedOutput = output;
+        if (output !== null && output !== undefined) {
+          // A node may pass its input through unchanged (blur radius=0, lens-
+          // distort with no effect, etc.). Caching that buffer would mean the
+          // node "owns" a canvas it doesn't actually own — clearGraphCache or
+          // eviction would then return the source/upstream canvas to the pool
+          // while another node still holds it, and the next acquireBuffer
+          // would clearRect it out from under them.
+          const sourceImage = context?.sourceImage ?? null;
+          const passthrough =
+            output === sourceImage || (isCanvasLike(output) && sharesOutputWithCachedNode(output));
+          if (passthrough) {
+            if (cached) {
+              if (cached.output) releaseBuffer(cached.output);
+              nodeCache.delete(node.id);
+            }
+            results.set(node.id, output);
+            versions.set(node.id, `pass@${inputVersions.join("|")}`);
+          } else {
+            const version = `n${++versionCounter}`;
+            if (cached?.output && cached.output !== output) {
+              releaseBuffer(cached.output);
+            }
+            nodeCache.set(node.id, {
+              type: node.type,
+              paramsHash,
+              inputVersions,
+              paramVersions,
+              output,
+              version,
+            });
+            results.set(node.id, output);
+            versions.set(node.id, version);
+          }
+        } else {
+          if (cached) {
+            if (cached.output) releaseBuffer(cached.output);
+            nodeCache.delete(node.id);
+          }
+          results.set(node.id, null);
+          versions.set(node.id, "null");
+        }
       }
-      results.set(node.id, null);
-      versions.set(node.id, "null");
     }
+
+    nodeTimings[node.id] = {
+      durationMs: performance.now() - t0,
+      cacheHit,
+      type: node.type,
+      outputSize: outputSizeOf(producedOutput),
+    };
   }
+
+  lastEvaluationProfile = {
+    timestamp: evalStart,
+    totalMs: performance.now() - evalStart,
+    nodeCount: order.length,
+    timings: nodeTimings,
+  };
 
   pruneCache(reachableIds);
 
@@ -275,6 +304,12 @@ function sharesOutputWithCachedNode(output) {
 
 function isCanvasLike(value) {
   return Boolean(value && typeof value === "object" && "width" in value && "height" in value);
+}
+
+function outputSizeOf(output) {
+  if (!output || typeof output !== "object") return null;
+  if (typeof output.width !== "number" || typeof output.height !== "number") return null;
+  return [output.width, output.height];
 }
 
 function pruneCache(reachableIds) {
