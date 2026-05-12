@@ -974,47 +974,50 @@ body.resizing-y * {
 
 .graph-breadcrumb {
   position: absolute;
-  top: 10px;
-  left: 10px;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 6;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 5px;
-  max-width: calc(100% - 20px);
-  padding: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--radius-md);
+  gap: 2px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-subtle);
   background: rgba(12, 12, 16, 0.78);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(14px);
 }
 
 .graph-breadcrumb-item {
   min-width: 0;
-  max-width: 160px;
-  padding: 5px 8px;
+  max-width: 200px;
+  padding: 2px 6px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--text-secondary);
   font-size: var(--text-label);
-  font-weight: 650;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
 }
 
-.graph-breadcrumb-item:hover,
-.graph-breadcrumb-item.is-active {
+.graph-breadcrumb-item:hover {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
+}
+
+.graph-breadcrumb-item.is-active {
+  color: var(--text-primary);
+  cursor: default;
 }
 
 .graph-breadcrumb-separator {
   color: var(--text-muted);
   font-size: var(--text-label);
   user-select: none;
+  padding: 0 1px;
 }
 
 .graph-edges,
