@@ -308,26 +308,27 @@
         </div>
       </section>
 
-      <div class="player-card" id="playerCard">
+      <div class="player-card" id="playerCard" aria-label="Timeline player">
         <header class="player-transport">
-          <div class="transport-cluster transport-cluster--left">
-            <button class="icon-btn" data-action="restart" title="First frame (Home)" disabled>⏮</button>
-            <button class="icon-btn" data-action="prev-frame" title="Previous frame (←)" disabled>◀</button>
+          <div class="transport-cluster">
             <button class="icon-btn primary transport-play" data-action="toggle-play"
               title="Play / Pause (Space)" disabled>▶</button>
-            <button class="icon-btn" data-action="next-frame" title="Next frame (→)" disabled>▶</button>
-            <button class="icon-btn" data-action="last-frame" title="Last frame (End)" disabled>⏭</button>
             <button class="icon-btn" data-action="stop" title="Stop" disabled>■</button>
           </div>
-          <div class="transport-cluster transport-cluster--mid">
-            <button class="autokey-pill" data-action="toggle-loop" title="Loop"
-              aria-pressed="true">
-              <span class="autokey-dot"></span>Loop
+          <span class="transport-divider" aria-hidden="true"></span>
+          <div class="transport-cluster">
+            <button class="icon-btn transport-toggle" data-action="toggle-loop" title="Loop"
+              aria-label="Toggle loop" aria-pressed="true">
+              ↻
             </button>
-            <button class="autokey-pill" data-action="toggle-autokey" title="Auto-Key"
-              aria-pressed="false">
-              <span class="autokey-dot"></span>Auto-Key
+            <button class="transport-autokey" data-action="toggle-autokey" title="Auto-Key"
+              aria-pressed="false" aria-label="Toggle auto-key">
+              <span class="transport-autokey-icon" aria-hidden="true">◆</span>
+              <span>Auto-Key</span>
             </button>
+          </div>
+          <span class="transport-divider" aria-hidden="true"></span>
+          <div class="transport-cluster transport-cluster--duration">
             <label class="duration-field" title="Duration">
               <span>Dur</span>
               <input type="number" min="1" step="1" data-field="duration" disabled />
@@ -336,13 +337,15 @@
           </div>
           <div class="transport-cluster transport-cluster--right">
             <span class="time-readout tabular">0000 / 0000</span>
-            <button class="icon-btn" data-action="more" title="More" aria-label="More">▾</button>
+            <button class="icon-btn" data-action="more" title="More" aria-label="More">⋯</button>
+            <button class="icon-btn timeline-panel-toggle" data-action="toggle-timeline-panel"
+              title="Expand timeline" aria-label="Expand timeline" aria-expanded="true">▾</button>
           </div>
         </header>
 
         <div class="player-body">
           <aside class="properties-panel" aria-label="Animation properties">
-            <h3 class="properties-heading">Properties</h3>
+            <h3 class="properties-heading">Tracks</h3>
             <ul class="property-list" role="list"></ul>
           </aside>
           <section class="timeline-pane" id="animationTimeline" aria-label="Animation timeline">

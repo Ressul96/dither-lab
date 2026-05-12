@@ -30,6 +30,7 @@ import {
   removeTimelineKeyframeById,
   setDurationUnit,
   setSelectedProperty,
+  setTimelinePanelOpen,
   setTimelineZoom,
   setTrackExpanded,
   setTimelineAutokey,
@@ -125,6 +126,7 @@ const playerEls = {
   emptyState: null,
   timelinePane: null,
   timelineBody: null,
+  panelToggle: null,
   viewButtons: [],
   zoomReadout: null,
   playerCard: null,
@@ -177,6 +179,7 @@ function cachePlayerEls() {
   playerEls.emptyState = root.querySelector(".empty-state");
   playerEls.timelinePane = root.querySelector(".timeline-pane");
   playerEls.timelineBody = root.querySelector(".timeline-pane-body");
+  playerEls.panelToggle = root.querySelector('[data-action="toggle-timeline-panel"]');
   playerEls.viewButtons = Array.from(root.querySelectorAll("[data-timeline-view]"));
   playerEls.zoomReadout = root.querySelector("[data-timeline-zoom-readout]");
 
@@ -255,6 +258,14 @@ function wireAnimationTimeline() {
       event.stopPropagation();
       const next = getState().timeline.autokey !== true;
       setTimelineAutokey(next);
+      return;
+    }
+
+    const panelToggle = event.target.closest('[data-action="toggle-timeline-panel"]');
+    if (panelToggle) {
+      event.preventDefault();
+      event.stopPropagation();
+      setTimelinePanelOpen(getState().timeline.panelOpen === false);
       return;
     }
 
@@ -726,7 +737,7 @@ function renderAnimationTimeline() {
   const visibleTracks = tracks.filter((track) => expandedIds.has(track.id));
 
   playerEls.propertyList.innerHTML = tracks.length === 0
-    ? `<li class="animation-timeline-empty">No properties</li>`
+    ? `<li class="animation-timeline-empty">No tracks</li>`
     : tracks
         .map((track) =>
           renderPropertyCard(track, {
@@ -746,13 +757,13 @@ function renderAnimationTimeline() {
 
   if (tracks.length === 0) {
     playerEls.laneHost.innerHTML = "";
-    playerEls.emptyState.textContent = "Add your first keyframe from the properties panel.";
+    playerEls.emptyState.textContent = "No keyframes";
     playerEls.emptyState.classList.remove("hidden");
   } else if (normalized.viewMode === "graph") {
     const graphTrack = pickGraphTrack(activeTrack, visibleTracks);
     if (!graphTrack) {
       playerEls.laneHost.innerHTML = "";
-      playerEls.emptyState.textContent = "Select a property to edit its curve.";
+      playerEls.emptyState.textContent = "Select a track";
       playerEls.emptyState.classList.remove("hidden");
     } else {
       playerEls.laneHost.innerHTML =
@@ -762,7 +773,7 @@ function renderAnimationTimeline() {
     }
   } else if (visibleTracks.length === 0) {
     playerEls.laneHost.innerHTML = "";
-    playerEls.emptyState.textContent = "Open property lanes with the chevrons.";
+    playerEls.emptyState.textContent = "No lanes open";
     playerEls.emptyState.classList.remove("hidden");
   } else {
     playerEls.emptyState.classList.add("hidden");
@@ -784,6 +795,18 @@ function updateTimelineChrome(timeline) {
     timelinePane.style.setProperty("--timeline-content-width", contentWidth);
     timelinePane.style.setProperty("--timeline-zoom", String(effectiveZoom));
     timelinePane.classList.toggle("is-graph-mode", timeline.viewMode === "graph");
+  }
+  if (playerEls.playerCard) {
+    const panelOpen = timeline.panelOpen !== false;
+    playerEls.playerCard.classList.toggle("is-collapsed", !panelOpen);
+    playerEls.playerCard.setAttribute("aria-expanded", panelOpen ? "true" : "false");
+  }
+  if (playerEls.panelToggle) {
+    const panelOpen = timeline.panelOpen !== false;
+    playerEls.panelToggle.textContent = panelOpen ? "▾" : "▴";
+    playerEls.panelToggle.setAttribute("aria-expanded", panelOpen ? "true" : "false");
+    playerEls.panelToggle.setAttribute("aria-label", panelOpen ? "Collapse timeline" : "Expand timeline");
+    playerEls.panelToggle.setAttribute("title", panelOpen ? "Collapse timeline" : "Expand timeline");
   }
   for (const button of playerEls.viewButtons ?? []) {
     const active = button.dataset.timelineView === timeline.viewMode;

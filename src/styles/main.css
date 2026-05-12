@@ -200,7 +200,7 @@ body {
   min-width: 0;
   position: relative;
   display: grid;
-  grid-template-rows: minmax(180px, 1fr) 6px minmax(220px, var(--node-editor-h)) auto auto;
+  grid-template-rows: minmax(180px, 1fr) 6px minmax(220px, var(--node-editor-h));
   overflow: hidden;
   background:
     radial-gradient(circle at top, rgba(74, 158, 255, 0.08), transparent 45%),
@@ -1634,21 +1634,38 @@ body.cutting-edges * {
 }
 
 /* ==========================================================================
-   Player Card — motion-design timeline (frame-based)
-   Top transport bar + properties panel | timeline pane.
+   Timeline Overlay — floating transport + expanded editor body.
    ========================================================================== */
 
 .player-card {
-  position: relative;
-  z-index: 6;
-  margin: 0 16px 16px;
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 32;
+  width: min(820px, calc(100% - 32px));
+  max-height: min(380px, calc(100% - 24px));
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border: 1px solid var(--border-subtle);
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: var(--radius-player);
-  background: var(--bg-input);
+  background: rgba(15, 15, 18, 0.94);
+  box-shadow:
+    0 22px 54px rgba(0, 0, 0, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  backdrop-filter: blur(18px);
   overflow: hidden;
+  transition:
+    width 180ms ease,
+    max-height 180ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.player-card.is-collapsed {
+  width: min(580px, calc(100% - 32px));
+  max-height: 46px;
 }
 
 .player-card button {
@@ -1658,24 +1675,45 @@ body.cutting-edges * {
 /* --- Top transport bar -------------------------------------------------- */
 
 .player-transport {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
+  display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
+  gap: 8px;
+  min-height: 45px;
+  padding: 7px 8px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.015);
+  background: rgba(255, 255, 255, 0.018);
+  transition: border-color 160ms ease;
+}
+
+.player-card.is-collapsed .player-transport {
+  border-bottom-color: transparent;
 }
 
 .transport-cluster {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
 }
 
-.transport-cluster--left { justify-self: start; }
-.transport-cluster--mid  { justify-self: center; gap: 10px; }
-.transport-cluster--right { justify-self: end; gap: 8px; }
+.transport-cluster--duration {
+  min-width: 0;
+}
+
+.transport-cluster--right {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  min-width: 0;
+  gap: 6px;
+}
+
+.transport-divider {
+  width: 1px;
+  height: 18px;
+  flex: 0 0 1px;
+  border-radius: 999px;
+  background: var(--border-subtle);
+}
 
 .player-transport .icon-btn {
   width: 28px;
@@ -1699,43 +1737,57 @@ body.cutting-edges * {
   color: var(--text-primary);
 }
 
-.autokey-pill {
+.transport-toggle,
+.transport-autokey {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  gap: 7px;
   height: 28px;
-  padding: 0 10px;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  background: transparent;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.02);
   color: var(--text-muted);
+  cursor: pointer;
+}
+
+.transport-toggle {
+  width: 28px;
+  min-width: 28px;
+  font-size: 10px;
+}
+
+.transport-autokey {
+  min-width: 90px;
+  padding: 0 10px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  cursor: pointer;
 }
 
-.autokey-pill:hover {
+.transport-toggle:hover,
+.transport-autokey:hover {
   border-color: var(--border-strong);
   color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
 }
 
-.autokey-pill.is-active {
-  border-color: rgba(74, 222, 128, 0.5);
-  color: rgba(190, 240, 200, 0.95);
+.transport-toggle.is-active,
+.transport-autokey.is-active {
+  border-color: rgba(106, 176, 255, 0.42);
+  background: rgba(106, 176, 255, 0.13);
+  color: var(--text-primary);
 }
 
-.autokey-pill .autokey-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.18);
+.transport-autokey-icon {
+  font-size: 7px;
+  color: rgba(255, 255, 255, 0.26);
 }
 
-.autokey-pill.is-active .autokey-dot {
-  background: var(--success);
-  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
+.transport-autokey.is-active .transport-autokey-icon {
+  color: var(--success);
+  filter: drop-shadow(0 0 5px rgba(74, 222, 128, 0.34));
 }
 
 .duration-field {
@@ -1746,7 +1798,7 @@ body.cutting-edges * {
   padding: 0 10px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--bg-canvas);
+  background: rgba(0, 0, 0, 0.16);
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 600;
@@ -1780,18 +1832,37 @@ body.cutting-edges * {
 }
 
 .time-readout {
+  min-width: 112px;
   font-size: 12px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.timeline-panel-toggle {
+  font-size: 12px;
 }
 
 /* --- Body grid: properties | timeline ----------------------------------- */
 
 .player-body {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 190px minmax(0, 1fr);
+  height: 324px;
   min-height: 0;
+  opacity: 1;
+  overflow: hidden;
+  transition:
+    height 180ms ease,
+    opacity 120ms ease;
+}
+
+.player-card.is-collapsed .player-body {
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* Properties panel ------------------------------------------------------- */
@@ -1800,9 +1871,10 @@ body.cutting-edges * {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 6px 10px 12px;
+  padding: 10px 6px 10px 10px;
   border-right: 1px solid var(--border-subtle);
   min-width: 0;
+  background: rgba(255, 255, 255, 0.01);
 }
 
 .properties-heading {
@@ -1823,7 +1895,7 @@ body.cutting-edges * {
   flex-direction: column;
   gap: 1px;
   min-width: 0;
-  max-height: 178px;
+  max-height: 292px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -1942,7 +2014,7 @@ body.cutting-edges * {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 140px;
+  min-height: 0;
   --timeline-content-width: 100%;
   --timeline-zoom: 1;
 }
@@ -3233,18 +3305,61 @@ body.dragging-tangent .timeline-tangent-handle {
   }
 
   .player-transport {
-    grid-template-columns: auto;
-    justify-items: center;
-    gap: 8px;
+    gap: 6px;
   }
 
-  .transport-cluster--left,
-  .transport-cluster--right {
-    justify-self: center;
+  .transport-autokey {
+    min-width: 28px;
+    width: 28px;
+    padding: 0;
+  }
+
+  .transport-autokey span:last-child {
+    display: none;
+  }
+
+  .duration-field {
+    padding: 0 8px;
+  }
+
+  .duration-field input {
+    width: 44px;
+  }
+
+  .time-readout {
+    min-width: 94px;
+    font-size: 11px;
   }
 }
 
 @media (max-width: 720px) {
+  .player-card,
+  .player-card.is-collapsed {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+    transform: none;
+  }
+
+  .player-body {
+    grid-template-columns: 1fr;
+    height: min(320px, 55vh);
+  }
+
+  .properties-panel {
+    display: none;
+  }
+
+  .player-transport {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .player-transport::-webkit-scrollbar {
+    display: none;
+  }
+
   .export-sheet-backdrop {
     align-items: flex-end;
     padding: 12px;

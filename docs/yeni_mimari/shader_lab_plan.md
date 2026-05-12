@@ -84,6 +84,13 @@ tangent tabanlı bezier segmentleri explicit tangent varsa hala çalışıyor.
 | `evaluateTrack` cubic-bezier sampler (Newton iteration) | shader-lab'in `easings.ts` örneği baz alınır |
 
 ### F10.2 — Unified floating overlay (transport şeridi)
+**Durum (2026-05-12): ✅ İlk geçiş indi.** `#playerCard` artık
+workspace içinde alt-merkezde yüzen tek overlay. Transport tek satıra indi
+(Play/Pause, Stop, Loop, Auto-Key, duration, readout, more, expand/collapse)
+ve `timeline.panelOpen` ile collapsed / expanded state save-load hattına
+bağlandı. Eski frame-step butonları transporttan çıktı; Home/End ve ok
+tuşu kısayolları korunuyor.
+
 | Kapsam | Notlar |
 |---|---|
 | Player card + timeline panel + properties bölmeleri kaldırılır; tek floating panel gelir | `editor-timeline-overlay.tsx` paterni — collapsed (~580×46) + expanded (~820×380) iki mod |

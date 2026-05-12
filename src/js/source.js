@@ -1424,6 +1424,13 @@ function disablePlayerControls() {
 
 function setPlayerControlsEnabled(enabled) {
   document.querySelectorAll(".player-card button, .player-card input").forEach((el) => {
+    const persistentAction = el.matches(
+      '[data-action="toggle-timeline-panel"], [data-action="more"], [data-action="toggle-autokey"], [data-action="toggle-loop"]'
+    );
+    if (persistentAction) {
+      el.disabled = false;
+      return;
+    }
     el.disabled = !enabled;
   });
 }

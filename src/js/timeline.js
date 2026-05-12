@@ -81,6 +81,7 @@ export function normalizeTimeline(raw = {}, fallback = {}) {
     viewMode: raw?.viewMode === "graph" ? "graph" : "layers",
     durationUnit: raw?.durationUnit === "second" ? "second" : "frame",
     zoom: clampZoom(raw?.zoom),
+    panelOpen: raw?.panelOpen !== false,
     selectedPropertyId:
       typeof raw?.selectedPropertyId === "string" ? raw.selectedPropertyId : null,
     expandedTrackIds: Array.isArray(raw?.expandedTrackIds)
@@ -284,6 +285,12 @@ export function setTimelineZoom(zoom) {
   const next = clampZoom(zoom);
   if (getState().timeline.zoom === next) return;
   dispatch("timeline", { zoom: next });
+}
+
+export function setTimelinePanelOpen(open) {
+  const next = open !== false;
+  if (getState().timeline.panelOpen === next) return;
+  dispatch("timeline", { panelOpen: next });
 }
 
 // ---------- /1B-i helpers ----------
