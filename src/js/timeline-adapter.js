@@ -14,14 +14,14 @@ import {
 
 const SHADER_LAB_EASING_MAP = Object.freeze({
   linear: "linear",
-  ease: "ease-in-out",
-  easein: "ease-in",
-  easeout: "ease-out",
-  easeinout: "ease-in-out",
-  smooth: "ease-in-out",
-  smoothstep: "ease-in-out",
-  step: "hold",
-  hold: "hold",
+  ease: "easeInOut",
+  easein: "easeIn",
+  easeout: "easeOut",
+  easeinout: "easeInOut",
+  smooth: "smooth",
+  smoothstep: "smooth",
+  step: "step",
+  hold: "step",
 });
 
 /**
@@ -135,6 +135,7 @@ function translateKeyframe(raw) {
 }
 
 function translateEasing(raw) {
+  if (raw && typeof raw === "object") return raw;
   if (!raw) return "linear";
   const value = String(raw).toLowerCase().replace(/[-_\s]/g, "");
   return SHADER_LAB_EASING_MAP[value] ?? "linear";

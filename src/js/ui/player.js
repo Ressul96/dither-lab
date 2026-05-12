@@ -16,12 +16,15 @@ import {
 import {
   TIMELINE_BINDING_NODE_PARAM,
   TIMELINE_BINDING_NODE_PROPERTY,
+  TIMELINE_EASING_PRESETS,
   duplicateTimelineKeyframes,
   durationToFrames,
+  findMatchingEasingPreset,
   formatFrameReadout,
   formatSecondReadout,
   getTimelineKeyframe,
   getTimelineTrackValue,
+  getTimelineEasingPreset,
   moveTimelineKeyframe,
   normalizeTimeline,
   removeTimelineKeyframeById,
@@ -426,43 +429,12 @@ function applyCurvePreset(button) {
 
 function createCurvePresetPatches(track, index, preset) {
   const from = track.keyframes[index];
-  const to = track.keyframes[index + 1];
   if (!from || typeof from.value !== "number") return [];
-  if (preset === "linear" || !to || typeof to.value !== "number") {
-    return [{
-      trackId: track.id,
-      keyframeId: from.id,
-      patch: { easing: "linear", interpolation: "linear", outTangent: null },
-    }];
-  }
-
-  const span = Math.max(1 / 1200, to.time - from.time);
-  const presets = {
-    "ease-in": { p1x: 0.42, p1y: 0, p2x: 1, p2y: 1 },
-    "ease-out": { p1x: 0, p1y: 0, p2x: 0.58, p2y: 1 },
-    "ease-in-out": { p1x: 0.42, p1y: 0, p2x: 0.58, p2y: 1 },
-    "ease-in-out-cubic": { p1x: 0.65, p1y: 0, p2x: 0.35, p2y: 1 },
-  };
-  const curve = presets[preset] ?? presets["ease-in-out"];
-  const delta = to.value - from.value;
-  return [
-    {
-      trackId: track.id,
-      keyframeId: from.id,
-      patch: {
-        easing: "custom-bezier",
-        interpolation: "bezier",
-        outTangent: { dt: curve.p1x * span, dv: curve.p1y * delta },
-      },
-    },
-    {
-      trackId: track.id,
-      keyframeId: to.id,
-      patch: {
-        inTangent: { dt: (curve.p2x - 1) * span, dv: (curve.p2y - 1) * delta },
-      },
-    },
-  ];
+  return [{
+    trackId: track.id,
+    keyframeId: from.id,
+    patch: createEasingPatch(preset),
+  }];
 }
 
 function syncTimelineRulerScroll() {
@@ -1014,10 +986,10 @@ function renderCurvePresetBar(track) {
   return `
     <span class="timeline-curve-presets" data-curve-track-id="${escapeHtml(track.id)}">
       <button type="button" data-curve-preset="linear" title="Linear">Lin</button>
-      <button type="button" data-curve-preset="ease-in" title="Ease in">In</button>
-      <button type="button" data-curve-preset="ease-out" title="Ease out">Out</button>
-      <button type="button" data-curve-preset="ease-in-out" title="Ease in/out">S</button>
-      <button type="button" data-curve-preset="ease-in-out-cubic" title="Ease in/out cubic">Cubic</button>
+      <button type="button" data-curve-preset="easeIn" title="Ease in">In</button>
+      <button type="button" data-curve-preset="easeOut" title="Ease out">Out</button>
+      <button type="button" data-curve-preset="easeInOut" title="Ease in/out">S</button>
+      <button type="button" data-curve-preset="smooth" title="Smooth">Smooth</button>
     </span>
   `;
 }
@@ -1203,12 +1175,10 @@ function isNumericTimelineTrack(track) {
 }
 
 function getSegmentInterpolation(keyframe, track) {
-  if (keyframe?.interpolation === "hold" || keyframe?.easing === "hold") return "hold";
-  if (keyframe?.interpolation === "bezier" || keyframe?.easing === "custom-bezier") return "bezier";
-  if (keyframe?.easing === "ease-in" || keyframe?.easing === "ease-out" || keyframe?.easing === "ease-in-out") {
-    return "bezier";
-  }
-  if (track?.interpolation === "bezier") return "bezier";
+  if (keyframe?.easing?.type === "step" || keyframe?.interpolation === "hold") return "hold";
+  if (hasLegacyGraphTangent(keyframe)) return "bezier";
+  if (keyframe?.easing?.type === "bezier" && !isLinearControlPoints(keyframe.easing.controlPoints)) return "bezier";
+  if (track?.interpolation === "bezier" && hasAnyTrackTangent(track)) return "bezier";
   return "linear";
 }
 
@@ -1217,7 +1187,32 @@ function resolveGraphTangent(track, index, side) {
   const key = side === "in" ? "inTangent" : "outTangent";
   const explicit = normalizeGraphTangent(keyframe?.[key]);
   if (explicit) return explicit;
+  const easingTangent = resolveEasingGraphTangent(track, index, side);
+  if (easingTangent) return easingTangent;
   return createAutoGraphTangent(track, index, side);
+}
+
+function resolveEasingGraphTangent(track, index, side) {
+  const keyframe = track.keyframes[index];
+  if (!keyframe || typeof keyframe.value !== "number") return null;
+
+  if (side === "out") {
+    const next = track.keyframes[index + 1];
+    if (!next || typeof next.value !== "number" || keyframe.easing?.type !== "bezier") return null;
+    const [x1, y1] = keyframe.easing.controlPoints;
+    return {
+      dt: x1 * Math.max(1 / 1200, next.time - keyframe.time),
+      dv: y1 * (next.value - keyframe.value),
+    };
+  }
+
+  const previous = track.keyframes[index - 1];
+  if (!previous || typeof previous.value !== "number" || previous.easing?.type !== "bezier") return null;
+  const [, , x2, y2] = previous.easing.controlPoints;
+  return {
+    dt: (x2 - 1) * Math.max(1 / 1200, keyframe.time - previous.time),
+    dv: (y2 - 1) * (keyframe.value - previous.value),
+  };
 }
 
 function createAutoGraphTangent(track, index, side) {
@@ -1246,6 +1241,23 @@ function normalizeGraphTangent(raw) {
   const dv = Number(raw.dv);
   if (!Number.isFinite(dt) || !Number.isFinite(dv)) return null;
   return { dt, dv };
+}
+
+function hasLegacyGraphTangent(keyframe) {
+  return Boolean(normalizeGraphTangent(keyframe?.inTangent) || normalizeGraphTangent(keyframe?.outTangent));
+}
+
+function hasAnyTrackTangent(track) {
+  return Boolean(track?.keyframes?.some(hasLegacyGraphTangent));
+}
+
+function isLinearControlPoints(controlPoints) {
+  if (!Array.isArray(controlPoints) || controlPoints.length !== 4) return true;
+  const [x1, y1, x2, y2] = controlPoints.map(Number);
+  return Math.abs(x1) < 0.0005 &&
+    Math.abs(y1) < 0.0005 &&
+    Math.abs(x2 - 1) < 0.0005 &&
+    Math.abs(y2 - 1) < 0.0005;
 }
 
 function graphCurveColor(track, graph, index = 0) {
@@ -1363,9 +1375,11 @@ function renderSelectedKeyframePanel(selected) {
 }
 
 function renderTangentInputs(track, keyframe) {
-  const isBezier = keyframe.interpolation === "bezier" || keyframe.easing === "custom-bezier";
-  if (!isBezier || typeof keyframe.value !== "number") return "";
   const index = track.keyframes.findIndex((item) => item.id === keyframe.id);
+  const isBezier =
+    getSegmentInterpolation(keyframe, track) === "bezier" ||
+    getSegmentInterpolation(track.keyframes[index - 1], track) === "bezier";
+  if (!isBezier || typeof keyframe.value !== "number") return "";
   const inn = resolveGraphTangent(track, index, "in");
   const out = resolveGraphTangent(track, index, "out");
   return `
@@ -1800,16 +1814,18 @@ function onAnimationTimelineChange(event) {
 }
 
 function createEasingPatch(easing) {
-  if (easing === "custom-bezier") {
-    return { easing, interpolation: "bezier" };
+  if (easing === "step" || easing === "hold") {
+    return { easing: { type: "step" }, interpolation: "hold", inTangent: null, outTangent: null };
   }
-  if (easing === "hold") {
-    return { easing, interpolation: "hold", inTangent: null, outTangent: null };
-  }
-  if (easing === "ease-in" || easing === "ease-out" || easing === "ease-in-out") {
-    return { easing, interpolation: "bezier", inTangent: null, outTangent: null };
-  }
-  return { easing: "linear", interpolation: "linear", inTangent: null, outTangent: null };
+
+  const preset = getTimelineEasingPreset(easing === "custom-bezier" ? "smooth" : easing);
+  const controlPoints = preset?.controlPoints ?? [0, 0, 1, 1];
+  return {
+    easing: { type: "bezier", controlPoints },
+    interpolation: "linear",
+    inTangent: null,
+    outTangent: null,
+  };
 }
 
 function resetSelectedKeyframeTangents(button) {
@@ -1911,21 +1927,26 @@ function getSelectedTimelineKeyframe(timeline = getState().timeline) {
 }
 
 function renderEasingOptions(value, interpolation = "linear") {
-  const current = interpolation === "bezier" && value === "linear"
-    ? "custom-bezier"
-    : String(value ?? "linear");
-  return [
-    ["linear", "Linear"],
-    ["ease-in", "Ease In"],
-    ["ease-out", "Ease Out"],
-    ["ease-in-out", "Ease In Out"],
-    ["hold", "Hold"],
-    ["custom-bezier", "Custom Bezier"],
-  ]
-    .map(([optionValue, label]) => `
-      <option value="${optionValue}" ${optionValue === current ? "selected" : ""}>${label}</option>
+  const current = resolveEasingSelectValue(value, interpolation);
+  const presetOptions = TIMELINE_EASING_PRESETS
+    .map((preset) => `
+      <option value="${preset.name}" ${preset.name === current ? "selected" : ""}>${escapeHtml(preset.label)}</option>
     `)
     .join("");
+  return `
+    ${presetOptions}
+    <option value="step" ${current === "step" ? "selected" : ""}>Step</option>
+    <option value="custom-bezier" ${current === "custom-bezier" ? "selected" : ""}>Custom Bezier</option>
+  `;
+}
+
+function resolveEasingSelectValue(value, interpolation = "linear") {
+  if (value?.type === "step" || interpolation === "hold") return "step";
+  const match = findMatchingEasingPreset(value);
+  if (match) return match;
+  if (value?.type === "bezier") return "custom-bezier";
+  if (interpolation === "bezier") return "custom-bezier";
+  return "linear";
 }
 
 function updateAnimationPlayhead(playback, sourceDuration) {

@@ -71,6 +71,12 @@ player card + properties paneli + zayıf transport satırı kombinasyonundan
 view'ını tek floating overlay altında yeniden inşa eder.**
 
 ### F10.1 — Schema: per-keyframe bezier easing + step
+**Durum (2026-05-12): ✅ İndi.** `src/js/timeline.js` timeline v2'ye
+çıktı; keyframe `easing` alanı `{ type: "bezier", controlPoints }` /
+`{ type: "step" }` şemasına normalize ediliyor. Eski string
+`interpolation` / `easing` değerleri migration yoluyla korunuyor; legacy
+tangent tabanlı bezier segmentleri explicit tangent varsa hala çalışıyor.
+
 | Kapsam | Notlar |
 |---|---|
 | `KeyframeEasing = { type: "bezier"; controlPoints: [x1,y1,x2,y2] } \| { type: "step" }` | Mevcut `interpolation` string'ini bezier'a migrate eden `migrateInterpolationToEasing` |

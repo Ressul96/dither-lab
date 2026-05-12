@@ -1,13 +1,54 @@
 import { dispatch, getState } from "./state.js";
 
-export const TIMELINE_VERSION = 1;
+export const TIMELINE_VERSION = 2;
 export const TIMELINE_BINDING_NODE_PARAM = "node-param";
 export const TIMELINE_BINDING_NODE_PROPERTY = "node-property";
+export const TIMELINE_LINEAR_EASING = Object.freeze({
+  type: "bezier",
+  controlPoints: Object.freeze([0, 0, 1, 1]),
+});
+export const TIMELINE_STEP_EASING = Object.freeze({ type: "step" });
+export const TIMELINE_EASING_PRESETS = Object.freeze([
+  { category: "basic", controlPoints: [0, 0, 1, 1], label: "Linear", name: "linear" },
+  { category: "basic", controlPoints: [0.65, 0, 0.35, 1], label: "Smooth", name: "smooth" },
+  { category: "expressive", controlPoints: [1, -0.4, 0.35, 0.95], label: "Anticipate", name: "anticipate" },
+  { category: "expressive", controlPoints: [0.36, 0, 0.66, -0.56], label: "Back In", name: "backIn" },
+  { category: "expressive", controlPoints: [0.34, 1.56, 0.64, 1], label: "Back Out", name: "backOut" },
+  { category: "out", controlPoints: [0, 0, 0.2, 1], label: "Quick Out", name: "quickOut" },
+  { category: "out", controlPoints: [0.175, 0.885, 0.32, 1.1], label: "Swift Out", name: "swiftOut" },
+  { category: "out", controlPoints: [0.19, 1, 0.22, 1], label: "Snappy Out", name: "snappyOut" },
+  { category: "out", controlPoints: [0.215, 0.61, 0.355, 1], label: "Out Cubic", name: "outCubic" },
+  { category: "out", controlPoints: [0, 0, 0.58, 1], label: "Ease Out", name: "easeOut" },
+  { category: "in", controlPoints: [0.42, 0, 1, 1], label: "Ease In", name: "easeIn" },
+  { category: "in", controlPoints: [0.6, 0.04, 0.98, 0.335], label: "In Circ", name: "inCirc" },
+  { category: "in", controlPoints: [0.755, 0.05, 0.855, 0.06], label: "In Quint", name: "inQuint" },
+  { category: "inOut", controlPoints: [0.42, 0, 0.58, 1], label: "Ease In Out", name: "easeInOut" },
+  { category: "inOut", controlPoints: [0.77, 0, 0.175, 1], label: "In Out Quart", name: "inOutQuart" },
+  { category: "inOut", controlPoints: [0.86, 0, 0.07, 1], label: "In Out Quint", name: "inOutQuint" },
+  { category: "inOut", controlPoints: [1, 0, 0, 1], label: "In Out Expo", name: "inOutExpo" },
+  { category: "inOut", controlPoints: [0.785, 0.135, 0.15, 0.86], label: "In Out Circ", name: "inOutCirc" },
+]);
 
 const DEFAULT_FPS = 30;
 const MIN_FPS = 1;
 const MAX_FPS = 120;
 const KEYFRAME_TIME_EPSILON = 1 / 1200;
+const BEZIER_EPSILON = 1e-6;
+const EASING_PRESET_BY_NAME = new Map(
+  TIMELINE_EASING_PRESETS.map((preset) => [preset.name, preset])
+);
+const LEGACY_EASING_ALIASES = Object.freeze({
+  ease: "easeInOut",
+  easein: "easeIn",
+  easeout: "easeOut",
+  easeinout: "easeInOut",
+  "ease-in": "easeIn",
+  "ease-out": "easeOut",
+  "ease-in-out": "easeInOut",
+  smoothstep: "smooth",
+  hold: "step",
+  step: "step",
+});
 
 export function createDefaultTimeline(overrides = {}) {
   return normalizeTimeline({
@@ -104,6 +145,99 @@ export function formatFrameReadout(timeSeconds, fps, durationSeconds, options = 
 export function formatSecondReadout(timeSeconds, durationSeconds) {
   const fmt = (s) => (Number.isFinite(Number(s)) ? `${Number(s).toFixed(2)}s` : "—");
   return `${fmt(timeSeconds)} / ${fmt(durationSeconds)}`;
+}
+
+export function getTimelineEasingPreset(name) {
+  const preset = EASING_PRESET_BY_NAME.get(String(name ?? ""));
+  return preset ? { ...preset, controlPoints: [...preset.controlPoints] } : null;
+}
+
+export function createBezierEasing(controlPoints = TIMELINE_LINEAR_EASING.controlPoints) {
+  return {
+    type: "bezier",
+    controlPoints: normalizeControlPoints(controlPoints),
+  };
+}
+
+export function createStepEasing() {
+  return { type: "step" };
+}
+
+export function cloneEasing(easing) {
+  const normalized = normalizeEasing(easing);
+  if (normalized.type === "step") return createStepEasing();
+  return createBezierEasing(normalized.controlPoints);
+}
+
+export function migrateInterpolationToEasing(interpolation = "linear") {
+  return normalizeEasing(interpolation);
+}
+
+export function findMatchingEasingPreset(easing) {
+  const normalized = normalizeEasing(easing);
+  if (normalized.type === "step") return null;
+
+  const [x1, y1, x2, y2] = normalized.controlPoints;
+  const tolerance = 0.005;
+  for (const preset of TIMELINE_EASING_PRESETS) {
+    const [px1, py1, px2, py2] = preset.controlPoints;
+    if (
+      Math.abs(x1 - px1) < tolerance &&
+      Math.abs(y1 - py1) < tolerance &&
+      Math.abs(x2 - px2) < tolerance &&
+      Math.abs(y2 - py2) < tolerance
+    ) {
+      return preset.name;
+    }
+  }
+  return null;
+}
+
+export function formatBezierForDisplay(controlPoints) {
+  return normalizeControlPoints(controlPoints)
+    .map((value) => Number(value.toFixed(3)))
+    .join(", ");
+}
+
+export function evaluateCubicBezier(progress, controlPoints) {
+  const p = clamp01(progress);
+  if (p <= 0) return 0;
+  if (p >= 1) return 1;
+
+  const [x1, y1, x2, y2] = normalizeControlPoints(controlPoints);
+  if (x1 === 0 && y1 === 0 && x2 === 1 && y2 === 1) return p;
+
+  let t = p;
+  for (let i = 0; i < 8; i++) {
+    const x = cubicBezierAxis(t, x1, x2) - p;
+    if (Math.abs(x) < BEZIER_EPSILON) return cubicBezierAxis(t, y1, y2);
+
+    const derivative = cubicBezierAxisDerivative(t, x1, x2);
+    if (Math.abs(derivative) < BEZIER_EPSILON) break;
+
+    const nextT = t - x / derivative;
+    if (nextT < 0 || nextT > 1) break;
+    t = nextT;
+  }
+
+  let lo = 0;
+  let hi = 1;
+  t = p;
+  for (let i = 0; i < 18; i++) {
+    const x = cubicBezierAxis(t, x1, x2);
+    if (Math.abs(x - p) < BEZIER_EPSILON) break;
+    if (x < p) lo = t;
+    else hi = t;
+    t = (lo + hi) / 2;
+  }
+
+  return cubicBezierAxis(t, y1, y2);
+}
+
+export function resolveEasing(progress, easing) {
+  const normalized = normalizeEasing(easing);
+  if (normalized.type === "step") return 0;
+  return evaluateCubicBezier(progress, normalized.controlPoints);
 }
 
 // ---------- 1B-i UI dispatch helpers (state mutations) ----------
@@ -359,7 +493,7 @@ export function setParamKeyframe(timeline, { nodeId, paramKey, time, value }) {
     id: createKeyframeId(track.id, keyframeTime),
     time: keyframeTime,
     value: clone(value),
-    easing: "linear",
+    easing: createBezierEasing(),
     interpolation: "linear",
     inTangent: null,
     outTangent: null,
@@ -533,9 +667,10 @@ function normalizeTrack(raw, context) {
   const nodeId = String(raw.nodeId ?? raw.layerId ?? raw.targetId ?? "").trim();
   const binding = normalizeBinding(raw.binding ?? raw.target ?? raw.param ?? raw.property);
   if (!nodeId || !binding?.key) return null;
+  const fallbackEasing = raw.easing ?? raw.interpolation ?? "linear";
 
   const keyframes = (Array.isArray(raw.keyframes) ? raw.keyframes : [])
-    .map((keyframe, index) => normalizeKeyframe(keyframe, index, context, raw.interpolation))
+    .map((keyframe, index) => normalizeKeyframe(keyframe, index, context, fallbackEasing))
     .filter(Boolean);
   if (keyframes.length === 0) return null;
 
@@ -545,7 +680,7 @@ function normalizeTrack(raw, context) {
     collapsed: raw.collapsed === true,
     nodeId,
     binding,
-    interpolation: normalizeInterpolation(raw.interpolation, raw.easing ?? raw.interpolation ?? "linear"),
+    interpolation: normalizeInterpolation(raw.interpolation, fallbackEasing),
     keyframes: dedupeKeyframes(sortKeyframes(keyframes)),
   };
 }
@@ -610,13 +745,14 @@ function normalizeKeyframe(raw, index, context, fallbackEasing) {
   if (!raw || typeof raw !== "object") return null;
   const time = snapTimeToFrame(normalizeKeyframeTime(raw, context), context.fps);
   if (!Number.isFinite(time)) return null;
-  const easing = normalizeEasing(raw.easing ?? raw.interpolation ?? fallbackEasing ?? "linear");
+  const easingSource = raw.easing ?? raw.interpolation ?? fallbackEasing ?? "linear";
+  const easing = normalizeEasing(easingSource, fallbackEasing);
   return {
     id: String(raw.id ?? `kf-${index}`),
     time,
     value: clone(raw.value),
     easing,
-    interpolation: normalizeInterpolation(raw.interpolation, easing),
+    interpolation: normalizeInterpolation(raw.interpolation, easingSource),
     inTangent: normalizeTangent(raw.inTangent),
     outTangent: normalizeTangent(raw.outTangent),
   };
@@ -654,12 +790,11 @@ function evaluateTrack(track, timeSeconds, timeline) {
     const rawT = clamp01((time - from.time) / span);
     const interpolation = resolveSegmentInterpolation(from, track);
     if (interpolation === "hold") return clone(from.value);
-    if (interpolation === "bezier") {
+    if (shouldEvaluateLegacyBezierSegment(track, index)) {
       const bezier = evaluateBezierSegment(track, index, time, timeline);
       if (bezier !== undefined) return bezier;
     }
-    const easing = normalizeEasing(from.easing ?? track.interpolation);
-    return interpolateValues(from.value, to.value, ease(rawT, easing));
+    return interpolateValues(from.value, to.value, resolveEasing(rawT, resolveKeyframeEasing(from, track)));
   }
 
   return clone(last.value);
@@ -710,8 +845,22 @@ function createAutoTangent(track, index, side) {
 }
 
 function resolveSegmentInterpolation(keyframe, track) {
+  if (normalizeEasing(keyframe?.easing ?? track?.interpolation).type === "step") return "hold";
   if (keyframe?.interpolation) return normalizeInterpolation(keyframe.interpolation, keyframe.easing);
   return normalizeInterpolation(track?.interpolation, keyframe?.easing);
+}
+
+function resolveKeyframeEasing(keyframe, track) {
+  if (keyframe?.easing) return normalizeEasing(keyframe.easing, track?.interpolation);
+  return migrateInterpolationToEasing(keyframe?.interpolation ?? track?.interpolation ?? "linear");
+}
+
+function shouldEvaluateLegacyBezierSegment(track, index) {
+  const from = track.keyframes[index];
+  const to = track.keyframes[index + 1];
+  if (!from || !to) return false;
+  if (resolveSegmentInterpolation(from, track) !== "bezier") return false;
+  return Boolean(normalizeTangent(from.outTangent) || normalizeTangent(to.inTangent));
 }
 
 function interpolateValues(from, to, t) {
@@ -781,6 +930,8 @@ function sanitizeKeyframePatch(patch) {
   }
   if (Object.prototype.hasOwnProperty.call(patch, "interpolation")) {
     out.interpolation = normalizeInterpolation(patch.interpolation, out.easing ?? patch.easing);
+  } else if (Object.prototype.hasOwnProperty.call(patch, "easing")) {
+    out.interpolation = normalizeInterpolation(undefined, out.easing);
   }
   if (Object.prototype.hasOwnProperty.call(patch, "inTangent")) {
     out.inTangent = normalizeTangent(patch.inTangent);
@@ -798,17 +949,10 @@ function normalizeInterpolation(raw, easingFallback = "linear") {
   const value = String(raw ?? "").toLowerCase().replace(/[_\s]+/g, "-");
   if (value === "bezier" || value === "custom-bezier") return "bezier";
   if (value === "hold") return "hold";
+  if (value === "step") return "hold";
   if (value === "linear") return "linear";
   const easing = normalizeEasing(easingFallback);
-  if (easing === "hold") return "hold";
-  if (
-    easing === "ease-in" ||
-    easing === "ease-out" ||
-    easing === "ease-in-out" ||
-    easing === "custom-bezier"
-  ) {
-    return "bezier";
-  }
+  if (easing.type === "step") return "hold";
   return "linear";
 }
 
@@ -820,30 +964,76 @@ function normalizeTangent(raw) {
   return { dt, dv };
 }
 
-function normalizeEasing(raw) {
-  if (raw && typeof raw === "object" && raw.mode) return normalizeEasing(raw.mode);
-  const value = String(raw ?? "linear").toLowerCase().replace(/_/g, "-");
-  if (value === "custom-bezier" || value === "bezier" || value === "custom") return "custom-bezier";
-  if (value === "easein") return "ease-in";
-  if (value === "easeout") return "ease-out";
-  if (value === "easeinout" || value === "smooth") return "ease-in-out";
-  if (value === "hold" || value === "step") return "hold";
-  if (value === "ease-in" || value === "ease-out" || value === "ease-in-out") return value;
-  return "linear";
+function normalizeControlPoints(raw) {
+  const values = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? raw.split(/[,\s]+/)
+      : [];
+  const parts = values.map((value) => Number(value));
+  if (parts.length !== 4 || parts.some((value) => !Number.isFinite(value))) {
+    return [...TIMELINE_LINEAR_EASING.controlPoints];
+  }
+
+  return [
+    clamp01(parts[0]),
+    parts[1],
+    clamp01(parts[2]),
+    parts[3],
+  ];
 }
 
-function ease(t, easing) {
-  switch (easing) {
-    case "ease-in":
-      return t * t;
-    case "ease-out":
-      return 1 - (1 - t) * (1 - t);
-    case "ease-in-out":
-      return t * t * (3 - 2 * t);
-    case "linear":
-    default:
-      return t;
+function parseEasingString(raw) {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (!value) return null;
+  if (value.toLowerCase() === "step") return createStepEasing();
+
+  const bezierMatch = value.match(/^cubic-bezier\((.+)\)$/i);
+  if (!bezierMatch) return null;
+  return createBezierEasing(bezierMatch[1]);
+}
+
+function normalizeEasingToken(raw) {
+  return String(raw ?? "linear")
+    .trim()
+    .replace(/_/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9-]/g, "")
+    .replace(/-([a-z])/g, (_, char) => char.toUpperCase())
+    .replace(/^[A-Z]/, (char) => char.toLowerCase());
+}
+
+function normalizeEasing(raw, fallback = "linear") {
+  if (raw && typeof raw === "object") {
+    if (raw.type === "step") return createStepEasing();
+    if (raw.type === "bezier") return createBezierEasing(raw.controlPoints);
+    if (raw.mode !== undefined) return normalizeEasing(raw.mode, fallback);
+    if (raw.name !== undefined) return normalizeEasing(raw.name, fallback);
+    if (raw.controlPoints !== undefined) return createBezierEasing(raw.controlPoints);
   }
+
+  const parsed = parseEasingString(raw);
+  if (parsed) return parsed;
+
+  const token = normalizeEasingToken(raw);
+  const aliased = LEGACY_EASING_ALIASES[token] ?? token;
+  if (aliased === "step") return createStepEasing();
+  if (
+    aliased === "custombezier" ||
+    aliased === "customBezier" ||
+    aliased === "custom-bezier" ||
+    aliased === "bezier" ||
+    aliased === "custom"
+  ) {
+    return createBezierEasing(EASING_PRESET_BY_NAME.get("smooth")?.controlPoints);
+  }
+
+  const preset = EASING_PRESET_BY_NAME.get(aliased);
+  if (preset) return createBezierEasing(preset.controlPoints);
+
+  if (fallback !== undefined && fallback !== raw) return normalizeEasing(fallback, "linear");
+  return createBezierEasing();
 }
 
 function createTrackId(nodeId, paramKey) {
@@ -876,6 +1066,17 @@ function isPlainObject(value) {
 function clone(value) {
   if (value === undefined) return undefined;
   return JSON.parse(JSON.stringify(value));
+}
+
+function cubicBezierAxis(t, p1, p2) {
+  const inv = 1 - t;
+  return 3 * inv * inv * t * p1 + 3 * inv * t * t * p2 + t * t * t;
+}
+
+function cubicBezierAxisDerivative(t, p1, p2) {
+  return 3 * (1 - t) * (1 - t) * p1
+    + 6 * (1 - t) * t * (p2 - p1)
+    + 3 * t * t * (1 - p2);
 }
 
 function solveCubicX(x0, x1, x2, x3, targetX) {
