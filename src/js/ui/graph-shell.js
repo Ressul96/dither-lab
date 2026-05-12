@@ -26,6 +26,7 @@ import {
   updateNodeParams,
 } from "../graph.js";
 import { getAlgorithmOptions } from "../dither/index.js";
+import { MIX_MODES } from "../image-ops.js";
 import {
   extractPaletteFromImageData,
   mergePaletteExtraction,
@@ -3749,14 +3750,12 @@ function renderMixNode(node) {
 
   return `
     <section class="node-panel-section">
-      ${renderSelectField("Mode", "mode", params.mode, [
-        ["normal", "Normal"],
-        ["add", "Add"],
-        ["multiply", "Multiply"],
-        ["screen", "Screen"],
-        ["overlay", "Overlay"],
-        ["difference", "Difference"],
-      ])}
+      ${renderSelectField(
+        "Mode",
+        "mode",
+        params.mode,
+        MIX_MODES.map((m) => [m.value, m.label])
+      )}
       ${renderRangeField("Factor", "factor", params.factor, 0, 100, `${params.factor}%`)}
     </section>
   `;

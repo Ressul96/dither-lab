@@ -1977,18 +1977,55 @@ export function applyMixNode(inputA, inputB, params) {
   return output;
 }
 
+// Public catalog of blend modes for the mix node. UI dropdowns read this so
+// the labels stay in sync with the runtime mapper below. Order matches the
+// shader-lab pass-node grouping (Photoshop-style: normal → darken → lighten →
+// contrast → comparative → component) so the dropdown reads naturally.
+//
+// `add` is kept as the only non-PS alias because legacy projects already store
+// it; the mapper folds it into the Canvas `lighter` op. Everything else maps
+// directly onto Canvas 2D globalCompositeOperation, which is GPU-composited by
+// the browser — no separate WebGL pair needed.
+export const MIX_MODES = Object.freeze([
+  { value: "normal", label: "Normal" },
+  { value: "darken", label: "Darken" },
+  { value: "multiply", label: "Multiply" },
+  { value: "color-burn", label: "Color Burn" },
+  { value: "lighten", label: "Lighten" },
+  { value: "screen", label: "Screen" },
+  { value: "color-dodge", label: "Color Dodge" },
+  { value: "add", label: "Add (lighter)" },
+  { value: "overlay", label: "Overlay" },
+  { value: "soft-light", label: "Soft Light" },
+  { value: "hard-light", label: "Hard Light" },
+  { value: "difference", label: "Difference" },
+  { value: "exclusion", label: "Exclusion" },
+  { value: "hue", label: "Hue" },
+  { value: "saturation", label: "Saturation" },
+  { value: "color", label: "Color" },
+  { value: "luminosity", label: "Luminosity" },
+]);
+
 function mapCompositeMode(mode) {
   switch (mode) {
     case "add":
       return "lighter";
     case "multiply":
-      return "multiply";
     case "screen":
-      return "screen";
     case "overlay":
-      return "overlay";
+    case "darken":
+    case "lighten":
+    case "color-dodge":
+    case "color-burn":
+    case "hard-light":
+    case "soft-light":
     case "difference":
-      return "difference";
+    case "exclusion":
+    case "hue":
+    case "saturation":
+    case "color":
+    case "luminosity":
+      return mode;
     case "normal":
     default:
       return "source-over";
