@@ -37,16 +37,16 @@
 
   --inspector-w: 340px;
   --right-panel-w: 320px;
-  --radius-xs: 3px;
-  --radius-sm: 6px;
-  --radius-md: 7px;
-  --radius-lg: 8px;
-  --radius-xl: 9px;
-  --radius-shell: 9px;
-  --radius-surface: 10px;
-  --radius-player: 10px;
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 5px;
+  --radius-lg: 6px;
+  --radius-xl: 7px;
+  --radius-shell: 6px;
+  --radius-surface: 7px;
+  --radius-player: 7px;
   --radius-pill: 999px;
-  --radius-handle: 8px;
+  --radius-handle: 6px;
 
   font-family: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont,
     "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
