@@ -23,12 +23,21 @@ sistem için kendi md'sinde.
 |---|---|---|---|
 | F1 | Altyapı temel taşları | 1-2 hafta | ✅ |
 | F2 | Mevcut node iyileştirmeleri | 1 hafta | ✅ |
-| F3 | Yeni Color / Source node'ları | 1-2 hafta | 🚧 |
-| F4 | Yeni Effect node'ları | 1-2 hafta | ⬜ |
-| F5 | Curve editor + displace genişlemesi | 1 hafta | ⬜ |
-| F6 | Editor scaling: Group nodes | 1-2 hafta | ⬜ |
-| F7 | On-canvas Gizmos | 1 hafta | ⬜ |
-| F8 | Web Worker / OffscreenCanvas | 2-4 hafta | ⬜ |
+| F3 | Yeni Color / Source node'ları | 1-2 hafta | ✅ |
+| F4 | Yeni Effect node'ları | 1-2 hafta | ✅ |
+| F5 | Curve editor + displace genişlemesi | 1 hafta | ✅ |
+| F6 | Editor scaling: Group nodes | 1-2 hafta | ✅ |
+| F7 | On-canvas Gizmos | 1 hafta | ✅ |
+| F8 | Web Worker / OffscreenCanvas | 2-4 hafta | ✅ |
+| F9 | Renderer altyapı (ping-pong + mip + HDR) | 2-3 hafta | ⬜ |
+| F10 | Effect ports (Shader Lab) | 3-4 hafta | ⬜ |
+| F11 | Timeline & easing parity | ~1 hafta | ⬜ |
+| F12 | Layer / composite / scene grading parity | ~1 hafta | ⬜ |
+| F13 | Export polish + preset'ler | ~1 hafta | ⬜ |
+| F14 | Stretch (custom-shader, procedural sources, fluid, audio-reactive) | açık uçlu | ⬜ |
+
+F9–F14 detayları: [`shader_lab_plan.md`](shader_lab_plan.md). Karşılaştırma
+kaynağı: https://github.com/basementstudio/shader-lab.
 
 Player reformu (Faz 1-5) ayrı bir iş kalemidir, tamamlandı (`f754dcd`'ye
 kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
