@@ -162,11 +162,22 @@ yeniden render ediyor. Outside-click ve Esc kapatıyor.
 | Outside-click ve Esc ile kapanır; keyframe silinirse popover kendini kapatır | `getTimelineKeyframe` null dönerse closeBezierPopover |
 
 ### F10.7 — Color/vec interpolation parity
+**Durum (2026-05-12): ✅ İndi.** `interpolateValues` artık hex string
+çiftlerini `hexToRgb01` ile RGB'ye çevirip 0-1 aralığında component-wise
+lerp yapıp `rgbToHex` ile geri yazıyor; 3-digit (`#fff`), 6-digit, ve
+`#`-siz girdiler aynı path'tan geçiyor, karma format (3 vs 6) da
+destekleniyor. Boolean keyframe'leri t<0.5 için `from`, ≥0.5 için `to`
+döndürüyor — non-linear easing'ler eğri 0.5'i geçtiği anda flip ediyor.
+vec2/vec3 array + `{x,y,z}` object lerp zaten vardı (regression test
+geçti). Mesh-gradient stops karma tip içerdiği için ileri faza
+bırakıldı.
+
 | Kapsam | Notlar |
 |---|---|
-| Hex string'ler RGB'ye lerp + tekrar hex (`parseHexColor` + `rgbToHex`) | shader-lab'in `interpolateValue` switch'i |
-| vec2/vec3 component-wise lerp | Mesh-gradient stops dahil (ileri faz) |
-| Boolean: step (cross >0.5 noktasında flip) | Mevcut |
+| Hex string'ler RGB'ye lerp + tekrar hex | `interpolateHexColor` + `isHexColorString`, `color.js`'in `hexToRgb01` + `rgbToHex` helper'larıyla |
+| vec2/vec3 component-wise lerp | Array + tüm-numeric object branch zaten vardı |
+| Boolean: step at eased >0.5 | Yeni branch; `t < 0.5 ? from : to` |
+| Non-hex string fallback | Mevcut step-at-t=1 davranışı korundu |
 
 ### F10.8 — Mobile-friendly layout (opsiyonel)
 | Kapsam | Notlar |

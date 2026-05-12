@@ -1,4 +1,5 @@
 import { dispatch, getState } from "./state.js";
+import { hexToRgb01, rgbToHex } from "./color.js";
 
 export const TIMELINE_VERSION = 2;
 export const TIMELINE_BINDING_NODE_PARAM = "node-param";
@@ -1032,9 +1033,34 @@ function shouldEvaluateLegacyBezierSegment(track, index) {
   return Boolean(normalizeTangent(from.outTangent) || normalizeTangent(to.inTangent));
 }
 
+const HEX_COLOR_RE = /^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+function isHexColorString(value) {
+  return typeof value === "string" && HEX_COLOR_RE.test(value.trim());
+}
+
+function interpolateHexColor(from, to, t) {
+  const a = hexToRgb01(from);
+  const b = hexToRgb01(to);
+  return rgbToHex(
+    (a[0] + (b[0] - a[0]) * t) * 255,
+    (a[1] + (b[1] - a[1]) * t) * 255,
+    (a[2] + (b[2] - a[2]) * t) * 255
+  );
+}
+
 function interpolateValues(from, to, t) {
   if (typeof from === "number" && typeof to === "number") {
     return from + (to - from) * t;
+  }
+  if (typeof from === "boolean" && typeof to === "boolean") {
+    // Step at the eased-curve midpoint, not at t=1 — matches shader-lab's
+    // interpolateValue switch so non-linear easings flip the bool exactly
+    // when the curve visually crosses 0.5.
+    return t < 0.5 ? from : to;
+  }
+  if (isHexColorString(from) && isHexColorString(to)) {
+    return interpolateHexColor(from, to, t);
   }
   if (Array.isArray(from) && Array.isArray(to) && from.length === to.length) {
     return from.map((value, index) => interpolateValues(value, to[index], t));
