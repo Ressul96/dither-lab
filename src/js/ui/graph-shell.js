@@ -460,6 +460,11 @@ function initViewportInteractions() {
   editorEl.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
     if (e.target.closest("[data-node-id]") || e.target.closest(".graph-socket-hit")) return;
+    // The breadcrumb lives inside #nodeEditor so the pan handler would
+    // otherwise capture the pointer on this same `pointerdown` and the
+    // follow-up `click` never reaches the Root / group buttons — that's
+    // why entering a group looked one-way.
+    if (e.target.closest(".graph-breadcrumb")) return;
     if (e.metaKey || e.ctrlKey) {
       startEdgeCut(e);
       return;
