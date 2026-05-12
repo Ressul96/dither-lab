@@ -2476,7 +2476,7 @@ function renderCurveCanvas(points, options = {}) {
           data-curve-handle="${index}"
           cx="${(Number(point.x) / 255) * size}"
           cy="${size - (Number(point.y) / 255) * size}"
-          r="6"
+          r="4"
         />
       `
     )
