@@ -2043,8 +2043,14 @@ function blurImage(input, radius, passes = 2) {
   if (!input?.width || !input?.height || normalizedRadius <= 0) return input;
 
   if (supportsBlurFilter()) {
-    const output = createBuffer(input.width, input.height);
-    const ctx = output.getContext("2d", { willReadFrequently: true });
+    // Allocate fresh instead of going through acquireBuffer: pooled buffers
+    // were created with `willReadFrequently: true` for the getImageData-
+    // heavy nodes, which forces a CPU backing — ctx.filter blur then runs
+    // on CPU and is the actual perf cliff the user hit. A new canvas with
+    // a default-options context stays GPU-friendly, so the filter rides
+    // hardware compositing.
+    const output = createProcessingCanvas(input.width, input.height);
+    const ctx = output.getContext("2d");
     ctx.filter = `blur(${normalizedRadius}px)`;
     ctx.drawImage(input, 0, 0);
     ctx.filter = "none";
