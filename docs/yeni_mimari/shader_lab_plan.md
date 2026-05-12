@@ -144,11 +144,22 @@ zamanı koyar — gerisi göreli offset'leri korur.
 | Clipboard: Cmd/Ctrl+C kopyalar, Cmd/Ctrl+V playhead'e relative paste | Module-level `timelineKeyframeClipboard` + `pasteTimelineKeyframes` helper'ı; en erken zamanlı item playhead frame'ine düşer |
 
 ### F10.6 — Per-keyframe inline bezier editor (popover)
+**Durum (2026-05-12): ✅ İndi.** Eski easing `<select>` kaldırıldı; yerine
+keyframe panelinde mini-eğri thumbnaillı bir `bezier-trigger` butonu var.
+Tıklayınca body-level `.bezier-popover` açılıyor: 100×100 viewBox üzerinde
+cubic bezier eğri, iki sürüklenebilir P1/P2 handle (overshoot için y ekseni
+[-1.5, 2.5] aralığında), 18 preset chip 3 sütunlu grid'de kategorik
+sıralanmış, altta cubic-bezier(...) readout + Step easing toggle. Drag,
+preset click ve step toggle anlık `updateTimelineKeyframe` dispatch'i ile
+live preview yapıyor; timeline subscribe popover'ın SVG'sini ve readout'unu
+yeniden render ediyor. Outside-click ve Esc kapatıyor.
+
 | Kapsam | Notlar |
 |---|---|
-| Keyframe seçildiğinde sağ-alt köşede curve editor popover butonu | `CurveEditorPopover` |
-| Popover içinde: cubic bezier görselleştirme + preset listesi + manuel control point drag (4 nokta) + Step toggle | F5.1 curve primitive yeniden kullanılabilir |
-| Easing değişikliği tek undo entry'sine düşer | Live preview drag esnasında |
+| Keyframe seçildiğinde bezier-trigger butonu (mini curve thumbnail + easing adı) | `renderBezierTriggerButton` |
+| Popover: cubic bezier viz + 18 preset chip + 2 control point drag + Step toggle | Body'ye fixed-position eklenir; `.player-more-popover` tabanından `.bezier-popover` |
+| Live preview drag esnasında | Pointermove sırasında `updateTimelineKeyframe` dispatch + subscribe re-render |
+| Outside-click ve Esc ile kapanır; keyframe silinirse popover kendini kapatır | `getTimelineKeyframe` null dönerse closeBezierPopover |
 
 ### F10.7 — Color/vec interpolation parity
 | Kapsam | Notlar |

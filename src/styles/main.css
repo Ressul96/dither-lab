@@ -2818,6 +2818,166 @@ body.dragging-tangent .timeline-tangent-handle {
   font-variant-numeric: tabular-nums;
 }
 
+/* --- Bezier easing trigger + popover (F10.6) ------------------------- */
+
+.bezier-trigger-field {
+  min-width: 0;
+}
+
+.bezier-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: var(--text-label);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bezier-trigger:hover {
+  border-color: var(--border-strong);
+}
+
+.bezier-trigger svg {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}
+
+.bezier-trigger svg path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 14;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.bezier-trigger span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.bezier-popover {
+  width: 280px;
+  min-width: 280px;
+}
+
+.bezier-curve-section {
+  align-items: stretch;
+}
+
+.bezier-curve {
+  width: 100%;
+  height: 200px;
+  overflow: visible;
+}
+
+.bezier-curve-frame {
+  fill: var(--bg-canvas);
+  stroke: var(--border-subtle);
+  stroke-width: 0.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.bezier-curve-tangent {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.bezier-curve-path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.bezier-curve-anchor {
+  fill: var(--text-secondary);
+  stroke: var(--bg-canvas);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.bezier-curve-handle {
+  fill: var(--accent);
+  stroke: var(--bg-elevated);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+  touch-action: none;
+}
+
+.bezier-curve-handle:hover,
+.bezier-curve-handle:focus {
+  fill: var(--text-primary);
+  outline: none;
+}
+
+body.dragging-keyframe .bezier-curve-handle,
+.bezier-curve-handle:active {
+  cursor: grabbing;
+}
+
+.bezier-curve-readout {
+  margin-top: 4px;
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.bezier-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.bezier-preset-chip {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bezier-preset-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.bezier-preset-chip.is-active {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.bezier-step-toggle.is-active {
+  color: var(--text-primary);
+  background: var(--accent-dim);
+}
+
 .export-entry {
   min-width: 110px;
   margin-left: auto;
