@@ -323,13 +323,15 @@ const NODE_DEFINITIONS = Object.freeze({
   "mask-apply": {
     label: "Mask Apply",
     family: "Mask",
-    description: "Multiplies the input image by a mask — black where mask is zero, source where mask is white. Optional feather and opacity blend.",
+    description: "Gates the input image by a mask channel. Source picks which mask channel reads (luma / alpha / R / G / B); mode chooses between continuous multiply and hard stencil cutoff.",
     inputs: [
       { name: "image", label: "Image", type: "image" },
       { name: "mask", label: "Mask", type: "image" },
     ],
     outputs: [{ name: "image", label: "Image", type: "image" }],
     defaultParams: {
+      source: "luma",
+      mode: "multiply",
       invert: "off",
       feather: 0,
       opacity: 100,

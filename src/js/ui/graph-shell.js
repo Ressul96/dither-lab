@@ -26,7 +26,7 @@ import {
   updateNodeParams,
 } from "../graph.js";
 import { getAlgorithmOptions } from "../dither/index.js";
-import { MIX_MODES } from "../image-ops.js";
+import { MASK_MODES, MASK_SOURCES, MIX_MODES } from "../image-ops.js";
 import {
   extractPaletteFromImageData,
   mergePaletteExtraction,
@@ -2963,16 +2963,30 @@ function renderMaskApplyNode(node) {
   const invert = String(params.invert ?? "off");
   const feather = Number(params.feather ?? 0);
   const opacity = Number(params.opacity ?? 100);
+  const source = String(params.source ?? "luma");
+  const mode = String(params.mode ?? "multiply");
   return `
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Apply</header>
+      ${renderSelectField(
+        "Source",
+        "source",
+        source,
+        MASK_SOURCES.map((s) => [s.value, s.label])
+      )}
+      ${renderSelectField(
+        "Mode",
+        "mode",
+        mode,
+        MASK_MODES.map((m) => [m.value, m.label])
+      )}
       ${renderRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
       ${renderRangeField("Feather", "feather", feather, 0, 50, `${feather}px`)}
       ${renderSelectField("Invert Mask", "invert", invert, [
         ["off", "Off"],
         ["on", "On"],
       ])}
-      <p class="hint">Wire any image into the Mask input — its luminance gates the main image.</p>
+      <p class="hint">Source picks which mask channel reads. Stencil mode hard-clips at 50%; Multiply fades continuously.</p>
     </section>
   `;
 }

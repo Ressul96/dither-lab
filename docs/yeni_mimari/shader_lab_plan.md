@@ -207,7 +207,7 @@ direkt shader-lab dosyasından öğren ona uygun yap".
 | PR | Kapsam | Notlar |
 |---|---|---|
 | F11.1 | 16 blend mode katalogu (normal, multiply, screen, overlay, darken, lighten, color-dodge/burn, hard/soft-light, difference, exclusion, hue, saturation, color, luminosity) | **✅ İndi (2026-05-12).** `image-ops.js` `MIX_MODES` katalogunu export ediyor; `mapCompositeMode` switch'i 16 modu Canvas 2D `globalCompositeOperation` üzerine düşürüyor (browser zaten GPU-composite ediyor — ayrı bir WebGL shader pair'i yazılmadı). Legacy `add` modu `lighter` alias'ı olarak korundu. Mix inspector dropdown'u listeyi direkt katalogdan okuyor. `viewer-output` üstünde blend selector opsiyonel/atlandı. |
-| F11.2 | Mask config zenginleştirme: source (luma/alpha/R/G/B), mode (multiply/stencil), invert | `mask-apply` node'una param ekleme |
+| F11.2 | Mask config zenginleştirme: source (luma/alpha/R/G/B), mode (multiply/stencil), invert | **✅ İndi (2026-05-12).** `image-ops.js` `MASK_SOURCES` + `MASK_MODES` katalogu export ediyor; `applyMaskApplyNode` artık 5 kanaldan birini sample edip (`sampleMaskChannel`), `stencil` mode'da 0.5 eşiğinde hard-clip yapıyor (`multiply` legacy continuous fade). Source buffer'ları artık alpha-transparent context'inde okunuyor — alpha source çalışsın diye. Inspector `MASK_SOURCES`/`MASK_MODES` listelerini direkt katalogdan okuyor. Invert toggle korundu. |
 | F11.3 | Scene-wide post-process node: master color curves (R/G/B + master) + clamp gamma + opsiyonel color-map LUT | `viewer-output`'tan önce uygulanan global node; F5.2 rgb-curves altyapısı + F1.2 gradient LUT helper'ı yeniden kullanılır |
 | F11.4 | Layer-level color adjustments (per-node hue/saturation/opacity bayrakları) | Property tracks'in (F10.4) animasyon hedefi olur |
 

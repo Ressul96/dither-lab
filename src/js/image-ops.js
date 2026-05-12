@@ -1765,6 +1765,43 @@ export function applyMaskCombineNode(maskA, maskB, params) {
 // Multiplies the input image by a mask (read as luma) so dark mask regions
 // black out the image. Optional feather softens the mask edges via a cheap
 // box blur. Opacity blends back to the original image.
+// Public catalog of mask channel sources. UI dropdown reads from this so the
+// runtime sampler below and the inspector stay in lockstep.
+export const MASK_SOURCES = Object.freeze([
+  { value: "luma", label: "Luma" },
+  { value: "alpha", label: "Alpha" },
+  { value: "r", label: "Red" },
+  { value: "g", label: "Green" },
+  { value: "b", label: "Blue" },
+]);
+
+// Mask blend modes. `multiply` keeps the legacy luma-fade behaviour
+// (continuous mask gradient); `stencil` is a hard binary cutoff at 0.5 that
+// makes the mask read like a clip path — useful for crisp shapes from
+// procedural inputs (text, halftone) where smooth fading isn't desired.
+export const MASK_MODES = Object.freeze([
+  { value: "multiply", label: "Multiply" },
+  { value: "stencil", label: "Stencil" },
+]);
+
+// Sample one channel from a mask pixel into 0..1. Falls through to luma so
+// legacy projects without an explicit `source` keep their current look.
+function sampleMaskChannel(data, i, source) {
+  switch (source) {
+    case "alpha":
+      return data[i + 3] / 255;
+    case "r":
+      return data[i] / 255;
+    case "g":
+      return data[i + 1] / 255;
+    case "b":
+      return data[i + 2] / 255;
+    case "luma":
+    default:
+      return luminance8(data[i], data[i + 1], data[i + 2]) / 255;
+  }
+}
+
 export function applyMaskApplyNode(input, mask, params) {
   if (!input?.width || !input?.height) return null;
   if (!mask?.width || !mask?.height) return input;
@@ -1774,15 +1811,25 @@ export function applyMaskApplyNode(input, mask, params) {
   const invert = String(params?.invert ?? "off").toLowerCase() === "on";
   const opacity = clamp(Number(params?.opacity ?? 100) / 100, 0, 1);
   const feather = Math.max(0, Math.round(Number(params?.feather ?? 0)));
+  const source = String(params?.source ?? "luma").toLowerCase();
+  const mode = String(params?.mode ?? "multiply").toLowerCase() === "stencil"
+    ? "stencil"
+    : "multiply";
 
   const srcBuf = createBuffer(width, height);
-  const srcCtx = srcBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+  // Alpha channel must survive so the `source: "alpha"` path can read it. The
+  // legacy `{ alpha: false }` context flag forced premultiplied opacity to 255
+  // for every pixel — fine when we only read luma, but wrong for an alpha
+  // mask. Render into a transparent buffer instead.
+  const srcCtx = srcBuf.getContext("2d", { willReadFrequently: true });
+  srcCtx.clearRect(0, 0, width, height);
   srcCtx.drawImage(input, 0, 0);
   const srcData = srcCtx.getImageData(0, 0, width, height).data;
   releaseBuffer(srcBuf);
 
   const maskBuf = createBuffer(width, height);
-  const maskCtx = maskBuf.getContext("2d", { alpha: false, willReadFrequently: true });
+  const maskCtx = maskBuf.getContext("2d", { willReadFrequently: true });
+  maskCtx.clearRect(0, 0, width, height);
   // Native canvas blur for feather — falls back to a no-op if unsupported,
   // which is fine: feather=0 is the most common case anyway.
   if (feather > 0 && supportsBlurFilter()) {
@@ -1799,8 +1846,11 @@ export function applyMaskApplyNode(input, mask, params) {
   const out = imageData.data;
 
   for (let i = 0; i < srcData.length; i += 4) {
-    let m = luminance8(maskData[i], maskData[i + 1], maskData[i + 2]) / 255;
+    let m = sampleMaskChannel(maskData, i, source);
     if (invert) m = 1 - m;
+    // Stencil hard-clips: anything below 0.5 reads as zero, anything above
+    // reads as one. Multiply keeps the continuous luma fade.
+    if (mode === "stencil") m = m >= 0.5 ? 1 : 0;
     // Multiplied output: where mask=0 → black, mask=1 → source.
     // Opacity blends from full source (opacity=0) to fully masked (opacity=1).
     const r = srcData[i];
