@@ -1,6 +1,7 @@
 import { runAlgorithm } from "./dither/index.js";
 import { getPalette } from "./palettes.js";
 import { hexToRgb01 } from "./color.js";
+import { createProcessingCanvas } from "./canvas.js";
 import {
   areRgbCurvesIdentity,
   buildCurveLut,
@@ -2192,19 +2193,22 @@ export function acquireBuffer(width, height) {
     const reused = stack.pop();
     const ctx = reused.getContext("2d", { willReadFrequently: true });
     if (ctx) {
+      // OffscreenCanvas 2D context exposes the same drawing surface API, but
+      // `filter` is not in the spec — guard the assignment so a Worker host
+      // that doesn't implement it doesn't throw.
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
-      ctx.filter = "none";
+      if ("filter" in ctx) ctx.filter = "none";
       ctx.imageSmoothingEnabled = true;
       ctx.clearRect(0, 0, width, height);
     }
     return reused;
   }
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  return canvas;
+  // Route fresh allocations through the canvas factory so a future Worker
+  // host transparently gets OffscreenCanvas; on the main thread this still
+  // returns a DOM canvas, identical to the old `document.createElement` path.
+  return createProcessingCanvas(width, height);
 }
 
 export function releaseBuffer(canvas) {
