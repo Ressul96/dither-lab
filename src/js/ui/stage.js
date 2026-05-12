@@ -1,6 +1,6 @@
 import { getState, dispatch, subscribe } from "../state.js";
 import { openExport } from "../export.js";
-import { clearSource, formatTime, openSource, samplePixel } from "../source.js";
+import { clearSource, formatTime, graphContainsDither, openSource, samplePixel } from "../source.js";
 import { timeToFrame, timelineFrameRate } from "../timeline.js";
 import { initViewerOverlay } from "./viewer-overlay.js";
 import { initViewerGizmos } from "./viewer-gizmos.js";
@@ -418,18 +418,24 @@ function syncZoomToggle(zoomToggle, canvas) {
   // exact pixels that will be exported. Anything below that is a downscale
   // approximation. During playback the effect chain itself runs at half
   // resolution to keep up, so even a 1:1 zoom shows an approximation —
-  // unless the user has flipped the FX quality pill to Full, in which case
-  // playback also processes at source resolution.
+  // unless the user has flipped the FX quality pill to Full, OR the graph
+  // contains a dither node, in which case source.js auto-promotes to
+  // full-res evaluation so playback matches export.
   const video = document.getElementById("sourceVideo");
   const playing = video && !video.paused && !video.ended && video.readyState >= 2;
   const zoomExact = effectiveScale >= 0.999;
-  const playbackFull = (getState().view.playbackQuality ?? "auto") === "full";
-  if (playing && !playbackFull) {
+  const state = getState();
+  const playbackFull = (state.view.playbackQuality ?? "auto") === "full";
+  const ditherAutoFull = graphContainsDither(state.graph);
+  const evalFullRes = playbackFull || ditherAutoFull;
+  if (playing && !evalFullRes) {
     accuracy.dataset.state = "approx";
     accuracy.textContent = "playback · half-res";
   } else if (zoomExact) {
     accuracy.dataset.state = "exact";
-    accuracy.textContent = "1:1 export-accurate";
+    accuracy.textContent = ditherAutoFull && playing
+      ? "1:1 · dither full-res"
+      : "1:1 export-accurate";
   } else {
     accuracy.dataset.state = "approx";
     accuracy.textContent = "approx · downscaled";

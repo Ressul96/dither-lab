@@ -591,6 +591,18 @@ function clampFps(fps) {
   return Math.min(120, Math.max(1, Math.round(fps)));
 }
 
+// Treat both the CPU dither catalogue and the GPU pattern-dither pass as
+// "dither chains" — both produce resolution-dependent output that differs
+// between half-res and full-res evaluation.
+export function graphContainsDither(graph) {
+  if (!graph?.nodes?.length) return false;
+  for (const node of graph.nodes) {
+    if (!node || node.bypassed) continue;
+    if (node.type === "dither" || node.type === "pattern-dither") return true;
+  }
+  return false;
+}
+
 function normalizePlaybackTime(seconds, fps) {
   const state = getState();
   const grid = fps ?? timelineFrameRate(state.timeline, state.source.fps);
@@ -937,11 +949,19 @@ async function renderCurrentFrame() {
   // view.playbackQuality === "full" when they want pixel-accurate live
   // playback at the cost of frame rate.
   const playbackQuality = getState().view.playbackQuality ?? "auto";
+  // Dither output is resolution-dependent: error-diffusion error walks the
+  // grid pixel-by-pixel and ordered patterns are tied to the cell size,
+  // so half-res playback produces a visibly different image than the 1:1
+  // paused/export render. Auto-promote dither chains to full-res evaluation
+  // so the same frame the user is looking at during playback matches what
+  // export will write — at the cost of fewer frames per second.
+  const hasDither = graphContainsDither(graph);
   const usePlaybackScale =
     playbackQuality !== "full" &&
     !v.paused &&
     !v.ended &&
-    !exportSessionActive;
+    !exportSessionActive &&
+    !hasDither;
   const sourceForEval = usePlaybackScale
     ? buildPreviewSource(sourceCanvas)
     : sourceCanvas;
