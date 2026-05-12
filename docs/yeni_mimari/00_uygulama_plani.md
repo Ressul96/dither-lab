@@ -160,7 +160,7 @@ sırasıyla.
 | F8.0 | Ölçüm + feature flag (`workerRender: off / auto / on`) | ✅ |
 | F8.1 | Canvas factory | ✅ |
 | F8.2 | `image-ops.js` pool taşıma | ✅ |
-| F8.3 | `gpu-effects.js` Worker uyumu (ASCII atlas dahil) | ⬜ |
+| F8.3 | `gpu-effects.js` Worker uyumu (ASCII atlas dahil) | ✅ |
 | F8.4 | Worker adapter (preview only, request token, stale discard) | ⬜ |
 | F8.5 | Export ayrımı | ⬜ |
 
