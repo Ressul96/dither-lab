@@ -1712,6 +1712,49 @@ body.cutting-edges * {
   box-shadow: 0 0 12px color-mix(in srgb, var(--node-family) 28%, transparent);
 }
 
+.graph-node-context-menu {
+  width: 224px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.graph-node-context-menu__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: var(--text-label);
+  font-weight: 650;
+}
+
+.graph-node-context-menu__header .mono {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.graph-node-context-menu__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+}
+
+.context-menu.graph-node-context-menu button {
+  min-height: 30px;
+  padding: 7px 9px;
+}
+
+.context-menu.graph-node-context-menu button.is-danger {
+  color: #ff9c9c;
+}
+
+.context-menu.graph-node-context-menu button.is-danger:hover:not(:disabled) {
+  background: rgba(255, 91, 91, 0.14);
+}
+
 
 .scopes-drawer {
   position: absolute;

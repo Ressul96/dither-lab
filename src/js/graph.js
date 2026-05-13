@@ -1354,6 +1354,41 @@ export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
   return nodeId;
 }
 
+export function duplicateNode(nodeId, options = {}) {
+  if (!nodeId) return null;
+
+  const graph = ensureBootGraph();
+  const source = getNodeById(nodeId, graph);
+  if (!source || source.type === "source" || source.type === "viewer-output" || source.type === "group") {
+    return null;
+  }
+
+  const offset = Number.isFinite(Number(options.offset)) ? Number(options.offset) : 36;
+  const nextId = nextNodeId(source.type, graph);
+  const nextNode = createNode(nextId, source.type, {
+    parentId: getNodeParentId(source),
+    label: createDuplicateLabel(source.label),
+    x: source.x + offset,
+    y: source.y + offset,
+    params: clone(source.params),
+    opacity: source.opacity,
+    hue: source.hue,
+    saturation: source.saturation,
+    exposedParams: clone(source.exposedParams),
+    exposedParamConfig: clone(source.exposedParamConfig),
+    bypassed: source.bypassed,
+  });
+
+  const nextNodes = [...graph.nodes.map((node) => clone(node)), nextNode];
+  dispatch("graph", {
+    nodes: refreshGroupMetadataForNodes(nextNodes, graph.edges),
+    selectedNodeId: nextId,
+    selectedNodeIds: [nextId],
+  });
+
+  return nextId;
+}
+
 export function insertNodeOnEdge(edgeId, type, options = {}) {
   const definition = getNodeDefinition(type);
   if (!definition || definition.chainable === false || type === "source" || type === "viewer-output") return null;
@@ -2277,6 +2312,11 @@ function normalizeLayerProperty(key, value) {
 function normalizeNodeLabel(value, fallback) {
   const label = typeof value === "string" ? value.trim() : "";
   return label || fallback;
+}
+
+function createDuplicateLabel(value) {
+  const label = typeof value === "string" ? value.trim() : "";
+  return label ? `${label} Copy` : "Node Copy";
 }
 
 function normalizeGroupMetadata(group) {

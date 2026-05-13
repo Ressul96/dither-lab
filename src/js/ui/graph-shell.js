@@ -4,6 +4,7 @@ import {
   ROOT_PARENT_ID,
   addEdge,
   createFreeNode,
+  duplicateNode,
   ensureBootGraph,
   getNodeById,
   getNodeDefinition,
@@ -5867,6 +5868,13 @@ function initGraphContextMenu() {
   graphMenuEl.className = "context-menu graph-node-picker floating-card hidden";
 
   graphMenuEl.addEventListener("click", (event) => {
+    const nodeAction = event.target.closest("[data-node-menu-action]");
+    if (nodeAction) {
+      handleGraphNodeMenuAction(nodeAction);
+      hideGraphContextMenu();
+      return;
+    }
+
     const button = event.target.closest("[data-add-node]");
     if (!button) return;
 
@@ -5883,6 +5891,8 @@ function initGraphContextMenu() {
     hideGraphContextMenu();
   });
 
+  nodesEl.addEventListener("contextmenu", onNodeContextMenu);
+
   editorEl.addEventListener("contextmenu", (event) => {
     if (event.target.closest("[data-node-id]")) return;
     event.preventDefault();
@@ -5892,6 +5902,7 @@ function initGraphContextMenu() {
       edgeId: edge?.edgeId ?? "",
     };
     setInsertHighlight(edge?.edgeId ?? "");
+    graphMenuEl.className = "context-menu graph-node-picker floating-card hidden";
     graphMenuEl.innerHTML = renderGraphContextMenuContent(Boolean(edge?.edgeId));
     positionGraphContextMenu(event.clientX, event.clientY);
   });
@@ -5907,6 +5918,30 @@ function initGraphContextMenu() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") hideGraphContextMenu();
   });
+}
+
+function onNodeContextMenu(event) {
+  const nodeEl = event.target.closest("[data-node-id]");
+  if (!nodeEl) return;
+
+  const node = getNodeById(nodeEl.dataset.nodeId);
+  if (!node) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  if (!getSelectedNodeIds().includes(node.id)) {
+    selectNode(node.id);
+  }
+
+  graphMenuState = {
+    mode: "node",
+    nodeId: node.id,
+    point: clientToWorld(event.clientX, event.clientY),
+  };
+  graphMenuEl.className = "context-menu graph-node-context-menu floating-card hidden";
+  graphMenuEl.innerHTML = renderGraphNodeMenuContent(node.id);
+  positionGraphContextMenu(event.clientX, event.clientY);
 }
 
 function hideGraphContextMenu() {
@@ -5987,6 +6022,105 @@ function getNodePaletteMenuGroups() {
 
 function normalizeMenuLabel(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function renderGraphNodeMenuContent(nodeId) {
+  const node = getNodeById(nodeId);
+  if (!node) return "";
+
+  const selectedIds = getSelectedNodeIds();
+  const contextCount = selectedIds.includes(node.id) ? selectedIds.length : 1;
+  const selectionLabel = contextCount > 1 ? `${contextCount} Selected` : node.label;
+  const canDuplicate = canDuplicateGraphNode(node);
+  const canDelete = canDeleteGraphNode(node);
+  const canBypass = canBypassGraphNode(node);
+  const canGroup = getGroupSelectionInfo(selectedIds).canGroup;
+  const canUngroup = node.type === "group";
+  const bypassLabel = node.bypassed ? "Enable Node" : "Bypass Node";
+
+  return `
+    <div class="graph-node-context-menu__header">
+      <span>${escapeHtml(selectionLabel)}</span>
+      <span class="mono">${escapeHtml(node.type)}</span>
+    </div>
+    <div class="graph-node-context-menu__body">
+      ${renderGraphNodeMenuButton("duplicate", "Duplicate Node", canDuplicate)}
+      ${renderGraphNodeMenuButton("toggle-bypass", bypassLabel, canBypass)}
+      ${renderGraphNodeMenuButton("group-selected", "Group Selected", canGroup)}
+      ${
+        node.type === "group"
+          ? renderGraphNodeMenuButton("open-group", "Open Group", true)
+          : ""
+      }
+      ${renderGraphNodeMenuButton("ungroup", "Ungroup", canUngroup)}
+      ${renderGraphNodeMenuButton("delete", "Delete Node", canDelete, "is-danger")}
+    </div>
+  `;
+}
+
+function renderGraphNodeMenuButton(action, label, enabled = true, className = "") {
+  return `
+    <button
+      type="button"
+      class="${escapeHtml(className)}"
+      data-node-menu-action="${escapeHtml(action)}"
+      ${enabled ? "" : "disabled"}
+    >${escapeHtml(label)}</button>
+  `;
+}
+
+function handleGraphNodeMenuAction(control) {
+  const nodeId = graphMenuState?.nodeId;
+  const node = getNodeById(nodeId);
+  if (!node) return;
+
+  switch (control.dataset.nodeMenuAction) {
+    case "duplicate":
+      duplicateNode(node.id);
+      break;
+    case "toggle-bypass":
+      toggleNodeBypass(node.id);
+      break;
+    case "group-selected":
+      groupCurrentSelection();
+      break;
+    case "open-group":
+      if (node.type === "group") setCurrentGraphParent(node.id);
+      break;
+    case "ungroup":
+      if (node.type === "group") ungroupNode(node.id);
+      break;
+    case "delete":
+      removeNode(node.id);
+      break;
+    default:
+      break;
+  }
+}
+
+function canDuplicateGraphNode(node) {
+  return Boolean(node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
+}
+
+function canDeleteGraphNode(node) {
+  return Boolean(node && node.type !== "source" && node.type !== "viewer-output");
+}
+
+function canBypassGraphNode(node) {
+  return Boolean(node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
+}
+
+function getGroupSelectionInfo(selectedNodeIds = getSelectedNodeIds()) {
+  const { graph } = getState();
+  const nodes = selectedNodeIds.map((nodeId) => getNodeById(nodeId, graph)).filter(Boolean);
+  const groupable = nodes.filter((node) => node.type !== "source" && node.type !== "viewer-output");
+  const parentIds = new Set(groupable.map((node) => getNodeParentId(node)));
+
+  return {
+    nodes,
+    groupable,
+    canGroup: groupable.length > 0 && parentIds.size === 1,
+  };
 }
 
 function maybeAutoCenterGraph() {

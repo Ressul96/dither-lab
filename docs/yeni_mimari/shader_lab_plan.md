@@ -263,6 +263,8 @@ graph editor'ün interaction modelini ve palette UX'ini yeniden inşa eder.
 
 **Durum:** F13.2a indi (2026-05-13). Boş canvas ve edge sağ-tık menüsü palette'in mini kategorize versiyonunu kullanıyor; edge üstünde header `Insert Node / edge`, boş canvas'ta `Add Node / canvas` olarak ayrılıyor. Aile renk şeritleri context menu'de de korunuyor.
 
+**Durum:** F13.2b indi (2026-05-13). Node üstüne sağ-tık menüsü eklendi: duplicate, bypass/enable, group selected, open group, ungroup ve delete aksiyonları tek menüden çalışıyor. Source/viewer/group için uygun olmayan aksiyonlar disabled kalıyor; duplicate regular node param/layer/exposed-param state'ini koruyarak offset'li kopya oluşturuyor.
+
 ### F13.3 — Interaction model rework (mouse + modifiers)
 Kullanıcının istediği yeni model:
 
