@@ -252,6 +252,8 @@ graph editor'ün interaction modelini ve palette UX'ini yeniden inşa eder.
 | **Kompakt liste** — her node ayrı kart yerine tek satır + sol kenar renk şeridi (mevcut color coding korunur) | Screenshot baz alınır; padding küçülür, kategoriler hâlâ üst başlık (INPUT / COLOR / PROCESS / …). **Renk yapımız onlardan daha iyi** — onlar tek renk; biz family color şeridini koruruz |
 | **Drag handle ergonomisi** — node satırı tam highlight, sürüklenebilir whole row | Mevcut drag mevcut, sadece görsel polish |
 
+**Durum:** F13.1a indi (2026-05-13). Palette başlığına inline search eklendi; kategori ve node satırları substring/family/type match'e göre filtreleniyor. Node satırları daha kompakt hale geldi, family color şeridi korunuyor.
+
 ### F13.2 — Canvas sağ-tık context menu
 | Kapsam | Notlar |
 |---|---|

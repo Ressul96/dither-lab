@@ -45,6 +45,10 @@
           </div>
           <div class="section-body">
             <div class="node-palette">
+              <label class="node-palette-search">
+                <span class="node-palette-search__icon" aria-hidden="true"></span>
+                <input type="search" data-node-palette-search aria-label="Search nodes" placeholder="Search nodes" autocomplete="off" spellcheck="false" />
+              </label>
               <div class="node-palette-group" data-node-family="input">
                 <p class="node-palette-label">Input</p>
                 <div class="node-palette-items">
@@ -129,6 +133,7 @@
                   <div class="palette-item type-math" data-palette-node="math" draggable="true">Math</div>
                 </div>
               </div>
+              <p class="node-palette-empty hidden" data-node-palette-empty>No matching nodes</p>
             </div>
             <p class="hint">
               Click to insert before Viewer Output, drag onto an edge to insert there, or drop

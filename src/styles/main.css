@@ -1448,7 +1448,65 @@ body.cutting-edges * {
 .node-palette {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+}
+
+.node-palette-search {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-surface) 90%, black 10%);
+}
+
+.node-palette-search__icon {
+  position: relative;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 50%;
+}
+
+.node-palette-search__icon::after {
+  content: "";
+  position: absolute;
+  right: -4px;
+  bottom: -3px;
+  width: 6px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: var(--text-muted);
+  transform: rotate(45deg);
+  transform-origin: left center;
+}
+
+.node-palette-search input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-label);
+  outline: 0;
+}
+
+.node-palette-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.node-palette-empty {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-label);
 }
 
 .node-palette-group {
@@ -1456,6 +1514,11 @@ body.cutting-edges * {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.node-palette-group.is-hidden,
+.palette-item.is-hidden {
+  display: none;
 }
 
 .node-palette-group[data-node-family="color"] {
@@ -1510,8 +1573,9 @@ body.cutting-edges * {
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
-  padding: 7px 10px;
-  border-radius: var(--radius-md);
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(22, 22, 28, 0.9);
   color: var(--text-primary);
@@ -1525,9 +1589,9 @@ body.cutting-edges * {
 .palette-item::before {
   content: "";
   display: inline-block;
-  flex: 0 0 6px;
-  width: 6px;
-  height: 18px;
+  flex: 0 0 5px;
+  width: 5px;
+  height: 16px;
   border-radius: var(--radius-xs);
   background: var(--node-family);
   box-shadow: 0 0 14px color-mix(in srgb, var(--node-family) 28%, transparent);
