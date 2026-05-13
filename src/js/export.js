@@ -18,6 +18,13 @@ const MAX_PADDING = 8;
 const MIN_START_INDEX = 0;
 const MAX_START_INDEX = 9_999_999;
 
+const EXPORT_QUALITY_LONG_EDGE = Object.freeze([
+  { id: "draft", label: "Draft (1280)", longEdge: 1280 },
+  { id: "standard", label: "Standard (1920)", longEdge: 1920 },
+  { id: "high", label: "High (3840)", longEdge: 3840 },
+  { id: "ultra", label: "Ultra (7680)", longEdge: 7680 },
+]);
+
 const VIDEO_CODECS = Object.freeze([
   { id: "libx264", label: "H.264 (libx264)", extension: "mp4", mime: "video/mp4" },
 ]);
@@ -326,6 +333,19 @@ function renderModeButton(mode, label) {
   `;
 }
 
+function renderResolutionOptions() {
+  const mode = exportSheetState.resolutionMode;
+  const presetOptions = EXPORT_QUALITY_LONG_EDGE.map((preset) => `
+    <option value="${preset.id}" ${preset.id === mode ? "selected" : ""}>${escapeHtml(preset.label)}</option>
+  `).join("");
+  return `
+    <option value="source" ${mode === "source" ? "selected" : ""}>Source</option>
+    ${presetOptions}
+    <option value="half" ${mode === "half" ? "selected" : ""}>Half</option>
+    <option value="custom" ${mode === "custom" ? "selected" : ""}>Custom</option>
+  `;
+}
+
 function renderStillExportFields(ditherAvailable) {
   const previewPath = exportSheetState.destinationChosen
     ? exportSheetState.destinationPath
@@ -371,9 +391,7 @@ function renderStillExportFields(ditherAvailable) {
         <label>Resolution</label>
         <div class="dropdown">
           <select data-export-field="resolution-mode">
-            <option value="source" ${exportSheetState.resolutionMode === "source" ? "selected" : ""}>Source</option>
-            <option value="half" ${exportSheetState.resolutionMode === "half" ? "selected" : ""}>Half</option>
-            <option value="custom" ${exportSheetState.resolutionMode === "custom" ? "selected" : ""}>Custom</option>
+            ${renderResolutionOptions()}
           </select>
         </div>
       </div>
@@ -511,9 +529,7 @@ function renderVideoExportFields(ditherAvailable) {
         <label>Resolution</label>
         <div class="dropdown">
           <select data-export-field="resolution-mode">
-            <option value="source" ${exportSheetState.resolutionMode === "source" ? "selected" : ""}>Source</option>
-            <option value="half" ${exportSheetState.resolutionMode === "half" ? "selected" : ""}>Half</option>
-            <option value="custom" ${exportSheetState.resolutionMode === "custom" ? "selected" : ""}>Custom</option>
+            ${renderResolutionOptions()}
           </select>
         </div>
       </div>
@@ -691,9 +707,7 @@ function renderSequenceExportFields(ditherAvailable) {
         <label>Resolution</label>
         <div class="dropdown">
           <select data-export-field="resolution-mode">
-            <option value="source" ${exportSheetState.resolutionMode === "source" ? "selected" : ""}>Source</option>
-            <option value="half" ${exportSheetState.resolutionMode === "half" ? "selected" : ""}>Half</option>
-            <option value="custom" ${exportSheetState.resolutionMode === "custom" ? "selected" : ""}>Custom</option>
+            ${renderResolutionOptions()}
           </select>
         </div>
       </div>
@@ -1017,9 +1031,27 @@ function resolveStillSize(baseWidth = getState().source.videoWidth, baseHeight =
         height: clampDimension(exportSheetState.customHeight, baseHeight),
       };
     case "source":
-    default:
       return { width: baseWidth, height: baseHeight };
+    default: {
+      const preset = getQualityPreset(exportSheetState.resolutionMode);
+      if (preset) return scaleToLongEdge(baseWidth, baseHeight, preset.longEdge);
+      return { width: baseWidth, height: baseHeight };
+    }
   }
+}
+
+function getQualityPreset(id) {
+  return EXPORT_QUALITY_LONG_EDGE.find((preset) => preset.id === id);
+}
+
+function scaleToLongEdge(width, height, longEdge) {
+  const sourceLongEdge = Math.max(width, height);
+  if (sourceLongEdge <= 0) return { width: longEdge, height: longEdge };
+  const scale = longEdge / sourceLongEdge;
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
 }
 
 function syncExportActions(source) {
