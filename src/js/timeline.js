@@ -470,12 +470,22 @@ export function toggleTimelineKeyframeAtCurrentTime({ nodeId, binding, value }) 
  */
 export function commitParamValueToTimeline(nodeId, paramKey, value) {
   if (!nodeId || !paramKey) return false;
+  return commitBindingValueToTimeline(nodeId, {
+    type: TIMELINE_BINDING_NODE_PARAM,
+    key: paramKey,
+  }, value);
+}
+
+export function commitBindingValueToTimeline(nodeId, binding, value) {
+  if (!nodeId) return false;
+  const normalizedBinding = normalizeBinding(binding);
+  if (!normalizedBinding?.key) return false;
   const state = getState();
   const timeline = normalizeTimeline(state.timeline, {
     duration: state.source.duration,
     fps: state.source.fps,
   });
-  const track = findParamTrack(timeline, nodeId, paramKey);
+  const track = findTrackForBinding(timeline, nodeId, normalizedBinding);
   const autokey = state.timeline.autokey === true;
   if (!track && !autokey) return false;
 
@@ -483,11 +493,16 @@ export function commitParamValueToTimeline(nodeId, paramKey, value) {
     resolveTimelineTime(timeline, state.playback.currentTime),
     timeline.fps
   );
-  dispatch("timeline", setParamKeyframe(timeline, { nodeId, paramKey, time, value }));
+  dispatch("timeline", setTimelineKeyframe(timeline, {
+    nodeId,
+    binding: normalizedBinding,
+    time,
+    value,
+  }));
   // Auto-expand the lane the user just touched. The track id is stable —
-  // setParamKeyframe reuses an existing track or creates one with the
-  // deterministic node-param id pair, so a fresh lookup finds it.
-  const writtenTrack = findParamTrack(getState().timeline, nodeId, paramKey);
+  // setTimelineKeyframe reuses an existing track or creates one with the
+  // deterministic binding id pair, so a fresh lookup finds it.
+  const writtenTrack = findTrackForBinding(getState().timeline, nodeId, normalizedBinding);
   if (writtenTrack) setTrackExpanded(writtenTrack.id, true);
   return true;
 }
@@ -498,6 +513,16 @@ export function setTimelineAutokey(enabled) {
 
 export function updateParamKeyframeAtCurrentTime(nodeId, paramKey, value) {
   if (!hasParamKeyframeAtCurrentTime(nodeId, paramKey)) return false;
+  return updateBindingKeyframeAtCurrentTime(nodeId, {
+    type: TIMELINE_BINDING_NODE_PARAM,
+    key: paramKey,
+  }, value);
+}
+
+export function updateBindingKeyframeAtCurrentTime(nodeId, binding, value) {
+  const normalizedBinding = normalizeBinding(binding);
+  if (!nodeId || !normalizedBinding?.key) return false;
+  if (!hasTimelineKeyframeAtCurrentTime(nodeId, normalizedBinding)) return false;
   const state = getState();
   const timeline = normalizeTimeline(state.timeline, {
     duration: state.source.duration,
@@ -505,14 +530,14 @@ export function updateParamKeyframeAtCurrentTime(nodeId, paramKey, value) {
   });
   dispatch(
     "timeline",
-    setParamKeyframe(timeline, {
+    setTimelineKeyframe(timeline, {
       nodeId,
-      paramKey,
+      binding: normalizedBinding,
       time: snapTimeToFrame(resolveTimelineTime(timeline, state.playback.currentTime), timeline.fps),
       value,
     })
   );
-  const touched = findParamTrack(getState().timeline, nodeId, paramKey);
+  const touched = findTrackForBinding(getState().timeline, nodeId, normalizedBinding);
   if (touched) setTrackExpanded(touched.id, true);
   return true;
 }

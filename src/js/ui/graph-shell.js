@@ -23,6 +23,7 @@ import {
   toggleParamExposed,
   toggleNodeBypass,
   ungroupNode,
+  updateNodeLayerProperties,
   updateNodeParams,
 } from "../graph.js";
 import { getAlgorithmOptions } from "../dither/index.js";
@@ -46,17 +47,25 @@ import {
 } from "../palettes.js";
 import { getCurrentSourceFrameCanvas, setFps } from "../source.js";
 import {
+  TIMELINE_BINDING_NODE_PROPERTY,
+  commitBindingValueToTimeline,
   commitParamValueToTimeline,
   hasParamKeyframeAtCurrentTime,
+  hasTimelineKeyframeAtCurrentTime,
+  hasTimelineTrackForBinding,
   hasTimelineTrackForParam,
   toggleParamKeyframeAtCurrentTime,
+  toggleTimelineKeyframeAtCurrentTime,
+  updateBindingKeyframeAtCurrentTime,
   updateParamKeyframeAtCurrentTime,
 } from "../timeline.js";
 import { normalizeHex } from "../color.js";
 import {
   buildCurveLut,
   buildRgbCurveLut,
+  getMonotoneCurveTangents,
   identityCurvePoints as createIdentityCurvePoints,
+  MIN_CURVE_POINT_GAP,
   readRgbCurvePoints,
   sanitizeCurvePoints,
 } from "../curve-lut.js";
@@ -78,6 +87,11 @@ const EDGE_INSERT_RADIUS = 140;
 const EDGE_INSERT_FALLBACK_RADIUS = 240;
 const GRAPH_VIEW_PADDING = 120;
 const EDGE_CUT_RADIUS = 10;
+const CURVE_CANVAS_SIZE = 240;
+const CURVE_HANDLE_RADIUS = 6;
+const CURVE_CHANNELS = ["master", "red", "green", "blue"];
+const GRADIENT_RAMP_MAX_STOPS = 8;
+const GRADIENT_RAMP_STOP_GAP = 0.005;
 
 let nodesEl;
 let edgesEl;
@@ -98,6 +112,8 @@ let renderedGraphParentId = "";
 let insertHighlightEdgeId = "";
 let graphAutoCentered = false;
 let paletteDragPreviewEl = null;
+let colorPickerState = null;
+let gradientRampState = null;
 const paletteSwatchLocks = new Map();
 
 export function initGraphShell() {
@@ -119,6 +135,7 @@ export function initGraphShell() {
   inspectorEl.addEventListener("change", onInspectorChange);
   inspectorEl.addEventListener("click", onInspectorClick);
   inspectorEl.addEventListener("pointerdown", onInspectorPointerDown);
+  inspectorEl.addEventListener("keydown", onInspectorKeyDown);
   inspectorEl.addEventListener("contextmenu", onInspectorContextMenu);
   subscribePalettes(onPaletteRegistryChange);
   initPaletteDragAndDrop();
@@ -1111,6 +1128,15 @@ function onNodeDoubleClick(event) {
 }
 
 function onInspectorInput(event) {
+  const pickerHexInput = event.target.closest("[data-color-picker-hex-input]");
+  if (pickerHexInput) {
+    inspectorEditing = true;
+    const nextHex = normalizeHexOrNull(pickerHexInput.value);
+    pickerHexInput.classList.toggle("is-invalid", !nextHex);
+    if (nextHex) commitColorPickerValue(pickerHexInput, nextHex);
+    return;
+  }
+
   const meshStopControl = event.target.closest("[data-mesh-stop-field]");
   if (meshStopControl) {
     const node = getSelectedNode();
@@ -1128,7 +1154,7 @@ function onInspectorInput(event) {
   const gradientStopControl = event.target.closest("[data-gradient-map-stop-color]");
   if (gradientStopControl) {
     const node = getSelectedNode();
-    if (!node || node.type !== "gradient-map") return;
+    if (!node || (node.type !== "gradient-map" && node.type !== "scene-grade")) return;
     if (gradientStopControl.dataset.inputKind === "gradient-stop-hex") {
       inspectorEditing = true;
       return;
@@ -1136,6 +1162,37 @@ function onInspectorInput(event) {
     inspectorEditing = true;
     commitGradientMapStopColor(node, gradientStopControl);
     syncGradientStopSiblingControls(gradientStopControl);
+    return;
+  }
+
+  const propertyControl = event.target.closest("[data-node-property]");
+  if (propertyControl) {
+    const node = getSelectedNode();
+    if (!isLayerAdjustableNode(node)) return;
+
+    const nodeId = node.id;
+    const propertyKey = propertyControl.dataset.nodeProperty;
+    if (!propertyKey) return;
+    inspectorEditing = true;
+    const value = readControlValue(propertyControl);
+    const binding = {
+      type: TIMELINE_BINDING_NODE_PROPERTY,
+      key: propertyKey,
+    };
+    updateNodeLayerProperties(nodeId, { [propertyKey]: value });
+    if (!commitBindingValueToTimeline(nodeId, binding, value)) {
+      updateBindingKeyframeAtCurrentTime(nodeId, binding, value);
+    }
+    const applied = getNodeById(nodeId)?.[propertyKey];
+    if (
+      applied !== undefined &&
+      propertyControl.type !== "checkbox" &&
+      propertyControl.value !== String(applied)
+    ) {
+      propertyControl.value = String(applied);
+    }
+    updateInlineReadout(propertyControl);
+    syncLayerPropertySiblingControls(propertyControl);
     return;
   }
 
@@ -1190,6 +1247,19 @@ function onInspectorInput(event) {
 }
 
 function onInspectorChange(event) {
+  const pickerHexInput = event.target.closest("[data-color-picker-hex-input]");
+  if (pickerHexInput) {
+    inspectorEditing = false;
+    const target = resolveColorPickerTarget(pickerHexInput);
+    const nextHex = normalizeHexOrNull(pickerHexInput.value);
+    if (nextHex) {
+      commitColorPickerValue(pickerHexInput, nextHex);
+    } else if (target) {
+      syncColorPickerElements(target, readColorPickerCurrentHex(target));
+    }
+    return;
+  }
+
   const meshStopControl = event.target.closest("[data-mesh-stop-field]");
   if (meshStopControl) {
     inspectorEditing = false;
@@ -1209,10 +1279,17 @@ function onInspectorChange(event) {
   if (gradientStopControl) {
     inspectorEditing = false;
     const node = getSelectedNode();
-    if (node?.type === "gradient-map") {
+    if (node?.type === "gradient-map" || node?.type === "scene-grade") {
       commitGradientMapStopColor(node, gradientStopControl);
       syncGradientStopSiblingControls(gradientStopControl);
     }
+    renderInspector();
+    return;
+  }
+
+  const propertyControl = event.target.closest("[data-node-property]");
+  if (propertyControl) {
+    inspectorEditing = false;
     renderInspector();
     return;
   }
@@ -1254,6 +1331,29 @@ function onInspectorChange(event) {
 }
 
 function onInspectorClick(event) {
+  const gradientRampControl = event.target.closest(
+    "[data-gradient-ramp-action], [data-gradient-ramp-stop], [data-gradient-ramp-bar]"
+  );
+  if (gradientRampControl) {
+    event.preventDefault();
+    handleGradientRampClick(event, gradientRampControl);
+    return;
+  }
+
+  const eyedropper = event.target.closest("[data-color-picker-eyedropper]");
+  if (eyedropper) {
+    event.preventDefault();
+    handleColorPickerEyedropper(eyedropper);
+    return;
+  }
+
+  const colorPickerTrigger = event.target.closest("[data-color-picker-trigger]");
+  if (colorPickerTrigger) {
+    event.preventDefault();
+    toggleColorPicker(colorPickerTrigger);
+    return;
+  }
+
   const meshAction = event.target.closest("[data-mesh-action]");
   if (meshAction) {
     event.preventDefault();
@@ -1265,6 +1365,26 @@ function onInspectorClick(event) {
   const graphAction = event.target.closest("[data-graph-action]");
   if (graphAction) {
     handleGraphInspectorAction(graphAction);
+    return;
+  }
+
+  const propertyKeyframeToggle = event.target.closest("[data-node-property-keyframe-toggle]");
+  if (propertyKeyframeToggle) {
+    event.preventDefault();
+    const node = getSelectedNode();
+    if (!isLayerAdjustableNode(node)) return;
+    const key = propertyKeyframeToggle.dataset.nodePropertyKeyframeToggle;
+    if (!key) return;
+    const binding = {
+      type: TIMELINE_BINDING_NODE_PROPERTY,
+      key,
+    };
+    toggleTimelineKeyframeAtCurrentTime({
+      nodeId: node.id,
+      binding,
+      value: node?.[key] ?? getLayerPropertyDefaultValue(key),
+    });
+    renderInspector();
     return;
   }
 
@@ -1293,6 +1413,13 @@ function onInspectorClick(event) {
   const curveAction = event.target.closest("[data-curve-action]");
   if (curveAction) {
     handleCurveClick(curveAction);
+    return;
+  }
+
+  const curveChannel = event.target.closest("[data-curve-channel]");
+  if (curveChannel) {
+    event.preventDefault();
+    handleCurveChannelClick(curveChannel);
     return;
   }
 
@@ -1787,6 +1914,7 @@ function renderInspector() {
 
   inspectorEl.innerHTML = `
     ${renderNodeActions(node)}
+    ${renderLayerControls(node)}
     ${renderNodeSpecifics(node)}
   `;
 }
@@ -1824,6 +1952,8 @@ function renderNodeSpecifics(node) {
       return renderHsvNode(node);
     case "rgb-curves":
       return renderRgbCurvesNode(node);
+    case "scene-grade":
+      return renderSceneGradeNode(node);
     case "blur":
       return renderBlurNode(node);
     case "pixelate":
@@ -1904,6 +2034,25 @@ function renderNodeActions(node) {
       </div>
     </section>
   `;
+}
+
+function renderLayerControls(node) {
+  if (!isLayerAdjustableNode(node)) return "";
+  const opacity = Number(node.opacity ?? 100);
+  const hue = Number(node.hue ?? 0);
+  const saturation = Number(node.saturation ?? 100);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Layer</header>
+      ${renderLayerRangeField("Opacity", "opacity", opacity, 0, 100, `${opacity}%`)}
+      ${renderLayerRangeField("Hue", "hue", hue, -180, 180, `${hue}°`)}
+      ${renderLayerRangeField("Saturation", "saturation", saturation, 0, 200, `${saturation}%`)}
+    </section>
+  `;
+}
+
+function isLayerAdjustableNode(node) {
+  return Boolean(node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
 }
 
 function renderMultiSelectionInspector(selectedNodeIds) {
@@ -2075,20 +2224,13 @@ function renderMeshStopRow(stop, index, canRemove) {
             : ""
         }
       </header>
-      <div class="color-row">
-        <input type="color" class="color-swatch"
-          value="${escapeHtml(color)}"
-          data-mesh-stop-field="color"
-          data-mesh-stop-index="${escapeHtml(idx)}"
-          data-input-kind="mesh-stop-swatch"
-          aria-label="Stop ${index + 1} color" />
-        <input type="text" class="color-hex"
-          value="${escapeHtml(color)}"
-          data-mesh-stop-field="color"
-          data-mesh-stop-index="${escapeHtml(idx)}"
-          data-input-kind="mesh-stop-hex"
-          maxlength="7" spellcheck="false" autocomplete="off" autocapitalize="off" />
-      </div>
+      ${renderColorPickerControl({
+        label: `Stop ${index + 1}`,
+        value: color,
+        fallback: "#ffffff",
+        target: { kind: "mesh-stop", stopIndex: idx },
+        inputAttrs: `data-mesh-stop-field="color" data-mesh-stop-index="${escapeHtml(idx)}" data-input-kind="mesh-stop-hex"`,
+      })}
       ${renderMeshStopRange("X", "x", index, x, 0, 100, `${x}%`)}
       ${renderMeshStopRange("Y", "y", index, y, 0, 100, `${y}%`)}
       ${renderMeshStopRange("Radius", "radius", index, radiusPct, 1, 200, `${radiusPct}%`)}
@@ -2528,8 +2670,6 @@ function renderDuotoneNode(node) {
 function renderGradientMapNode(node) {
   const params = node.params;
   const stops = normalizeGradientMapInspectorStops(params.stops);
-  const firstStop = stops[0];
-  const lastStop = stops.at(-1);
   const repeat = Number(params.repeat ?? 1);
   const shift = Number(params.shift ?? 0);
   const mode = String(params.mode ?? "luma");
@@ -2537,8 +2677,7 @@ function renderGradientMapNode(node) {
   return `
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Gradient</header>
-      ${renderGradientStopColorField("Shadow", 0, firstStop.color, { fallback: "#111111" })}
-      ${renderGradientStopColorField("Highlight", stops.length - 1, lastStop.color, { fallback: "#ffffff" })}
+      ${renderGradientRampField("Ramp", "stops", stops, { maxStops: GRADIENT_RAMP_MAX_STOPS })}
     </section>
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Mapping</header>
@@ -2584,18 +2723,13 @@ function renderRgbCurvesNode(node) {
   const applyMode = String(params.applyMode ?? "normal");
   return `
     <section class="node-panel-section curves-panel">
-      ${renderSelectField("Channel", "activeChannel", prefix, [
-        ["master", "Master"],
-        ["red", "Red"],
-        ["green", "Green"],
-        ["blue", "Blue"],
-      ])}
+      ${renderCurveChannelStrip(node, prefix)}
       ${renderSelectField("Apply Mode", "applyMode", applyMode, [
         ["normal", "Normal"],
         ["luma", "Luma"],
         ["color", "Color"],
       ])}
-      ${renderCurveField("Curve", `points_${prefix}`, points, {
+      ${renderCurveField(`${curveChannelLabel(prefix)} Curve`, `points_${prefix}`, points, {
         tone: prefix,
         lut,
         overlays,
@@ -2606,8 +2740,95 @@ function renderRgbCurvesNode(node) {
   `;
 }
 
+function renderSceneGradeNode(node) {
+  const params = node.params;
+  const active = String(params.activeChannel ?? "master");
+  const prefix = active === "red" || active === "green" || active === "blue" ? active : "master";
+  const points = readCurvePoints(node, prefix);
+  const lut = buildRgbCurveLut(params, prefix);
+  const overlays = ["master", "red", "green", "blue"]
+    .filter((channel) => channel !== prefix)
+    .map((channel) => ({
+      tone: channel,
+      lut: buildRgbCurveLut(params, channel),
+    }));
+  const clampMin = Number(params.clampMin ?? 0);
+  const clampMax = Number(params.clampMax ?? 100);
+  const clampGamma = Number(params.clampGamma ?? 100);
+  const colorMapFlag = String(params.colorMapEnabled ?? "off").toLowerCase();
+  const colorMapEnabled =
+    params.colorMapEnabled === true || colorMapFlag === "on" || colorMapFlag === "true";
+  const stops = normalizeGradientMapInspectorStops(params.colorMapStops);
+
+  return `
+    <section class="node-panel-section curves-panel">
+      ${renderCurveChannelStrip(node, prefix)}
+      ${renderCurveField(`${curveChannelLabel(prefix)} Curve`, `points_${prefix}`, points, {
+        tone: prefix,
+        lut,
+        overlays,
+        legacyChannel: prefix,
+        hint: "Scene-wide curve is applied after the graph chain and before export.",
+      })}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Clamp Gamma</header>
+      ${renderRangeField("Min", "clampMin", clampMin, 0, 99, `${clampMin}%`)}
+      ${renderRangeField("Max", "clampMax", clampMax, 1, 100, `${clampMax}%`)}
+      ${renderRangeField("Gamma", "clampGamma", clampGamma, 10, 400, (clampGamma / 100).toFixed(2))}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Color Map LUT</header>
+      ${renderCheckboxField("Enable Color Map", "colorMapEnabled", colorMapEnabled)}
+      ${colorMapEnabled ? `
+        ${renderGradientRampField("Color Map", "colorMapStops", stops, {
+          maxStops: GRADIENT_RAMP_MAX_STOPS,
+        })}
+      ` : ""}
+    </section>
+  `;
+}
+
 function readCurvePoints(node, channel) {
   return readRgbCurvePoints(node?.params, channel);
+}
+
+function renderCurveChannelStrip(node, activeChannel) {
+  const active = normalizeCurveChannel(activeChannel);
+  return `
+    <div class="curve-channel-strip" role="group" aria-label="Curve channels">
+      ${CURVE_CHANNELS.map((channel) => renderCurveChannelButton(node, channel, active)).join("")}
+    </div>
+  `;
+}
+
+function renderCurveChannelButton(node, channel, activeChannel) {
+  const tone = normalizeCurveChannel(channel);
+  const isActive = tone === activeChannel;
+  const label = curveChannelLabel(tone);
+  const shortLabel = tone === "master" ? "M" : tone.slice(0, 1).toUpperCase();
+  const points = readCurveParamPoints(node, `points_${tone}`, tone);
+  const path = buildCurvePath(points, 64);
+  const color = curveStrokeColor(tone);
+  return `
+    <button
+      type="button"
+      class="curve-channel-button${isActive ? " is-active" : ""}"
+      data-curve-channel="${escapeHtml(tone)}"
+      aria-label="Select ${escapeHtml(label)} curve"
+      aria-pressed="${isActive ? "true" : "false"}"
+      title="${escapeHtml(label)}"
+    >
+      <span class="curve-channel-button-header">
+        <span class="curve-channel-dot" style="background:${escapeHtml(color)}"></span>
+        <span class="curve-channel-label">${escapeHtml(shortLabel)}</span>
+      </span>
+      <svg class="curve-channel-preview" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+        <line x1="0" y1="64" x2="64" y2="0" class="curve-channel-preview-diagonal"/>
+        <path d="${escapeHtml(path)}" class="curve-channel-preview-path" stroke="${escapeHtml(color)}"/>
+      </svg>
+    </button>
+  `;
 }
 
 function renderCurveField(label, paramKey, points, options = {}) {
@@ -2644,7 +2865,7 @@ function renderCurveField(label, paramKey, points, options = {}) {
 }
 
 function renderCurveCanvas(points, options = {}) {
-  const size = 240;
+  const size = CURVE_CANVAS_SIZE;
   const paramKey = options.paramKey ?? "curve";
   const tone = normalizeCurveTone(options.tone);
   const safeKey = escapeHtml(paramKey);
@@ -2653,27 +2874,15 @@ function renderCurveCanvas(points, options = {}) {
     ? ` data-curve-legacy-channel="${escapeHtml(options.legacyChannel)}"`
     : "";
   const stroke = curveStrokeColor(tone);
-  const polyline = buildCurvePolyline(points, size, options.lut);
+  const path = buildCurvePath(points, size);
   const overlays = (Array.isArray(options.overlays) ? options.overlays : [])
     .map((overlay) => {
       const overlayTone = normalizeCurveTone(overlay.tone);
-      const overlayPolyline = buildCurvePolyline(overlay.points ?? createIdentityCurvePoints(), size, overlay.lut);
-      return `<polyline class="curve-overlay" points="${overlayPolyline}" fill="none" stroke="${curveStrokeColor(overlayTone)}" stroke-width="1.25" stroke-linejoin="round"/>`;
+      const overlayPath = buildCurvePath(overlay.points ?? createIdentityCurvePoints(), size, overlay.lut);
+      return `<path class="curve-overlay" d="${overlayPath}" fill="none" stroke="${curveStrokeColor(overlayTone)}" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round"/>`;
     })
     .join("");
-  const handles = sanitizeCurvePoints(points)
-    .map(
-      (point, index) => `
-        <circle
-          class="curve-handle"
-          data-curve-handle="${index}"
-          cx="${(Number(point.x) / 255) * size}"
-          cy="${size - (Number(point.y) / 255) * size}"
-          r="4"
-        />
-      `
-    )
-    .join("");
+  const handles = renderCurveHandles(points, size);
   return `
     <svg
       class="curves-svg"
@@ -2695,10 +2904,31 @@ function renderCurveCanvas(points, options = {}) {
       <rect width="${size}" height="${size}" fill="url(#curveGrid-${safeKey})"/>
       <line x1="0" y1="${size}" x2="${size}" y2="0" stroke="rgba(255,255,255,0.1)" stroke-dasharray="3 4"/>
       ${overlays}
-      <polyline points="${polyline}" fill="none" stroke="${stroke}" stroke-width="1.7" stroke-linejoin="round"/>
-      ${handles}
+      <path data-curve-main d="${path}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      <g data-curve-handles>${handles}</g>
     </svg>
   `;
+}
+
+function renderCurveHandles(points, size) {
+  return sanitizeCurvePoints(points)
+    .map((point, index) => {
+      const x = (Number(point.x) / 255) * size;
+      const y = size - (Number(point.y) / 255) * size;
+      return `
+        <circle
+          class="curve-handle"
+          data-curve-handle="${index}"
+          cx="${x}"
+          cy="${y}"
+          r="${CURVE_HANDLE_RADIUS}"
+          role="button"
+          tabindex="0"
+          aria-label="Curve point ${index + 1}"
+        />
+      `;
+    })
+    .join("");
 }
 
 function normalizeCurveTone(value) {
@@ -2728,6 +2958,59 @@ function buildCurvePolyline(rawPoints, size, curveLut = null) {
   }
   out.push(`${size},${size - (lut[255] / 255) * size}`);
   return out.join(" ");
+}
+
+function buildCurvePath(rawPoints, size, curveLut = null) {
+  if (curveLut) return polylineToPath(buildCurvePolyline(rawPoints, size, curveLut));
+
+  const points = sanitizeCurvePoints(rawPoints);
+  if (points.length === 0) return "";
+  if (points.length === 1) {
+    const [x, y] = curvePointToSvg(points[0], size);
+    return `M ${x} ${y}`;
+  }
+
+  const tangents = getMonotoneCurveTangents(points);
+  const [startX, startY] = curvePointToSvg(points[0], size);
+  const segments = [`M ${startX} ${startY}`];
+
+  for (let index = 0; index < points.length - 1; index++) {
+    const pointA = points[index];
+    const pointB = points[index + 1];
+    const width = pointB.x - pointA.x;
+    const controlPointA = {
+      x: pointA.x + width / 3,
+      y: pointA.y + (width * (tangents[index] ?? 0)) / 3,
+    };
+    const controlPointB = {
+      x: pointB.x - width / 3,
+      y: pointB.y - (width * (tangents[index + 1] ?? 0)) / 3,
+    };
+    const [cp1x, cp1y] = curvePointToSvg(controlPointA, size);
+    const [cp2x, cp2y] = curvePointToSvg(controlPointB, size);
+    const [x, y] = curvePointToSvg(pointB, size);
+    segments.push(`C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${x} ${y}`);
+  }
+
+  return segments.join(" ");
+}
+
+function curvePointToSvg(point, size) {
+  return [
+    (Number(point.x) / 255) * size,
+    size - (Number(point.y) / 255) * size,
+  ];
+}
+
+function polylineToPath(polyline) {
+  const points = String(polyline)
+    .trim()
+    .split(/\s+/)
+    .map((pair) => pair.split(",").map(Number))
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+  if (points.length === 0) return "";
+  const [startX, startY] = points[0];
+  return [`M ${startX} ${startY}`, ...points.slice(1).map(([x, y]) => `L ${x} ${y}`)].join(" ");
 }
 
 function readCurveParamPoints(node, paramKey, legacyChannel = null) {
@@ -2761,13 +3044,44 @@ function handleCurveClick(_action) {
   if (!node) return;
   const target = resolveCurveTarget(_action, node);
   if (!target) return;
-  updateNodeParams(node.id, {
-    [target.paramKey]: createIdentityCurvePoints(),
-  });
+  commitCurvePoints(node.id, target.paramKey, createIdentityCurvePoints());
+  renderInspector();
+}
+
+function handleCurveChannelClick(control) {
+  const node = getSelectedNode();
+  if (!node || (node.type !== "rgb-curves" && node.type !== "scene-grade")) return;
+  const channel = normalizeCurveChannel(control.dataset.curveChannel);
+  if (normalizeCurveChannel(node.params?.activeChannel) === channel) return;
+  updateNodeParams(node.id, { activeChannel: channel });
   renderInspector();
 }
 
 function onInspectorPointerDown(event) {
+  const gradientRampStop = event.target.closest("[data-gradient-ramp-stop]");
+  if (gradientRampStop) {
+    startGradientRampStopDrag(event, gradientRampStop);
+    return;
+  }
+
+  const colorSurface = event.target.closest("[data-color-picker-surface]");
+  if (colorSurface) {
+    startColorPickerDrag(event, colorSurface, "surface");
+    return;
+  }
+
+  const colorHue = event.target.closest("[data-color-picker-hue]");
+  if (colorHue) {
+    startColorPickerDrag(event, colorHue, "hue");
+    return;
+  }
+
+  const xyPad = event.target.closest("[data-xy-pad]");
+  if (xyPad) {
+    startXyPadInteraction(event, xyPad);
+    return;
+  }
+
   const svg = event.target.closest("[data-curve-svg]");
   if (!svg) return;
   const node = getSelectedNode();
@@ -2786,6 +3100,7 @@ function onInspectorPointerDown(event) {
     };
   };
 
+  inspectorEditing = true;
   let points = sanitizeCurvePoints(readCurveParamPoints(node, target.paramKey, target.legacyChannel));
   let activeIndex;
   if (handle) {
@@ -2796,16 +3111,14 @@ function onInspectorPointerDown(event) {
     // pushed cursor object survives the sort by reference, and the runtime
     // preserves x-order through sanitizeCurvePoints on later reads.
     const cursor = toCurve(event.clientX, event.clientY);
-    points.push(cursor);
-    points.sort((a, b) => a.x - b.x);
-    activeIndex = points.indexOf(cursor);
-    updateNodeParams(node.id, { [target.paramKey]: points });
-    renderInspector();
+    points = commitCurvePoints(node.id, target.paramKey, [...points, cursor]);
+    activeIndex = findClosestCurvePointIndex(points, cursor.x, cursor.y);
+    syncCurveSvg(svg, points);
   }
 
   if (!Number.isFinite(activeIndex) || activeIndex < 0) return;
 
-  inspectorEditing = true;
+  document.body.classList.add("dragging-curve");
   try {
     svg.setPointerCapture(event.pointerId);
   } catch {}
@@ -2821,11 +3134,16 @@ function onInspectorPointerDown(event) {
     if (isFirst) next.x = 0;
     if (isLast) next.x = 255;
     if (!isFirst && !isLast) {
-      next.x = clamp(next.x, updated[activeIndex - 1].x + 1, updated[activeIndex + 1].x - 1);
+      next.x = clamp(
+        next.x,
+        updated[activeIndex - 1].x + MIN_CURVE_POINT_GAP,
+        updated[activeIndex + 1].x - MIN_CURVE_POINT_GAP
+      );
     }
     updated[activeIndex] = next;
-    updateNodeParams(node.id, { [target.paramKey]: updated });
-    renderInspector();
+    const normalized = commitCurvePoints(node.id, target.paramKey, updated);
+    activeIndex = findClosestCurvePointIndex(normalized, next.x, next.y);
+    syncCurveSvg(svg, normalized);
   };
 
   const onUp = () => {
@@ -2833,14 +3151,231 @@ function onInspectorPointerDown(event) {
     document.removeEventListener("pointerup", onUp);
     document.removeEventListener("pointercancel", onUp);
     inspectorEditing = false;
+    document.body.classList.remove("dragging-curve");
     try {
       svg.releasePointerCapture(event.pointerId);
     } catch {}
+    renderInspector();
   };
 
   document.addEventListener("pointermove", onMove);
   document.addEventListener("pointerup", onUp);
   document.addEventListener("pointercancel", onUp);
+}
+
+function startXyPadInteraction(event, pad) {
+  if (event.button !== 0) return;
+  const node = getSelectedNode();
+  if (!node || !resolveXyPadKeys(pad)) return;
+  event.preventDefault();
+  event.stopPropagation();
+
+  inspectorEditing = true;
+  document.body.classList.add("dragging-xy-pad");
+  pad.focus?.();
+
+  const commitFromPointer = (ev) => {
+    const next = readXyPadPointerValue(pad, ev.clientX, ev.clientY);
+    commitXyPadValue(pad, next.x, next.y);
+  };
+
+  commitFromPointer(event);
+
+  try {
+    pad.setPointerCapture(event.pointerId);
+  } catch {}
+
+  const onMove = (ev) => {
+    if (ev.buttons !== undefined && !(ev.buttons & 1)) return;
+    commitFromPointer(ev);
+  };
+
+  const onUp = () => {
+    pad.removeEventListener("pointermove", onMove);
+    pad.removeEventListener("pointerup", onUp);
+    pad.removeEventListener("pointercancel", onUp);
+    inspectorEditing = false;
+    document.body.classList.remove("dragging-xy-pad");
+    try {
+      pad.releasePointerCapture(event.pointerId);
+    } catch {}
+    renderInspector();
+  };
+
+  pad.addEventListener("pointermove", onMove);
+  pad.addEventListener("pointerup", onUp);
+  pad.addEventListener("pointercancel", onUp);
+}
+
+function onInspectorKeyDown(event) {
+  if (event.key === "Escape" && colorPickerState) {
+    colorPickerState = null;
+    inspectorEditing = false;
+    renderInspector();
+    return;
+  }
+
+  const rampStop = event.target.closest?.("[data-gradient-ramp-stop]");
+  if (rampStop && handleGradientRampKeyDown(event, rampStop)) {
+    return;
+  }
+
+  const pad = event.target.closest?.("[data-xy-pad]");
+  if (!pad) return;
+
+  let dx = 0;
+  let dy = 0;
+  switch (event.key) {
+    case "ArrowLeft":
+      dx = -1;
+      break;
+    case "ArrowRight":
+      dx = 1;
+      break;
+    case "ArrowUp":
+      dy = resolveXyPadYAxis(pad) === "down" ? -1 : 1;
+      break;
+    case "ArrowDown":
+      dy = resolveXyPadYAxis(pad) === "down" ? 1 : -1;
+      break;
+    default:
+      return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  const step = resolveXyPadStep(pad) * (event.shiftKey ? 10 : 1);
+  const current = readXyPadCurrentValue(pad);
+  inspectorEditing = true;
+  commitXyPadValue(pad, current.x + dx * step, current.y + dy * step);
+  inspectorEditing = false;
+}
+
+function resolveXyPadKeys(pad) {
+  const xKey = pad?.dataset?.xyPadX;
+  const yKey = pad?.dataset?.xyPadY;
+  if (!xKey || !yKey) return null;
+  return { xKey, yKey };
+}
+
+function resolveXyPadBounds(pad) {
+  const min = Number(pad?.dataset?.xyPadMin ?? -1);
+  const max = Number(pad?.dataset?.xyPadMax ?? 1);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) {
+    return { min: -1, max: 1 };
+  }
+  return min < max ? { min, max } : { min: max, max: min };
+}
+
+function resolveXyPadStep(pad) {
+  const step = Number(pad?.dataset?.xyPadStep ?? 1);
+  return Number.isFinite(step) && step > 0 ? step : 1;
+}
+
+function resolveXyPadYAxis(pad) {
+  return pad?.dataset?.xyPadYAxis === "up" ? "up" : "down";
+}
+
+function readXyPadPointerValue(pad, clientX, clientY) {
+  const rect = pad.getBoundingClientRect();
+  const { min, max } = resolveXyPadBounds(pad);
+  const range = Math.max(max - min, Number.EPSILON);
+  const normalizedX = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+  const normalizedY = clamp((clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+  return {
+    x: min + normalizedX * range,
+    y: resolveXyPadYAxis(pad) === "down"
+      ? min + normalizedY * range
+      : min + (1 - normalizedY) * range,
+  };
+}
+
+function readXyPadCurrentValue(pad) {
+  return {
+    x: Number(pad?.dataset?.xyPadValueX ?? 0),
+    y: Number(pad?.dataset?.xyPadValueY ?? 0),
+  };
+}
+
+function commitXyPadValue(pad, x, y) {
+  const node = getSelectedNode();
+  const keys = resolveXyPadKeys(pad);
+  if (!node || !keys) return null;
+
+  const next = normalizeXyPadValue(pad, x, y);
+  updateNodeParams(node.id, {
+    [keys.xKey]: next.x,
+    [keys.yKey]: next.y,
+  });
+  commitParamPairToTimeline(node.id, keys.xKey, keys.yKey, next.x, next.y);
+  syncXyPadSurface(pad, next.x, next.y);
+  syncParamControlsByKey(keys.xKey, next.x);
+  syncParamControlsByKey(keys.yKey, next.y);
+  syncTimelineButtons();
+  return next;
+}
+
+function normalizeXyPadValue(pad, x, y) {
+  const { min, max } = resolveXyPadBounds(pad);
+  const step = resolveXyPadStep(pad);
+  return {
+    x: clamp(roundToStep(x, step, min), min, max),
+    y: clamp(roundToStep(y, step, min), min, max),
+  };
+}
+
+function commitParamPairToTimeline(nodeId, xKey, yKey, xValue, yValue) {
+  if (!commitParamValueToTimeline(nodeId, xKey, xValue)) {
+    updateParamKeyframeAtCurrentTime(nodeId, xKey, xValue);
+  }
+  if (!commitParamValueToTimeline(nodeId, yKey, yValue)) {
+    updateParamKeyframeAtCurrentTime(nodeId, yKey, yValue);
+  }
+}
+
+function syncXyPadSurface(pad, x, y) {
+  if (!pad) return;
+  const { min, max } = resolveXyPadBounds(pad);
+  const range = Math.max(max - min, Number.EPSILON);
+  const clampedX = clamp(Number(x), min, max);
+  const clampedY = clamp(Number(y), min, max);
+  const xPct = ((clampedX - min) / range) * 100;
+  const yPct = resolveXyPadYAxis(pad) === "down"
+    ? ((clampedY - min) / range) * 100
+    : (1 - (clampedY - min) / range) * 100;
+  pad.dataset.xyPadValueX = String(clampedX);
+  pad.dataset.xyPadValueY = String(clampedY);
+  pad.style.setProperty("--xy-pad-x", `${xPct}%`);
+  pad.style.setProperty("--xy-pad-y", `${yPct}%`);
+  const field = pad.closest("[data-xy-pad-field]");
+  const readout = field?.querySelector("[data-xy-pad-readout]");
+  if (readout) readout.textContent = formatXyPadReadout(clampedX, clampedY, pad.dataset.xyPadUnit);
+}
+
+function syncParamControlsByKey(paramKey, value) {
+  if (!paramKey || !inspectorEl) return;
+  const normalized = String(value);
+  const controls = inspectorEl.querySelectorAll(`[data-node-param="${cssEscape(paramKey)}"]`);
+  for (const control of controls) {
+    if (control.type === "checkbox") continue;
+    if (control.value !== normalized) control.value = normalized;
+  }
+}
+
+function roundToStep(value, step, min = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return min;
+  if (!Number.isFinite(step) || step <= 0) return numeric;
+  const rounded = Math.round((numeric - min) / step) * step + min;
+  const decimals = stepDecimals(step);
+  return Number(rounded.toFixed(decimals));
+}
+
+function stepDecimals(step) {
+  const text = String(step);
+  if (!text.includes(".")) return 0;
+  return Math.min(6, text.split(".")[1].length);
 }
 
 function onInspectorContextMenu(event) {
@@ -2855,12 +3390,392 @@ function onInspectorContextMenu(event) {
   const index = Number(handle.dataset.curveHandle);
   if (!Number.isFinite(index) || index <= 0 || index >= points.length - 1) return;
   points.splice(index, 1);
-  updateNodeParams(node.id, { [target.paramKey]: points });
+  commitCurvePoints(node.id, target.paramKey, points);
   renderInspector();
+}
+
+function commitCurvePoints(nodeId, paramKey, points) {
+  const normalized = sanitizeCurvePoints(points);
+  updateNodeParams(nodeId, { [paramKey]: normalized });
+  if (!commitParamValueToTimeline(nodeId, paramKey, normalized)) {
+    updateParamKeyframeAtCurrentTime(nodeId, paramKey, normalized);
+  }
+  return normalized;
+}
+
+function syncCurveSvg(svg, points) {
+  if (!svg) return;
+  const size = CURVE_CANVAS_SIZE;
+  const mainPath = svg.querySelector("[data-curve-main]");
+  if (mainPath) mainPath.setAttribute("d", buildCurvePath(points, size));
+  const handleLayer = svg.querySelector("[data-curve-handles]");
+  if (handleLayer) handleLayer.innerHTML = renderCurveHandles(points, size);
+}
+
+function handleGradientRampClick(event, control) {
+  const target = resolveGradientRampTarget(control);
+  if (!target) return;
+
+  if (control.matches("[data-gradient-ramp-stop]")) {
+    selectGradientRampStop(target, Number(control.dataset.gradientRampStop));
+    return;
+  }
+
+  const action = control.dataset.gradientRampAction;
+  if (action === "add") {
+    addGradientRampStop(target, findGradientRampInsertPosition(readGradientRampStops(target)));
+    return;
+  }
+  if (action === "delete") {
+    removeSelectedGradientRampStop(target);
+    return;
+  }
+
+  if (control.matches("[data-gradient-ramp-bar]")) {
+    addGradientRampStop(target, gradientRampPositionFromEvent(control, event.clientX));
+  }
+}
+
+function handleGradientRampKeyDown(event, stop) {
+  const target = resolveGradientRampTarget(stop);
+  if (!target) return false;
+  const index = Number(stop.dataset.gradientRampStop);
+  if (!Number.isFinite(index)) return false;
+
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    selectGradientRampStop(target, index);
+    return true;
+  }
+
+  if (event.key === "Backspace" || event.key === "Delete") {
+    event.preventDefault();
+    selectGradientRampStop(target, index, { render: false });
+    removeSelectedGradientRampStop(target);
+    return true;
+  }
+
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return false;
+
+  event.preventDefault();
+  const stops = readGradientRampStops(target);
+  if (index <= 0 || index >= stops.length - 1) {
+    selectGradientRampStop(target, index);
+    return true;
+  }
+
+  const direction = event.key === "ArrowLeft" ? -1 : 1;
+  const step = event.shiftKey ? 0.05 : 0.01;
+  gradientRampState = { targetId: target.targetId, selectedIndex: index };
+  colorPickerState = null;
+  commitGradientRampStopPosition(target, index, stops[index].pos + direction * step);
+  renderInspector();
+  return true;
+}
+
+function startGradientRampStopDrag(event, stop) {
+  if (event.button !== 0) return;
+  const target = resolveGradientRampTarget(stop);
+  if (!target) return;
+  const root = stop.closest("[data-gradient-ramp-target]");
+  const index = Number(stop.dataset.gradientRampStop);
+  const stops = readGradientRampStops(target);
+  if (!Number.isFinite(index) || index < 0 || index >= stops.length) return;
+
+  gradientRampState = { targetId: target.targetId, selectedIndex: index };
+  colorPickerState = null;
+  if (index === 0 || index === stops.length - 1) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  inspectorEditing = true;
+  document.body.classList.add("dragging-gradient-ramp");
+
+  const bar = root?.querySelector("[data-gradient-ramp-bar]");
+  const commitFromPointer = (ev) => {
+    if (!bar) return;
+    const nextPosition = gradientRampPositionFromEvent(bar, ev.clientX);
+    const nextStops = commitGradientRampStopPosition(target, index, nextPosition);
+    if (nextStops) syncGradientRampRoot(root, nextStops, index);
+  };
+
+  commitFromPointer(event);
+
+  const onMove = (ev) => {
+    if (ev.buttons !== undefined && !(ev.buttons & 1)) return;
+    commitFromPointer(ev);
+  };
+
+  const onUp = () => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.removeEventListener("pointercancel", onUp);
+    inspectorEditing = false;
+    document.body.classList.remove("dragging-gradient-ramp");
+    renderInspector();
+  };
+
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("pointercancel", onUp);
+}
+
+function resolveGradientRampTarget(element) {
+  const root = element?.closest?.("[data-gradient-ramp-target]");
+  if (!root) return null;
+  const paramKey = root.dataset.gradientRampParam || "stops";
+  const targetId = root.dataset.gradientRampTarget || gradientRampTargetId(root.dataset.gradientRampNode, paramKey);
+  return {
+    nodeId: root.dataset.gradientRampNode || getSelectedNode()?.id || "",
+    paramKey,
+    targetId,
+    maxStops: Math.max(
+      2,
+      Math.round(Number(root.dataset.gradientRampMaxStops) || GRADIENT_RAMP_MAX_STOPS)
+    ),
+  };
+}
+
+function gradientRampTargetId(nodeId, paramKey) {
+  return `gradient-ramp:${nodeId || "none"}:${paramKey || "stops"}`;
+}
+
+function getGradientRampSelectedIndex(targetId, stops) {
+  const rawIndex = gradientRampState?.targetId === targetId
+    ? Number(gradientRampState.selectedIndex)
+    : 0;
+  const index = Number.isFinite(rawIndex) ? Math.round(rawIndex) : 0;
+  return Math.max(0, Math.min(Math.max(0, stops.length - 1), index));
+}
+
+function selectGradientRampStop(target, index, options = {}) {
+  const stops = readGradientRampStops(target);
+  const selectedIndex = Math.max(0, Math.min(Math.max(0, stops.length - 1), Math.round(index)));
+  gradientRampState = { targetId: target.targetId, selectedIndex };
+  colorPickerState = null;
+  if (options.render === false) return;
+  renderInspector();
+}
+
+function addGradientRampStop(target, position) {
+  const node = getSelectedNode();
+  if (!node || node.id !== target.nodeId) return;
+  const stops = readGradientRampStops(target);
+  if (stops.length >= target.maxStops) return;
+  const pos = clamp(Number(position), GRADIENT_RAMP_STOP_GAP, 1 - GRADIENT_RAMP_STOP_GAP);
+  const color = sampleGradientRampColor(stops, pos);
+  const nextStops = normalizeGradientRampEditableStops([...stops, { pos, color }]);
+  const selectedIndex = findClosestGradientRampStopIndex(nextStops, pos, color);
+  gradientRampState = { targetId: target.targetId, selectedIndex };
+  colorPickerState = null;
+  commitGradientRampStops(node.id, target.paramKey, nextStops);
+  renderInspector();
+}
+
+function removeSelectedGradientRampStop(target) {
+  const node = getSelectedNode();
+  if (!node || node.id !== target.nodeId) return;
+  const stops = readGradientRampStops(target);
+  const selectedIndex = getGradientRampSelectedIndex(target.targetId, stops);
+  if (selectedIndex <= 0 || selectedIndex >= stops.length - 1 || stops.length <= 2) return;
+  const nextStops = stops.filter((_, index) => index !== selectedIndex);
+  const nextSelectedIndex = Math.max(0, selectedIndex - 1);
+  gradientRampState = { targetId: target.targetId, selectedIndex: nextSelectedIndex };
+  colorPickerState = null;
+  commitGradientRampStops(node.id, target.paramKey, nextStops);
+  renderInspector();
+}
+
+function commitGradientRampStopPosition(target, index, position) {
+  const node = getSelectedNode();
+  if (!node || node.id !== target.nodeId) return null;
+  const stops = readGradientRampStops(target);
+  if (index <= 0 || index >= stops.length - 1) return stops;
+  const nextStops = stops.map((stop) => ({ ...stop }));
+  nextStops[index].pos = constrainGradientRampStopPosition(nextStops, index, position);
+  return commitGradientRampStops(node.id, target.paramKey, nextStops);
+}
+
+function commitGradientRampStops(nodeId, paramKey, stops) {
+  const normalized = normalizeGradientRampEditableStops(stops);
+  updateNodeParams(nodeId, { [paramKey]: normalized });
+  if (!commitParamValueToTimeline(nodeId, paramKey, normalized)) {
+    updateParamKeyframeAtCurrentTime(nodeId, paramKey, normalized);
+  }
+  return normalized;
+}
+
+function syncGradientRampRoot(root, stops, selectedIndex = null) {
+  if (!root) return;
+  const normalized = normalizeGradientRampEditableStops(stops);
+  const activeIndex = selectedIndex === null
+    ? getGradientRampSelectedIndex(root.dataset.gradientRampTarget, normalized)
+    : Math.max(0, Math.min(normalized.length - 1, Math.round(selectedIndex)));
+  const bar = root.querySelector("[data-gradient-ramp-bar]");
+  if (bar) bar.style.background = buildGradientRampCss(normalized);
+  const buttons = Array.from(root.querySelectorAll("[data-gradient-ramp-stop]"));
+  buttons.forEach((button, index) => {
+    const stop = normalized[index];
+    if (!stop) return;
+    const color = normalizeHex(stop.color, "#ffffff");
+    const position = clamp01(stop.pos) * 100;
+    button.dataset.gradientRampStop = String(index);
+    button.style.left = `${position}%`;
+    button.style.setProperty("--gradient-stop-color", color);
+    button.classList.toggle("is-selected", index === activeIndex);
+    button.classList.toggle("is-endpoint", index === 0 || index === normalized.length - 1);
+    button.setAttribute("aria-pressed", index === activeIndex ? "true" : "false");
+    button.setAttribute("title", `${Math.round(position)}%`);
+  });
+  const readout = root.querySelector("[data-gradient-ramp-readout]");
+  const selectedStop = normalized[activeIndex];
+  if (readout && selectedStop) readout.textContent = `${Math.round(clamp01(selectedStop.pos) * 100)}%`;
+}
+
+function syncGradientRampElements(target) {
+  if (!inspectorEl || target?.kind !== "gradient-stop") return;
+  const node = getSelectedNode();
+  const paramKey = target.paramKey || "stops";
+  if (!node) return;
+  const root = inspectorEl.querySelector(
+    `[data-gradient-ramp-node="${cssEscape(node.id)}"][data-gradient-ramp-param="${cssEscape(paramKey)}"]`
+  );
+  if (!root) return;
+  const stops = normalizeGradientRampEditableStops(node.params?.[paramKey]);
+  syncGradientRampRoot(root, stops, target.stopIndex);
+}
+
+function readGradientRampStops(target) {
+  const node = getSelectedNode();
+  if (!node || node.id !== target.nodeId) return [];
+  return normalizeGradientRampEditableStops(node.params?.[target.paramKey]);
+}
+
+function normalizeGradientRampEditableStops(value) {
+  const stops = normalizeGradientMapInspectorStops(value).map((stop) => ({
+    pos: clamp01(Number(stop.pos)),
+    color: normalizeHex(stop.color, "#ffffff"),
+  }));
+  if (stops.length <= 1) return stops;
+
+  stops.sort((a, b) => a.pos - b.pos);
+  stops[0].pos = 0;
+  stops[stops.length - 1].pos = 1;
+  for (let index = 1; index < stops.length - 1; index++) {
+    stops[index].pos = clamp(stops[index].pos, GRADIENT_RAMP_STOP_GAP, 1 - GRADIENT_RAMP_STOP_GAP);
+  }
+  for (let index = 1; index < stops.length - 1; index++) {
+    stops[index].pos = Math.max(stops[index].pos, stops[index - 1].pos + GRADIENT_RAMP_STOP_GAP);
+  }
+  for (let index = stops.length - 2; index > 0; index--) {
+    stops[index].pos = Math.min(stops[index].pos, stops[index + 1].pos - GRADIENT_RAMP_STOP_GAP);
+  }
+  return stops;
+}
+
+function constrainGradientRampStopPosition(stops, index, position) {
+  const min = stops[index - 1].pos + GRADIENT_RAMP_STOP_GAP;
+  const max = stops[index + 1].pos - GRADIENT_RAMP_STOP_GAP;
+  return clamp(Number(position), min, max);
+}
+
+function findGradientRampInsertPosition(stops) {
+  if (!Array.isArray(stops) || stops.length < 2) return 0.5;
+  let bestPosition = 0.5;
+  let bestGap = 0;
+  for (let index = 0; index < stops.length - 1; index++) {
+    const start = clamp01(stops[index].pos);
+    const end = clamp01(stops[index + 1].pos);
+    const gap = end - start;
+    if (gap > bestGap) {
+      bestGap = gap;
+      bestPosition = start + gap / 2;
+    }
+  }
+  return clamp(bestPosition, GRADIENT_RAMP_STOP_GAP, 1 - GRADIENT_RAMP_STOP_GAP);
+}
+
+function gradientRampPositionFromEvent(bar, clientX) {
+  const rect = bar.getBoundingClientRect();
+  return clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+}
+
+function findClosestGradientRampStopIndex(stops, position, color) {
+  const targetColor = normalizeHex(color, "#ffffff");
+  let closestIndex = 0;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  stops.forEach((stop, index) => {
+    const colorDistance = normalizeHex(stop.color, "#ffffff") === targetColor ? 0 : 1;
+    const distance = Math.abs(clamp01(stop.pos) - clamp01(position)) + colorDistance;
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = index;
+    }
+  });
+  return closestIndex;
+}
+
+function sampleGradientRampColor(stops, position) {
+  const normalized = normalizeGradientRampEditableStops(stops);
+  const pos = clamp01(position);
+  if (normalized.length === 0) return "#808080";
+  if (pos <= normalized[0].pos) return normalized[0].color;
+  for (let index = 0; index < normalized.length - 1; index++) {
+    const left = normalized[index];
+    const right = normalized[index + 1];
+    if (pos > right.pos) continue;
+    const span = Math.max(0.0001, right.pos - left.pos);
+    const amount = clamp01((pos - left.pos) / span);
+    const [lr, lg, lb] = hexToRgb255(left.color);
+    const [rr, rg, rb] = hexToRgb255(right.color);
+    return rgbChannelsToHex(
+      lr + (rr - lr) * amount,
+      lg + (rg - lg) * amount,
+      lb + (rb - lb) * amount
+    );
+  }
+  return normalized.at(-1).color;
+}
+
+function buildGradientRampCss(stops) {
+  const normalized = normalizeGradientRampEditableStops(stops);
+  const stopsCss = normalized
+    .map((stop) => `${normalizeHex(stop.color, "#ffffff")} ${Math.round(clamp01(stop.pos) * 10000) / 100}%`)
+    .join(", ");
+  return `linear-gradient(90deg, ${stopsCss})`;
+}
+
+function findClosestCurvePointIndex(points, x, y) {
+  let closestIndex = 0;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  points.forEach((point, index) => {
+    const dx = point.x - x;
+    const dy = point.y - y;
+    const distance = dx * dx + dy * dy;
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = index;
+    }
+  });
+  return closestIndex;
 }
 
 function normalizeCurveChannel(value) {
   return ["master", "red", "green", "blue"].includes(value) ? value : "master";
+}
+
+function curveChannelLabel(channel) {
+  switch (normalizeCurveChannel(channel)) {
+    case "red":
+      return "Red";
+    case "green":
+      return "Green";
+    case "blue":
+      return "Blue";
+    case "master":
+    default:
+      return "Master";
+  }
 }
 
 function renderPixelateNode(node) {
@@ -3019,6 +3934,12 @@ function renderTransformNode(node) {
   return `
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Position</header>
+      ${renderXyPadField("Translate", "translateX", "translateY", params.translateX, params.translateY, {
+        min: -100,
+        max: 100,
+        step: 1,
+        unit: "%",
+      })}
       ${renderRangeField("Translate X", "translateX", params.translateX, -100, 100, `${params.translateX}%`)}
       ${renderRangeField("Translate Y", "translateY", params.translateY, -100, 100, `${params.translateY}%`)}
       ${renderRangeField("Rotation", "rotation", params.rotation, -180, 180, `${params.rotation}°`)}
@@ -3191,6 +4112,12 @@ function renderLensDistortNode(node) {
       ])}
       ${radialFields}
       ${renderRangeField("Dispersion", "dispersion", params.dispersion, 0, 100, `${params.dispersion}%`)}
+      ${renderXyPadField("Center", "centerX", "centerY", params.centerX, params.centerY, {
+        min: 0,
+        max: 100,
+        step: 1,
+        unit: "%",
+      })}
       ${renderRangeField("Center X", "centerX", params.centerX, 0, 100, `${params.centerX}%`)}
       ${renderRangeField("Center Y", "centerY", params.centerY, 0, 100, `${params.centerY}%`)}
       ${renderRangeField("Vignette", "vignette", params.vignette, 0, 100, `${params.vignette}%`)}
@@ -3238,6 +4165,12 @@ function renderDisplaceNode(node) {
           ["tile", "Tile"],
         ])}
         ${mapFit === "tile" ? renderRangeField("Texture Scale", "mapScale", mapScale, 10, 800, `${mapScale}%`) : ""}
+        ${mapFit === "stretch" ? "" : renderXyPadField("Offset", "mapOffsetX", "mapOffsetY", mapOffsetX, mapOffsetY, {
+          min: -100,
+          max: 100,
+          step: 1,
+          unit: "%",
+        })}
         ${mapFit === "stretch" ? "" : renderRangeField("Offset X", "mapOffsetX", mapOffsetX, -100, 100, `${mapOffsetX}%`)}
         ${mapFit === "stretch" ? "" : renderRangeField("Offset Y", "mapOffsetY", mapOffsetY, -100, 100, `${mapOffsetY}%`)}
         ${renderSelectField("Debug", "debugMap", debugMap, [
@@ -3261,6 +4194,12 @@ function renderDisplaceNode(node) {
         ["wave", "Wave"],
         ["map", "Map input"],
       ])}
+      ${renderXyPadField("Amount", "xAmount", "yAmount", xAmount, yAmount, {
+        min: -200,
+        max: 200,
+        step: 1,
+        unit: "px",
+      })}
       ${renderRangeField("X Amount", "xAmount", xAmount, -200, 200, `${xAmount}px`)}
       ${renderRangeField("Y Amount", "yAmount", yAmount, -200, 200, `${yAmount}px`)}
       ${renderRangeField("Strength", "strength", strength, 0, 400, `${strength}%`)}
@@ -3283,6 +4222,12 @@ function renderChromaticAberrationNode(node) {
       ])}
       ${renderRangeField("Strength", "strength", params.strength, 0, 96, `${params.strength}px`)}
       ${renderRangeField("Angle", "angle", params.angle, -180, 180, `${params.angle}deg`)}
+      ${renderXyPadField("Center", "centerX", "centerY", params.centerX, params.centerY, {
+        min: 0,
+        max: 100,
+        step: 1,
+        unit: "%",
+      })}
       ${renderRangeField("Center X", "centerX", params.centerX, 0, 100, `${params.centerX}%`)}
       ${renderRangeField("Center Y", "centerY", params.centerY, 0, 100, `${params.centerY}%`)}
     </section>
@@ -3499,6 +4444,12 @@ function renderDepthOfFieldNode(node) {
   return `
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Focus</header>
+      ${renderXyPadField("Center", "centerX", "centerY", centerX, centerY, {
+        min: 0,
+        max: 100,
+        step: 1,
+        unit: "%",
+      })}
       ${renderRangeField("Center X", "centerX", centerX, 0, 100, `${centerX}%`)}
       ${renderRangeField("Center Y", "centerY", centerY, 0, 100, `${centerY}%`)}
       ${renderRangeField("Radius", "radius", radius, 0, 100, `${radius}%`)}
@@ -3871,6 +4822,100 @@ function renderRangeField(label, key, value, min, max, _readout) {
   `;
 }
 
+function renderLayerRangeField(label, key, value, min, max, _readout) {
+  const safeKey = escapeHtml(key);
+  const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+  return `
+    <div class="field range-field">
+      <label>
+        <span class="field-label-row">
+          ${renderLayerPropertyKeyframeButton(key)}
+          <span class="field-label-text">${escapeHtml(label)}</span>
+        </span>
+        <span class="field-suffix" data-property-readout="${safeKey}"></span>
+      </label>
+      <div class="range-row">
+        <input
+          type="range"
+          min="${min}"
+          max="${max}"
+          value="${numericValue}"
+          data-node-property="${safeKey}"
+          data-input-kind="range"
+        />
+        <input
+          type="number"
+          class="num-edit"
+          min="${min}"
+          max="${max}"
+          value="${numericValue}"
+          data-node-property="${safeKey}"
+          data-input-kind="number"
+        />
+      </div>
+    </div>
+  `;
+}
+
+function renderXyPadField(label, xKey, yKey, xValue, yValue, options = {}) {
+  const min = Number.isFinite(Number(options.min)) ? Number(options.min) : -1;
+  const max = Number.isFinite(Number(options.max)) ? Number(options.max) : 1;
+  const step = Number.isFinite(Number(options.step)) && Number(options.step) > 0
+    ? Number(options.step)
+    : 1;
+  const unit = options.unit ?? "";
+  const yAxis = options.yAxis === "up" ? "up" : "down";
+  const range = Math.max(max - min, Number.EPSILON);
+  const x = clamp(roundToStep(Number(xValue), step, min), min, max);
+  const y = clamp(roundToStep(Number(yValue), step, min), min, max);
+  const xPct = ((x - min) / range) * 100;
+  const yPct = yAxis === "down"
+    ? ((y - min) / range) * 100
+    : (1 - (y - min) / range) * 100;
+  return `
+    <div class="field xy-pad-field" data-xy-pad-field="${escapeHtml(`${xKey}:${yKey}`)}">
+      <div class="xy-pad-header">
+        <div class="xy-pad-title">
+          <span class="field-label-text">${escapeHtml(label)}</span>
+          <span class="xy-pad-chip">X/Y</span>
+        </div>
+        <span class="xy-pad-readout" data-xy-pad-readout>${escapeHtml(formatXyPadReadout(x, y, unit))}</span>
+      </div>
+      <button
+        type="button"
+        class="xy-pad-surface"
+        data-xy-pad
+        data-xy-pad-x="${escapeHtml(xKey)}"
+        data-xy-pad-y="${escapeHtml(yKey)}"
+        data-xy-pad-value-x="${x}"
+        data-xy-pad-value-y="${y}"
+        data-xy-pad-min="${min}"
+        data-xy-pad-max="${max}"
+        data-xy-pad-step="${step}"
+        data-xy-pad-y-axis="${escapeHtml(yAxis)}"
+        data-xy-pad-unit="${escapeHtml(unit)}"
+        style="--xy-pad-x:${xPct}%; --xy-pad-y:${yPct}%"
+        aria-label="${escapeHtml(label)} XY pad"
+      >
+        <span class="xy-pad-grid"></span>
+        <span class="xy-pad-guide xy-pad-guide--x"></span>
+        <span class="xy-pad-guide xy-pad-guide--y"></span>
+        <span class="xy-pad-handle" aria-hidden="true"><span></span></span>
+      </button>
+    </div>
+  `;
+}
+
+function formatXyPadReadout(x, y, unit = "") {
+  return `${formatXyPadNumber(x)}${unit}, ${formatXyPadNumber(y)}${unit}`;
+}
+
+function formatXyPadNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+  return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/\.?0+$/, "");
+}
+
 function renderNumberField(label, key, value, bounds = null) {
   const safeKey = escapeHtml(key);
   const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -3912,6 +4957,25 @@ function renderParamKeyframeButton(paramKey) {
   ></button>`;
 }
 
+function renderLayerPropertyKeyframeButton(paramKey) {
+  const node = getSelectedNode();
+  if (!isLayerAdjustableNode(node)) return "";
+  const safeKey = escapeHtml(paramKey);
+  const binding = {
+    type: TIMELINE_BINDING_NODE_PROPERTY,
+    key: paramKey,
+  };
+  const animated = hasTimelineTrackForBinding(node.id, binding);
+  const keyed = hasTimelineKeyframeAtCurrentTime(node.id, binding);
+  return `<button
+    type="button"
+    class="param-keyframe-toggle${animated ? " is-animated" : ""}${keyed ? " is-keyed" : ""}"
+    data-node-property-keyframe-toggle="${safeKey}"
+    aria-label="${keyed ? "Remove keyframe" : "Set keyframe"}"
+    title="${keyed ? "Remove keyframe" : "Set keyframe"}"
+  ></button>`;
+}
+
 function syncTimelineButtons() {
   if (!inspectorEl) return;
   const node = getSelectedNode();
@@ -3920,6 +4984,19 @@ function syncTimelineButtons() {
     const paramKey = button.dataset.paramKeyframeToggle;
     const animated = hasTimelineTrackForParam(node.id, paramKey);
     const keyed = hasParamKeyframeAtCurrentTime(node.id, paramKey);
+    button.classList.toggle("is-animated", animated);
+    button.classList.toggle("is-keyed", keyed);
+    button.setAttribute("aria-label", keyed ? "Remove keyframe" : "Set keyframe");
+    button.setAttribute("title", keyed ? "Remove keyframe" : "Set keyframe");
+  }
+  for (const button of inspectorEl.querySelectorAll("[data-node-property-keyframe-toggle]")) {
+    const paramKey = button.dataset.nodePropertyKeyframeToggle;
+    const binding = {
+      type: TIMELINE_BINDING_NODE_PROPERTY,
+      key: paramKey,
+    };
+    const animated = hasTimelineTrackForBinding(node.id, binding);
+    const keyed = hasTimelineKeyframeAtCurrentTime(node.id, binding);
     button.classList.toggle("is-animated", animated);
     button.classList.toggle("is-keyed", keyed);
     button.setAttribute("aria-label", keyed ? "Remove keyframe" : "Set keyframe");
@@ -4014,11 +5091,6 @@ function renderCheckboxField(label, key, checked) {
   `;
 }
 
-// HEX color field — native <input type="color"> swatch + uppercase HEX
-// text input. The two siblings share the same data-node-param key so the
-// existing syncSiblingControls keeps them in lockstep. The text input
-// commits on `change` (blur) only; mid-typing input events would normalise
-// "#FF" back to "#000000" and overwrite the user's value.
 function renderColorField(label, key, value, options = {}) {
   const safeKey = escapeHtml(key);
   const fallback = options.fallback ?? "#000000";
@@ -4032,27 +5104,13 @@ function renderColorField(label, key, value, options = {}) {
           <span class="field-label-text">${escapeHtml(label)}</span>
         </span>
       </label>
-      <div class="color-row">
-        <input
-          type="color"
-          class="color-swatch"
-          value="${escapeHtml(hex)}"
-          data-node-param="${safeKey}"
-          data-input-kind="color-swatch"
-          aria-label="${escapeHtml(label)} color"
-        />
-        <input
-          type="text"
-          class="color-hex"
-          value="${escapeHtml(hex)}"
-          data-node-param="${safeKey}"
-          data-input-kind="color-hex"
-          maxlength="7"
-          spellcheck="false"
-          autocomplete="off"
-          autocapitalize="off"
-        />
-      </div>
+      ${renderColorPickerControl({
+        label,
+        value: hex,
+        fallback,
+        target: { kind: "node-param", paramKey: key },
+        inputAttrs: `data-node-param="${safeKey}" data-input-kind="color-hex"`,
+      })}
     </div>
   `;
 }
@@ -4061,6 +5119,9 @@ function renderGradientStopColorField(label, stopIndex, value, options = {}) {
   const safeIndex = String(Math.max(0, Number(stopIndex) || 0));
   const fallback = options.fallback ?? "#000000";
   const hex = normalizeHex(value, fallback);
+  const stopParamAttr = options.paramKey
+    ? ` data-gradient-stop-param="${escapeHtml(options.paramKey)}"`
+    : "";
   return `
     <div class="field color-field">
       <label>
@@ -4068,29 +5129,483 @@ function renderGradientStopColorField(label, stopIndex, value, options = {}) {
           <span class="field-label-text">${escapeHtml(label)}</span>
         </span>
       </label>
-      <div class="color-row">
-        <input
-          type="color"
-          class="color-swatch"
-          value="${escapeHtml(hex)}"
-          data-gradient-map-stop-color="${safeIndex}"
-          data-input-kind="gradient-stop-swatch"
-          aria-label="${escapeHtml(label)} color"
-        />
+      ${renderColorPickerControl({
+        label,
+        value: hex,
+        fallback,
+        target: {
+          kind: "gradient-stop",
+          stopIndex: safeIndex,
+          paramKey: options.paramKey || "stops",
+        },
+        inputAttrs: `data-gradient-map-stop-color="${safeIndex}" ${stopParamAttr} data-input-kind="gradient-stop-hex"`,
+      })}
+    </div>
+  `;
+}
+
+function renderGradientRampField(label, paramKey, value, options = {}) {
+  const node = getSelectedNode();
+  const safeKey = escapeHtml(paramKey);
+  const stops = normalizeGradientRampEditableStops(value);
+  const maxStops = Math.max(2, Math.round(Number(options.maxStops) || GRADIENT_RAMP_MAX_STOPS));
+  const targetId = gradientRampTargetId(node?.id, paramKey);
+  const selectedIndex = getGradientRampSelectedIndex(targetId, stops);
+  const selectedStop = stops[selectedIndex] ?? stops[0] ?? { pos: 0, color: "#111111" };
+  const canAdd = stops.length < maxStops;
+  const canDelete = selectedIndex > 0 && selectedIndex < stops.length - 1 && stops.length > 2;
+  const readout = `${Math.round(clamp01(selectedStop.pos) * 100)}%`;
+
+  return `
+    <div
+      class="field gradient-ramp-field"
+      data-gradient-ramp-target="${escapeHtml(targetId)}"
+      data-gradient-ramp-node="${escapeHtml(node?.id ?? "")}"
+      data-gradient-ramp-param="${safeKey}"
+      data-gradient-ramp-max-stops="${maxStops}"
+    >
+      <label>
+        <span class="field-label-row">
+          <span class="field-label-text">${escapeHtml(label)}</span>
+        </span>
+      </label>
+      <div class="gradient-ramp-shell">
+        <div
+          class="gradient-ramp-bar"
+          data-gradient-ramp-bar
+          style="background:${escapeHtml(buildGradientRampCss(stops))}"
+        >
+          ${stops.map((stop, index) => renderGradientRampStop(stop, index, selectedIndex)).join("")}
+        </div>
+        <div class="gradient-ramp-actions">
+          <button
+            type="button"
+            class="btn gradient-ramp-button"
+            data-gradient-ramp-action="add"
+            ${canAdd ? "" : "disabled"}
+          >Add</button>
+          <button
+            type="button"
+            class="btn gradient-ramp-button"
+            data-gradient-ramp-action="delete"
+            ${canDelete ? "" : "disabled"}
+          >Remove</button>
+          <span class="gradient-ramp-readout" data-gradient-ramp-readout>${escapeHtml(readout)}</span>
+        </div>
+        <div class="gradient-ramp-selected color-field">
+          ${renderColorPickerControl({
+            label: `${label} stop`,
+            value: selectedStop.color,
+            fallback: selectedIndex === 0 ? "#111111" : "#ffffff",
+            target: {
+              kind: "gradient-stop",
+              stopIndex: selectedIndex,
+              paramKey,
+            },
+            inputAttrs: `data-gradient-map-stop-color="${selectedIndex}" data-gradient-stop-param="${safeKey}" data-input-kind="gradient-stop-hex"`,
+          })}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderGradientRampStop(stop, index, selectedIndex) {
+  const color = normalizeHex(stop?.color, "#ffffff");
+  const position = clamp01(Number(stop?.pos)) * 100;
+  const isSelected = index === selectedIndex;
+  return `
+    <button
+      type="button"
+      class="gradient-ramp-stop${isSelected ? " is-selected" : ""}${index === 0 || position >= 100 ? " is-endpoint" : ""}"
+      data-gradient-ramp-stop="${index}"
+      style="left:${position}%; --gradient-stop-color:${escapeHtml(color)}"
+      aria-label="Gradient stop ${index + 1}"
+      aria-pressed="${isSelected ? "true" : "false"}"
+      title="${Math.round(position)}%"
+    ></button>
+  `;
+}
+
+function renderColorPickerControl({ label, value, fallback, target, inputAttrs }) {
+  const hex = normalizeHex(value, fallback ?? "#000000");
+  const targetId = colorPickerTargetId(target);
+  const open = colorPickerState?.targetId === targetId;
+  const attrs = renderColorPickerTargetAttrs(target, targetId, fallback ?? "#000000");
+  return `
+    <div class="color-row color-picker-root" ${attrs}>
+      <button
+        type="button"
+        class="color-picker-trigger"
+        data-color-picker-trigger
+        aria-label="${escapeHtml(label)} color"
+        aria-expanded="${open ? "true" : "false"}"
+      >
+        <span class="color-picker-trigger-swatch" style="background:${escapeHtml(hex)}"></span>
+        <span class="color-picker-trigger-value">${escapeHtml(hex.toUpperCase())}</span>
+      </button>
+      <input
+        type="text"
+        class="color-hex"
+        value="${escapeHtml(hex)}"
+        ${inputAttrs}
+        maxlength="7"
+        spellcheck="false"
+        autocomplete="off"
+        autocapitalize="off"
+      />
+      ${open ? renderColorPickerPopover(hex, target, fallback ?? "#000000") : ""}
+    </div>
+  `;
+}
+
+function renderColorPickerPopover(hex, target, fallback = "#000000") {
+  const safeHex = normalizeHex(hex, fallback);
+  const hsv = hexToHsvColor(safeHex);
+  const hueColor = hsvColorToHex({ h: hsv.h, s: 1, v: 1 });
+  const targetId = colorPickerTargetId(target);
+  return `
+    <div class="color-picker-popover" data-color-picker-popover data-color-current="${escapeHtml(safeHex)}" data-color-picker-target-id="${escapeHtml(targetId)}" style="--color-picker-hue:${escapeHtml(hueColor)}; --color-picker-s:${hsv.s * 100}%; --color-picker-v:${(1 - hsv.v) * 100}%; --color-picker-h:${(hsv.h / 360) * 100}%">
+      <div class="color-picker-surface" data-color-picker-surface>
+        <span class="color-picker-surface-white"></span>
+        <span class="color-picker-surface-black"></span>
+        <span class="color-picker-surface-handle"></span>
+      </div>
+      <div class="color-picker-hue" data-color-picker-hue>
+        <span class="color-picker-hue-handle"></span>
+      </div>
+      <div class="color-picker-popover-row">
         <input
           type="text"
           class="color-hex"
-          value="${escapeHtml(hex)}"
-          data-gradient-map-stop-color="${safeIndex}"
-          data-input-kind="gradient-stop-hex"
+          value="${escapeHtml(safeHex)}"
+          data-color-picker-hex-input
           maxlength="7"
           spellcheck="false"
           autocomplete="off"
           autocapitalize="off"
         />
+        <button type="button" class="color-picker-eyedropper" data-color-picker-eyedropper title="Pick color from screen" aria-label="Pick color from screen">Pick</button>
       </div>
     </div>
   `;
+}
+
+function renderColorPickerTargetAttrs(target, targetId, fallback) {
+  const attrs = [
+    `data-color-picker-target="${escapeHtml(targetId)}"`,
+    `data-color-picker-kind="${escapeHtml(target.kind)}"`,
+    `data-color-picker-fallback="${escapeHtml(fallback)}"`,
+  ];
+  if (target.kind === "node-param") {
+    attrs.push(`data-color-picker-param="${escapeHtml(target.paramKey)}"`);
+  } else if (target.kind === "gradient-stop") {
+    attrs.push(`data-color-picker-stop-index="${escapeHtml(String(target.stopIndex))}"`);
+    attrs.push(`data-color-picker-param="${escapeHtml(target.paramKey || "stops")}"`);
+  } else if (target.kind === "mesh-stop") {
+    attrs.push(`data-color-picker-stop-index="${escapeHtml(String(target.stopIndex))}"`);
+  }
+  return attrs.join(" ");
+}
+
+function colorPickerTargetId(target) {
+  if (!target) return "";
+  switch (target.kind) {
+    case "node-param":
+      return `node:${target.paramKey}`;
+    case "gradient-stop":
+      return `gradient:${target.paramKey || "stops"}:${target.stopIndex}`;
+    case "mesh-stop":
+      return `mesh:${target.stopIndex}`;
+    default:
+      return "";
+  }
+}
+
+function resolveColorPickerTarget(element) {
+  const root = element?.closest?.("[data-color-picker-target]");
+  if (!root) return null;
+  const kind = root.dataset.colorPickerKind;
+  const target = {
+    kind,
+    targetId: root.dataset.colorPickerTarget,
+    fallback: root.dataset.colorPickerFallback || "#000000",
+  };
+  if (kind === "node-param") {
+    target.paramKey = root.dataset.colorPickerParam;
+  } else if (kind === "gradient-stop") {
+    target.paramKey = root.dataset.colorPickerParam || "stops";
+    target.stopIndex = Number(root.dataset.colorPickerStopIndex);
+  } else if (kind === "mesh-stop") {
+    target.stopIndex = Number(root.dataset.colorPickerStopIndex);
+  }
+  if (!target.targetId || !target.kind) return null;
+  return target;
+}
+
+function toggleColorPicker(trigger) {
+  const target = resolveColorPickerTarget(trigger);
+  if (!target) return;
+  colorPickerState = colorPickerState?.targetId === target.targetId
+    ? null
+    : { targetId: target.targetId };
+  renderInspector();
+}
+
+function startColorPickerDrag(event, control, mode) {
+  if (event.button !== 0) return;
+  const target = resolveColorPickerTarget(control);
+  if (!target) return;
+  event.preventDefault();
+  event.stopPropagation();
+
+  inspectorEditing = true;
+  document.body.classList.add("dragging-color-picker");
+
+  const commitFromPointer = (ev) => {
+    const current = hexToHsvColor(readColorPickerCurrentHex(target));
+    const next = mode === "hue"
+      ? hsvFromHuePointer(control, current, ev.clientX)
+      : hsvFromSurfacePointer(control, current, ev.clientX, ev.clientY);
+    commitColorPickerValue(control, hsvColorToHex(next));
+  };
+
+  commitFromPointer(event);
+
+  try {
+    control.setPointerCapture(event.pointerId);
+  } catch {}
+
+  const onMove = (ev) => {
+    if (ev.buttons !== undefined && !(ev.buttons & 1)) return;
+    commitFromPointer(ev);
+  };
+
+  const onUp = () => {
+    control.removeEventListener("pointermove", onMove);
+    control.removeEventListener("pointerup", onUp);
+    control.removeEventListener("pointercancel", onUp);
+    inspectorEditing = false;
+    document.body.classList.remove("dragging-color-picker");
+    try {
+      control.releasePointerCapture(event.pointerId);
+    } catch {}
+  };
+
+  control.addEventListener("pointermove", onMove);
+  control.addEventListener("pointerup", onUp);
+  control.addEventListener("pointercancel", onUp);
+}
+
+function hsvFromSurfacePointer(surface, current, clientX, clientY) {
+  const rect = surface.getBoundingClientRect();
+  return {
+    h: current.h,
+    s: clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1),
+    v: 1 - clamp((clientY - rect.top) / Math.max(1, rect.height), 0, 1),
+  };
+}
+
+function hsvFromHuePointer(hueControl, current, clientX) {
+  const rect = hueControl.getBoundingClientRect();
+  return {
+    ...current,
+    h: clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1) * 360,
+  };
+}
+
+function commitColorPickerValue(element, rawHex) {
+  const target = resolveColorPickerTarget(element);
+  if (!target) return null;
+  const hex = normalizeHex(rawHex, target.fallback);
+
+  switch (target.kind) {
+    case "node-param":
+      commitNodeColorParam(target.paramKey, hex);
+      break;
+    case "gradient-stop":
+      commitGradientStopColorTarget(target, hex);
+      break;
+    case "mesh-stop":
+      commitMeshStopColorTarget(target, hex);
+      break;
+    default:
+      return null;
+  }
+
+  syncColorPickerElements(target, hex);
+  return hex;
+}
+
+function commitNodeColorParam(paramKey, hex) {
+  const node = getSelectedNode();
+  if (!node || !paramKey) return;
+  updateNodeParams(node.id, { [paramKey]: hex });
+  if (!commitParamValueToTimeline(node.id, paramKey, hex)) {
+    updateParamKeyframeAtCurrentTime(node.id, paramKey, hex);
+  }
+}
+
+function commitGradientStopColorTarget(target, hex) {
+  const node = getSelectedNode();
+  if (!node || (node.type !== "gradient-map" && node.type !== "scene-grade")) return;
+  const paramKey = target.paramKey || "stops";
+  const stops = normalizeGradientMapInspectorStops(node.params?.[paramKey]);
+  const index = Math.max(
+    0,
+    Math.min(stops.length - 1, Number.isFinite(target.stopIndex) ? target.stopIndex : 0)
+  );
+  const nextStops = stops.map((stop) => ({ ...stop }));
+  nextStops[index] = {
+    ...nextStops[index],
+    pos: index === 0 ? 0 : index === nextStops.length - 1 ? 1 : nextStops[index].pos,
+    color: hex,
+  };
+  commitGradientRampStops(node.id, paramKey, nextStops);
+}
+
+function commitMeshStopColorTarget(target, hex) {
+  const node = getSelectedNode();
+  if (!node || node.type !== "mesh-gradient") return;
+  const stops = Array.isArray(node.params?.stops) ? node.params.stops : [];
+  const index = Number(target.stopIndex);
+  if (!Number.isFinite(index) || index < 0 || index >= stops.length) return;
+  const nextStops = stops.map((stop, stopIndex) =>
+    stopIndex === index ? { ...stop, color: hex } : stop
+  );
+  updateNodeParams(node.id, { stops: nextStops });
+}
+
+async function handleColorPickerEyedropper(control) {
+  if (typeof window === "undefined" || typeof window.EyeDropper !== "function") return;
+  try {
+    const result = await new window.EyeDropper().open();
+    if (result?.sRGBHex) commitColorPickerValue(control, result.sRGBHex);
+  } catch {
+    // User cancelled the picker; keep the current color.
+  }
+}
+
+function readColorPickerCurrentHex(target) {
+  if (!target?.targetId || !inspectorEl) return normalizeHex(target?.fallback, "#000000");
+  const row = inspectorEl.querySelector(`[data-color-picker-target="${cssEscape(target.targetId)}"]`);
+  const hexInput = row?.querySelector(".color-hex");
+  return normalizeHex(hexInput?.value, target.fallback || "#000000");
+}
+
+function syncColorPickerElements(target, hex) {
+  if (!target?.targetId || !inspectorEl) return;
+  const safeHex = normalizeHex(hex, target.fallback || "#000000");
+  const hsv = hexToHsvColor(safeHex);
+  const hueColor = hsvColorToHex({ h: hsv.h, s: 1, v: 1 });
+  const rows = inspectorEl.querySelectorAll(`[data-color-picker-target="${cssEscape(target.targetId)}"]`);
+  for (const row of rows) {
+    const triggerSwatch = row.querySelector(".color-picker-trigger-swatch");
+    const triggerValue = row.querySelector(".color-picker-trigger-value");
+    const hexInputs = row.querySelectorAll(".color-hex");
+    if (triggerSwatch) triggerSwatch.style.background = safeHex;
+    if (triggerValue) triggerValue.textContent = safeHex.toUpperCase();
+    for (const input of hexInputs) {
+      input.classList.remove("is-invalid");
+      if (input.value !== safeHex) input.value = safeHex;
+    }
+    const meshDot = row.closest(".mesh-stop-row")?.querySelector(".mesh-stop-swatch-dot");
+    if (meshDot) meshDot.style.background = safeHex;
+    const popover = row.querySelector("[data-color-picker-popover]");
+    if (popover) {
+      popover.dataset.colorCurrent = safeHex;
+      popover.style.setProperty("--color-picker-hue", hueColor);
+      popover.style.setProperty("--color-picker-s", `${hsv.s * 100}%`);
+      popover.style.setProperty("--color-picker-v", `${(1 - hsv.v) * 100}%`);
+      popover.style.setProperty("--color-picker-h", `${(hsv.h / 360) * 100}%`);
+    }
+  }
+  if (target.kind === "gradient-stop") {
+    syncGradientRampElements(target);
+  }
+  syncTimelineButtons();
+}
+
+function normalizeHexOrNull(value) {
+  if (typeof value !== "string") return null;
+  const raw = value.trim().replace(/^#/, "");
+  if (/^[0-9a-fA-F]{3}$/.test(raw)) {
+    return normalizeHex(`#${raw}`, "#000000");
+  }
+  if (/^[0-9a-fA-F]{6}$/.test(raw)) {
+    return normalizeHex(`#${raw}`, "#000000");
+  }
+  return null;
+}
+
+function hexToHsvColor(hex) {
+  const [r, g, b] = hexToRgb255(normalizeHex(hex, "#ffffff"));
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const delta = max - min;
+  let h = 0;
+  if (delta !== 0) {
+    if (max === rn) h = ((gn - bn) / delta) % 6;
+    else if (max === gn) h = (bn - rn) / delta + 2;
+    else h = (rn - gn) / delta + 4;
+  }
+  return {
+    h: (h * 60 + 360) % 360,
+    s: max === 0 ? 0 : delta / max,
+    v: max,
+  };
+}
+
+function hsvColorToHex(color) {
+  const hue = (((Number(color.h) || 0) % 360) + 360) % 360;
+  const saturation = clamp(Number(color.s), 0, 1);
+  const value = clamp(Number(color.v), 0, 1);
+  const chroma = value * saturation;
+  const huePrime = hue / 60;
+  const x = chroma * (1 - Math.abs((huePrime % 2) - 1));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (huePrime < 1) {
+    r = chroma;
+    g = x;
+  } else if (huePrime < 2) {
+    r = x;
+    g = chroma;
+  } else if (huePrime < 3) {
+    g = chroma;
+    b = x;
+  } else if (huePrime < 4) {
+    g = x;
+    b = chroma;
+  } else if (huePrime < 5) {
+    r = x;
+    b = chroma;
+  } else {
+    r = chroma;
+    b = x;
+  }
+  const match = value - chroma;
+  return rgbChannelsToHex((r + match) * 255, (g + match) * 255, (b + match) * 255);
+}
+
+function rgbChannelsToHex(r, g, b) {
+  const toHex = (v) => Math.max(0, Math.min(255, Math.round(Number(v) || 0)))
+    .toString(16)
+    .padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function hexToRgb255(hex) {
+  const safe = normalizeHex(hex, "#ffffff").slice(1);
+  return [
+    parseInt(safe.slice(0, 2), 16),
+    parseInt(safe.slice(2, 4), 16),
+    parseInt(safe.slice(4, 6), 16),
+  ];
 }
 
 function readControlValue(control) {
@@ -4119,8 +5634,33 @@ function syncSiblingControls(control) {
   }
 }
 
+function syncLayerPropertySiblingControls(control) {
+  const key = control.dataset.nodeProperty;
+  if (!key || !inspectorEl) return;
+  const value = control.value;
+  const siblings = inspectorEl.querySelectorAll(`[data-node-property="${cssEscape(key)}"]`);
+  for (const el of siblings) {
+    if (el === control) continue;
+    if (el.value !== value) el.value = value;
+  }
+}
+
+function getLayerPropertyDefaultValue(key) {
+  switch (key) {
+    case "opacity":
+      return 100;
+    case "hue":
+      return 0;
+    case "saturation":
+      return 100;
+    default:
+      return 0;
+  }
+}
+
 function commitGradientMapStopColor(node, control) {
-  const stops = normalizeGradientMapInspectorStops(node.params?.stops);
+  const paramKey = control.dataset.gradientStopParam || "stops";
+  const stops = normalizeGradientMapInspectorStops(node.params?.[paramKey]);
   const rawIndex = Number(control.dataset.gradientMapStopColor);
   const index = Math.max(0, Math.min(stops.length - 1, Number.isFinite(rawIndex) ? rawIndex : 0));
   const fallback = index === 0 ? "#111111" : "#ffffff";
@@ -4132,7 +5672,7 @@ function commitGradientMapStopColor(node, control) {
     color,
   };
   control.value = color;
-  updateNodeParams(node.id, { stops: nextStops });
+  commitGradientRampStops(node.id, paramKey, nextStops);
   return color;
 }
 
@@ -4140,11 +5680,13 @@ function syncGradientStopSiblingControls(control) {
   const key = control.dataset.gradientMapStopColor;
   if (!key || !inspectorEl) return;
   const value = normalizeHex(control.value, "#000000");
+  const paramKey = control.dataset.gradientStopParam || "";
   const siblings = inspectorEl.querySelectorAll(
     `[data-gradient-map-stop-color="${cssEscape(key)}"]`
   );
   for (const el of siblings) {
     if (el === control) continue;
+    if ((el.dataset.gradientStopParam || "") !== paramKey) continue;
     if (el.value !== value) el.value = value;
   }
 }
@@ -4288,6 +5830,7 @@ function initGraphContextMenu() {
     <button data-add-node="duotone">Add Duotone</button>
     <button data-add-node="gradient-map">Add Gradient Map</button>
     <button data-add-node="rgb-curves">Add RGB Curves</button>
+    <button data-add-node="scene-grade">Add Scene Grade</button>
     <button data-add-node="blur">Add Blur</button>
     <button data-add-node="pixelate">Add Pixelate</button>
     <button data-add-node="transform">Add Transform</button>

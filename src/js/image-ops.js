@@ -655,6 +655,122 @@ export function applyRgbCurvesNode(input, params) {
   return output;
 }
 
+// Scene Grade — final scene-wide color pass intended to sit immediately before
+// Viewer Output. It reuses the RGB curves LUT path, then performs clamp/gamma
+// remapping, and can optionally map the final luma through the shared gradient
+// LUT helper.
+export function applySceneGradeNode(input, params = {}) {
+  if (!input?.width || !input?.height) return null;
+
+  const luts = buildRgbCurvesLuts(params);
+  const hasCurves = !areRgbCurvesIdentity(luts);
+  const clampMin = clamp(Number(params.clampMin ?? 0) / 100, 0, 1);
+  const rawClampMax = clamp(Number(params.clampMax ?? 100) / 100, 0, 1);
+  const clampMax = Math.max(rawClampMax, clampMin + 0.001);
+  const clampGamma = clamp(Number(params.clampGamma ?? 100) / 100, 0.01, 4);
+  const hasClamp =
+    Math.abs(clampMin) > 1e-6 ||
+    Math.abs(clampMax - 1) > 1e-6 ||
+    Math.abs(clampGamma - 1) > 1e-6;
+  const colorMapFlag = String(params.colorMapEnabled ?? "off").toLowerCase();
+  const colorMapEnabled =
+    params.colorMapEnabled === true || colorMapFlag === "on" || colorMapFlag === "true";
+
+  if (!hasCurves && !hasClamp && !colorMapEnabled) return input;
+
+  const finalLuts = hasCurves ? buildFinalRgbCurvesLuts(luts) : null;
+  const colorMapLut = colorMapEnabled
+    ? buildGradientLut(sceneGradeColorMapStops(params))
+    : null;
+  const colorMapData = colorMapLut?.data ?? null;
+  const colorMapWidth = colorMapLut?.width ?? 0;
+  const range = clampMax - clampMin;
+  const inverseGamma = 1 / clampGamma;
+
+  const output = createBuffer(input.width, input.height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  ctx.drawImage(input, 0, 0);
+  const imageData = ctx.getImageData(0, 0, output.width, output.height);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    let r = hasCurves ? finalLuts.red[data[i]] : data[i];
+    let g = hasCurves ? finalLuts.green[data[i + 1]] : data[i + 1];
+    let b = hasCurves ? finalLuts.blue[data[i + 2]] : data[i + 2];
+
+    let rf = r / 255;
+    let gf = g / 255;
+    let bf = b / 255;
+
+    if (hasClamp) {
+      rf = Math.pow(clamp01((rf - clampMin) / range), inverseGamma);
+      gf = Math.pow(clamp01((gf - clampMin) / range), inverseGamma);
+      bf = Math.pow(clamp01((bf - clampMin) / range), inverseGamma);
+    }
+
+    if (colorMapData) {
+      const luma = rf * 0.2126 + gf * 0.7152 + bf * 0.0722;
+      const mapped = sampleGradientLut(colorMapData, colorMapWidth, luma);
+      rf = mapped[0] / 255;
+      gf = mapped[1] / 255;
+      bf = mapped[2] / 255;
+    }
+
+    data[i] = Math.round(clamp01(rf) * 255);
+    data[i + 1] = Math.round(clamp01(gf) * 255);
+    data[i + 2] = Math.round(clamp01(bf) * 255);
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+function sceneGradeColorMapStops(params) {
+  if (Array.isArray(params?.colorMapStops) && params.colorMapStops.length > 0) {
+    return params.colorMapStops;
+  }
+  return [
+    { pos: 0, color: params?.colorMapShadow ?? "#111111" },
+    { pos: 1, color: params?.colorMapHighlight ?? "#ffffff" },
+  ];
+}
+
+export function applyLayerAdjustmentsNode(baseInput, output, layer = {}) {
+  if (!output?.width || !output?.height) return output ?? null;
+
+  const opacity = clamp(Number(layer.opacity ?? 100) / 100, 0, 1);
+  const hue = Number(layer.hue ?? 0);
+  const saturation = clamp(Number(layer.saturation ?? 100) / 100, 0, 2);
+  const hasColorAdjust = hue !== 0 || saturation !== 1;
+  const hasOpacityAdjust = opacity < 0.999;
+  if (!hasColorAdjust && !hasOpacityAdjust) return output;
+
+  let adjusted = output;
+  if (hasColorAdjust) {
+    adjusted = applyHsvNode(output, {
+      hue,
+      saturation: saturation * 100,
+      value: 100,
+    });
+  }
+
+  if (!hasOpacityAdjust) return adjusted;
+
+  const blended = createBuffer(output.width, output.height);
+  const ctx = blended.getContext("2d", { alpha: false, willReadFrequently: true });
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, blended.width, blended.height);
+  if (baseInput?.width && baseInput?.height) {
+    ctx.drawImage(baseInput, 0, 0, blended.width, blended.height);
+  }
+  ctx.globalAlpha = opacity;
+  ctx.drawImage(adjusted, 0, 0, blended.width, blended.height);
+  ctx.globalAlpha = 1;
+
+  if (adjusted !== output) releaseBuffer(adjusted);
+  return blended;
+}
+
 // Pixelate — collapse NxN blocks of source pixels into a single color so the
 // downstream chain (especially dither) operates on a chunky low-resolution
 // version of the image without changing canvas dimensions.

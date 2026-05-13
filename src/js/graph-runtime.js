@@ -21,6 +21,7 @@ import {
   applyVhsNode,
   applyHsvNode,
   applyInvertNode,
+  applyLayerAdjustmentsNode,
   applyLensDistortNode,
   applyLevelsNode,
   applyLedScreenNode,
@@ -33,6 +34,7 @@ import {
   applyPixelSortingNode,
   applyPosterizeNode,
   applyRgbCurvesNode,
+  applySceneGradeNode,
   applyRgbToBwNode,
   applyScaleNode,
   applySourceNode,
@@ -189,7 +191,7 @@ export function evaluateGraphOutputs(graph, context) {
       const timeSalt = TIME_AWARE_TYPES.has(node.type)
         ? `;t=${frameSalt(context?.timeSeconds, context?.fps)}`
         : "";
-      const paramsHash = `${hashParams(effectiveParams)}bypass=${node.bypassed ? 1 : 0}${timeSalt};`;
+      const paramsHash = `${hashParams(effectiveParams)}${hashLayerAdjustments(node)}bypass=${node.bypassed ? 1 : 0}${timeSalt};`;
       const cached = nodeCache.get(node.id);
       if (
         cached &&
@@ -203,7 +205,12 @@ export function evaluateGraphOutputs(graph, context) {
         results.set(node.id, cached.output);
         versions.set(node.id, cached.version);
       } else {
-        const output = computeNodeOutput({ ...node, params: effectiveParams }, index, results, context);
+        const runtimeNode = { ...node, params: effectiveParams };
+        const rawOutput = computeNodeOutput(runtimeNode, index, results, context);
+        const output = applyLayerAdjustments(runtimeNode, rawOutput, index, results, context);
+        if (output !== rawOutput && canReleaseComputedOutput(rawOutput, context)) {
+          releaseBuffer(rawOutput);
+        }
         producedOutput = output;
         if (output !== null && output !== undefined) {
           // A node may pass its input through unchanged (blur radius=0, lens-
@@ -401,6 +408,10 @@ function hashParams(params) {
   return out;
 }
 
+function hashLayerAdjustments(node) {
+  return `layerOpacity=${Number(node?.opacity ?? 100)};layerHue=${Number(node?.hue ?? 0)};layerSaturation=${Number(node?.saturation ?? 100)};`;
+}
+
 function arraysEqual(a, b) {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -422,6 +433,39 @@ function releaseIntermediateBuffers(results, keep, context) {
     seen.add(output);
     releaseBuffer(output);
   }
+}
+
+function applyLayerAdjustments(node, output, index, results, context) {
+  if (!output || typeof output !== "object" || typeof output.width !== "number") return output;
+  if (node.type === "source" || node.type === "viewer-output" || node.type === "group") return output;
+
+  const baseInput = resolveLayerBaseInput(node, index, results);
+  return applyLayerAdjustmentsNode(baseInput, output, {
+    opacity: node.opacity,
+    hue: node.hue,
+    saturation: node.saturation,
+  });
+}
+
+function resolveLayerBaseInput(node, index, results) {
+  switch (node.type) {
+    case "mix":
+      return resolveInputImage(node, "image_a", index, results);
+    case "mask-combine":
+      return resolveInputImage(node, "mask_a", index, results);
+    case "mask-apply":
+    case "displace":
+      return resolveInputImage(node, "image", index, results);
+    default:
+      return resolveInputImage(node, "image", index, results);
+  }
+}
+
+function canReleaseComputedOutput(output, context) {
+  if (!output || typeof output !== "object") return false;
+  if (output === context?.sourceImage) return false;
+  if (sharesOutputWithCachedNode(output)) return false;
+  return true;
 }
 
 function computeNodeOutput(node, index, results, context) {
@@ -450,6 +494,8 @@ function computeNodeOutput(node, index, results, context) {
       return applyHsvNode(resolveInputImage(node, "image", index, results), node.params);
     case "rgb-curves":
       return applyRgbCurvesNode(resolveInputImage(node, "image", index, results), node.params);
+    case "scene-grade":
+      return applySceneGradeNode(resolveInputImage(node, "image", index, results), node.params);
     case "blur":
       return applyBlurNode(resolveInputImage(node, "image", index, results), node.params);
     case "pixelate":

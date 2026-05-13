@@ -3164,6 +3164,86 @@ body.dragging-keyframe .bezier-curve-handle,
   gap: 12px;
 }
 
+.curve-channel-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.curve-channel-button {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.curve-channel-button:hover,
+.curve-channel-button.is-active {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.075);
+  color: var(--text-primary);
+}
+
+.curve-channel-button:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.curve-channel-button-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.curve-channel-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  opacity: 0.85;
+}
+
+.curve-channel-label {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.curve-channel-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: visible;
+}
+
+.curve-channel-preview-diagonal {
+  stroke: rgba(255, 255, 255, 0.12);
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+}
+
+.curve-channel-preview-path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
+}
+
 .curve-field {
   gap: 8px;
 }
@@ -3197,10 +3277,19 @@ body.dragging-keyframe .bezier-curve-handle,
   stroke: rgba(0, 0, 0, 0.72);
   stroke-width: 1.5;
   cursor: grab;
+  transition: r 120ms ease-out, fill 120ms ease-out, stroke 120ms ease-out;
 }
 
-.curve-handle:hover {
+.curve-handle:hover,
+.curve-handle:focus {
   fill: #fff;
+  outline: none;
+  stroke: rgba(255, 255, 255, 0.42);
+}
+
+body.dragging-curve,
+body.dragging-curve .curve-handle {
+  cursor: grabbing;
 }
 
 .curves-actions {

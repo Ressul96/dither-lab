@@ -1,5 +1,6 @@
 const RGB_CURVE_CHANNELS = ["master", "red", "green", "blue"];
 const APPLY_MODES = ["normal", "luma", "color"];
+export const MIN_CURVE_POINT_GAP = 3;
 
 export function identityCurvePoints() {
   return [{ x: 0, y: 0 }, { x: 255, y: 255 }];
@@ -60,37 +61,7 @@ export function buildCurveLut(rawPoints) {
   const n = points.length;
   const xs = points.map((point) => point.x);
   const ys = points.map((point) => point.y);
-  const dx = new Array(n - 1);
-  const dy = new Array(n - 1);
-  const slope = new Array(n - 1);
-  for (let i = 0; i < n - 1; i++) {
-    dx[i] = xs[i + 1] - xs[i];
-    dy[i] = ys[i + 1] - ys[i];
-    slope[i] = dx[i] !== 0 ? dy[i] / dx[i] : 0;
-  }
-
-  const tangent = new Array(n);
-  tangent[0] = slope[0];
-  tangent[n - 1] = slope[n - 2];
-  for (let i = 1; i < n - 1; i++) {
-    tangent[i] = slope[i - 1] * slope[i] <= 0 ? 0 : (slope[i - 1] + slope[i]) / 2;
-  }
-
-  for (let i = 0; i < n - 1; i++) {
-    if (slope[i] === 0) {
-      tangent[i] = 0;
-      tangent[i + 1] = 0;
-      continue;
-    }
-    const a = tangent[i] / slope[i];
-    const b = tangent[i + 1] / slope[i];
-    const h = a * a + b * b;
-    if (h > 9) {
-      const scale = 3 / Math.sqrt(h);
-      tangent[i] = scale * a * slope[i];
-      tangent[i + 1] = scale * b * slope[i];
-    }
-  }
+  const tangent = computeMonotoneCurveTangents(points);
 
   for (let x = 0; x < 256; x++) {
     if (x <= xs[0]) {
@@ -103,7 +74,7 @@ export function buildCurveLut(rawPoints) {
     }
     let segment = 0;
     while (segment < n - 1 && x > xs[segment + 1]) segment++;
-    const h = dx[segment];
+    const h = Math.max(xs[segment + 1] - xs[segment], Number.EPSILON);
     const t = (x - xs[segment]) / h;
     const t2 = t * t;
     const t3 = t2 * t;
@@ -115,6 +86,88 @@ export function buildCurveLut(rawPoints) {
     lut[x] = clamp(Math.round(y), 0, 255);
   }
   return lut;
+}
+
+export function getMonotoneCurveTangents(rawPoints) {
+  return computeMonotoneCurveTangents(sanitizeCurvePoints(rawPoints));
+}
+
+function computeMonotoneCurveTangents(points) {
+  const pointCount = points.length;
+  if (pointCount === 0) return [];
+  if (pointCount === 1) return [0];
+
+  const segmentWidths = new Array(pointCount - 1);
+  const slopes = new Array(pointCount - 1);
+
+  for (let index = 0; index < pointCount - 1; index++) {
+    const pointA = points[index];
+    const pointB = points[index + 1];
+    const width = Math.max(pointB.x - pointA.x, Number.EPSILON);
+    segmentWidths[index] = width;
+    slopes[index] = (pointB.y - pointA.y) / width;
+  }
+
+  if (pointCount === 2) return [slopes[0] ?? 0, slopes[0] ?? 0];
+
+  const tangents = new Array(pointCount).fill(0);
+  const startWidth = segmentWidths[0];
+  const nextWidth = segmentWidths[1];
+  const startSlope = slopes[0];
+  const nextSlope = slopes[1];
+  tangents[0] =
+    ((2 * startWidth + nextWidth) * startSlope - startWidth * nextSlope) /
+    (startWidth + nextWidth);
+
+  if (tangents[0] * startSlope <= 0) {
+    tangents[0] = 0;
+  } else if (
+    startSlope * nextSlope < 0 &&
+    Math.abs(tangents[0]) > Math.abs(startSlope * 3)
+  ) {
+    tangents[0] = startSlope * 3;
+  }
+
+  for (let index = 1; index < pointCount - 1; index++) {
+    const previousSlope = slopes[index - 1];
+    const nextSegmentSlope = slopes[index];
+    if (previousSlope === 0 || nextSegmentSlope === 0) {
+      tangents[index] = 0;
+      continue;
+    }
+    if (previousSlope * nextSegmentSlope < 0) {
+      tangents[index] = 0;
+      continue;
+    }
+
+    const previousWidth = segmentWidths[index - 1];
+    const nextSegmentWidth = segmentWidths[index];
+    const weightA = 2 * nextSegmentWidth + previousWidth;
+    const weightB = nextSegmentWidth + 2 * previousWidth;
+    tangents[index] =
+      (weightA + weightB) /
+      (weightA / previousSlope + weightB / nextSegmentSlope);
+  }
+
+  const previousWidth = segmentWidths[pointCount - 3];
+  const endWidth = segmentWidths[pointCount - 2];
+  const previousSlope = slopes[pointCount - 3];
+  const endSlope = slopes[pointCount - 2];
+  tangents[pointCount - 1] =
+    ((2 * endWidth + previousWidth) * endSlope - endWidth * previousSlope) /
+    (endWidth + previousWidth);
+
+  const endTangent = tangents[pointCount - 1] ?? 0;
+  if (endTangent * endSlope <= 0) {
+    tangents[pointCount - 1] = 0;
+  } else if (
+    endSlope * previousSlope < 0 &&
+    Math.abs(endTangent) > Math.abs(endSlope * 3)
+  ) {
+    tangents[pointCount - 1] = endSlope * 3;
+  }
+
+  return tangents;
 }
 
 export function buildLegacyCurveLut(lowValue, midValue, highValue) {
@@ -143,16 +196,47 @@ export function sanitizeCurvePoints(rawPoints) {
   }
   cleaned.sort((a, b) => a.x - b.x);
 
-  const unique = [];
+  if (cleaned.length === 0) return identityCurvePoints();
+
+  const merged = [];
   for (const point of cleaned) {
-    const last = unique[unique.length - 1];
-    if (last && last.x === point.x) {
-      last.y = Math.round((last.y + point.y) / 2);
+    const last = merged[merged.length - 1];
+    if (last && Math.abs(last.x - point.x) < MIN_CURVE_POINT_GAP) {
+      last.y = point.y;
     } else {
-      unique.push({ ...point });
+      merged.push({ ...point });
     }
   }
-  return unique;
+
+  const start = merged[0];
+  const end = merged[merged.length - 1];
+  const interior = merged
+    .filter((point) => point.x > MIN_CURVE_POINT_GAP && point.x < 255 - MIN_CURVE_POINT_GAP)
+    .map((point) => ({ ...point }));
+
+  const normalized = [
+    {
+      x: 0,
+      y: start && start.x === 0 ? start.y : 0,
+    },
+  ];
+
+  for (let index = 0; index < interior.length; index++) {
+    const point = interior[index];
+    const previousX = normalized[normalized.length - 1].x;
+    const nextX = interior[index + 1]?.x ?? 255;
+    const x = clamp(point.x, previousX + MIN_CURVE_POINT_GAP, nextX - MIN_CURVE_POINT_GAP);
+    if (x > MIN_CURVE_POINT_GAP && x < 255 - MIN_CURVE_POINT_GAP) {
+      normalized.push({ x: Math.round(x), y: point.y });
+    }
+  }
+
+  normalized.push({
+    x: 255,
+    y: end && end.x === 255 ? end.y : 255,
+  });
+
+  return normalized;
 }
 
 export function isIdentityCurveLut(lut) {

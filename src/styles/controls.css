@@ -177,6 +177,233 @@
   margin: 0;
 }
 
+.xy-pad-field {
+  gap: 8px;
+}
+
+.xy-pad-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: var(--text-label);
+}
+
+.xy-pad-title {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.xy-pad-chip {
+  min-height: 18px;
+  padding: 3px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.xy-pad-readout {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.xy-pad-surface {
+  --xy-pad-handle-margin: 14px;
+  --xy-pad-display-x: clamp(
+    var(--xy-pad-handle-margin),
+    var(--xy-pad-x),
+    calc(100% - var(--xy-pad-handle-margin))
+  );
+  --xy-pad-display-y: clamp(
+    var(--xy-pad-handle-margin),
+    var(--xy-pad-y),
+    calc(100% - var(--xy-pad-handle-margin))
+  );
+  position: relative;
+  width: 100%;
+  height: 156px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  background:
+    radial-gradient(circle at center, rgba(255, 255, 255, 0.05), transparent 58%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.xy-pad-surface:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 0 0 3px rgba(255, 255, 255, 0.12);
+}
+
+.xy-pad-grid,
+.xy-pad-guide,
+.xy-pad-handle {
+  pointer-events: none;
+  position: absolute;
+}
+
+.xy-pad-grid {
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-position: center;
+  background-size: 25% 25%;
+}
+
+.xy-pad-guide--x {
+  inset-inline: 0;
+  top: var(--xy-pad-display-y);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+}
+
+.xy-pad-guide--y {
+  top: 0;
+  bottom: 0;
+  left: var(--xy-pad-display-x);
+  width: 1px;
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+}
+
+.xy-pad-handle {
+  left: var(--xy-pad-display-x);
+  top: var(--xy-pad-display-y);
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+  transition:
+    left 220ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    top 220ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    transform 120ms ease-out;
+  will-change: left, top, transform;
+}
+
+.xy-pad-handle span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.76)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.06));
+  box-shadow:
+    0 10px 20px rgba(0, 0, 0, 0.26),
+    0 0 0 6px rgba(255, 255, 255, 0.05);
+}
+
+.xy-pad-surface:active .xy-pad-handle,
+body.dragging-xy-pad .xy-pad-handle {
+  transform: translate(-50%, -50%) scale(0.9);
+}
+
+body.dragging-xy-pad {
+  cursor: crosshair;
+}
+
+.gradient-ramp-field {
+  gap: 8px;
+}
+
+.gradient-ramp-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gradient-ramp-bar {
+  position: relative;
+  height: 36px;
+  overflow: visible;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: var(--radius-sm);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  cursor: copy;
+  touch-action: none;
+}
+
+.gradient-ramp-stop {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid rgba(12, 13, 17, 0.92);
+  border-radius: var(--radius-sm);
+  background: var(--gradient-stop-color, #ffffff);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.28),
+    0 6px 12px rgba(0, 0, 0, 0.24);
+  cursor: ew-resize;
+  transform: translate(-50%, -50%);
+}
+
+.gradient-ramp-stop.is-endpoint {
+  cursor: pointer;
+}
+
+.gradient-ramp-stop.is-selected {
+  border-color: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 0 0 2px rgba(131, 196, 255, 0.55),
+    0 8px 16px rgba(0, 0, 0, 0.26);
+  z-index: 2;
+}
+
+.gradient-ramp-stop:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgba(131, 196, 255, 0.75),
+    0 8px 16px rgba(0, 0, 0, 0.26);
+}
+
+.gradient-ramp-actions {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.gradient-ramp-button {
+  height: 24px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.gradient-ramp-readout {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.gradient-ramp-selected .color-row {
+  width: 100%;
+}
+
+body.dragging-gradient-ramp {
+  cursor: ew-resize;
+  user-select: none;
+}
+
 .number-field .num-edit {
   width: 100%;
   height: 28px;
@@ -193,13 +420,182 @@
   margin: 0;
 }
 
-/* Color field — pairs a native <input type="color"> swatch with a HEX text
-   input. The two share the same data-node-param key so the inspector's
-   syncSiblingControls keeps them in lockstep when one of them changes. */
 .color-field .color-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.color-picker-trigger {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 132px;
+  min-height: 30px;
+  padding: 3px 8px 3px 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.color-picker-trigger:hover,
+.color-picker-trigger[aria-expanded="true"] {
+  border-color: var(--border-strong);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.color-picker-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.color-picker-trigger-swatch {
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.color-picker-trigger-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  line-height: 14px;
+  text-align: left;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.color-picker-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  width: 208px;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  background: rgba(16, 17, 22, 0.98);
+  box-shadow: var(--shadow-lg);
+}
+
+.color-picker-surface {
+  position: relative;
+  width: 100%;
+  height: 132px;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--color-picker-hue);
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.color-picker-surface-white,
+.color-picker-surface-black,
+.color-picker-surface-handle {
+  pointer-events: none;
+  position: absolute;
+}
+
+.color-picker-surface-white,
+.color-picker-surface-black {
+  inset: 0;
+}
+
+.color-picker-surface-white {
+  background: linear-gradient(90deg, #fff, rgba(255, 255, 255, 0));
+}
+
+.color-picker-surface-black {
+  background: linear-gradient(0deg, #000, rgba(0, 0, 0, 0));
+}
+
+.color-picker-surface-handle {
+  left: var(--color-picker-s);
+  top: var(--color-picker-v);
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.35),
+    0 2px 6px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -50%);
+}
+
+.color-picker-hue {
+  position: relative;
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    #f00 0%,
+    #ff0 16.66%,
+    #0f0 33.33%,
+    #0ff 50%,
+    #00f 66.66%,
+    #f0f 83.33%,
+    #f00 100%
+  );
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.color-picker-hue-handle {
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  left: var(--color-picker-h);
+  width: 10px;
+  height: 16px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.28),
+    0 1px 4px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -50%);
+}
+
+.color-picker-popover-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-picker-eyedropper {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.color-picker-eyedropper:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+body.dragging-color-picker {
+  cursor: crosshair;
 }
 
 .color-field .color-swatch {

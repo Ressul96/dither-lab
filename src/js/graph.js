@@ -9,6 +9,18 @@ const NODE_INSERT_GAP_X = Math.round(NODE_WIDTH * 0.2);
 
 export const ROOT_PARENT_ID = "root";
 
+const NODE_LAYER_DEFAULTS = Object.freeze({
+  opacity: 100,
+  hue: 0,
+  saturation: 100,
+});
+
+const NODE_LAYER_BOUNDS = Object.freeze({
+  opacity: { min: 0, max: 100 },
+  hue: { min: -180, max: 180 },
+  saturation: { min: 0, max: 200 },
+});
+
 const NODE_DEFINITIONS = Object.freeze({
   source: {
     label: "Video Source",
@@ -186,6 +198,28 @@ const NODE_DEFINITIONS = Object.freeze({
       blueLow: 0,
       blueMid: 128,
       blueHigh: 255,
+      points_master: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+      points_red: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+      points_green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+      points_blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+    },
+  },
+  "scene-grade": {
+    label: "Scene Grade",
+    family: "Color",
+    description: "Final scene-wide grade for master/RGB curves, clamp gamma, and an optional color-map LUT.",
+    inputs: [{ name: "image", label: "Image", type: "image" }],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      activeChannel: "master",
+      clampMin: 0,
+      clampMax: 100,
+      clampGamma: 100,
+      colorMapEnabled: false,
+      colorMapStops: [
+        { pos: 0, color: "#111111" },
+        { pos: 1, color: "#ffffff" },
+      ],
       points_master: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
       points_red: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
       points_green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
@@ -742,8 +776,9 @@ const TYPE_ORDER = {
   mix: 38,
   value: 39,
   math: 40,
-  group: 41,
-  "viewer-output": 42,
+  "scene-grade": 41,
+  group: 42,
+  "viewer-output": 43,
 };
 
 const NODE_PARAM_BOUNDS = Object.freeze({
@@ -826,6 +861,11 @@ const NODE_PARAM_BOUNDS = Object.freeze({
     blueLow: { min: 0, max: 255 },
     blueMid: { min: 0, max: 255 },
     blueHigh: { min: 0, max: 255 },
+  },
+  "scene-grade": {
+    clampMin: { min: 0, max: 99 },
+    clampMax: { min: 1, max: 100 },
+    clampGamma: { min: 10, max: 400 },
   },
   pixelate: {
     size: { min: 1, max: 64 },
@@ -1794,6 +1834,27 @@ export function updateNodeParams(nodeId, patch) {
   dispatch("graph", { nodes: nextNodes });
 }
 
+export function updateNodeLayerProperties(nodeId, patch) {
+  const { graph } = getState();
+  const nextNodes = graph.nodes.map((node) => {
+    if (node.id !== nodeId || !isLayerAdjustableType(node.type)) return node;
+    return {
+      ...node,
+      opacity: Object.prototype.hasOwnProperty.call(patch, "opacity")
+        ? normalizeLayerProperty("opacity", patch.opacity)
+        : node.opacity,
+      hue: Object.prototype.hasOwnProperty.call(patch, "hue")
+        ? normalizeLayerProperty("hue", patch.hue)
+        : node.hue,
+      saturation: Object.prototype.hasOwnProperty.call(patch, "saturation")
+        ? normalizeLayerProperty("saturation", patch.saturation)
+        : node.saturation,
+    };
+  });
+
+  dispatch("graph", { nodes: nextNodes });
+}
+
 export function toggleNodeBypass(nodeId) {
   const { graph } = getState();
   let changed = false;
@@ -1936,6 +1997,17 @@ export function serializeGraph(graph = getState().graph) {
         exposedParamConfig: clone(node.exposedParamConfig),
         bypassed: Boolean(node.bypassed),
       };
+      if (isLayerAdjustableType(node.type)) {
+        if (Number(node.opacity ?? NODE_LAYER_DEFAULTS.opacity) !== NODE_LAYER_DEFAULTS.opacity) {
+          payload.opacity = normalizeLayerProperty("opacity", node.opacity);
+        }
+        if (Number(node.hue ?? NODE_LAYER_DEFAULTS.hue) !== NODE_LAYER_DEFAULTS.hue) {
+          payload.hue = normalizeLayerProperty("hue", node.hue);
+        }
+        if (Number(node.saturation ?? NODE_LAYER_DEFAULTS.saturation) !== NODE_LAYER_DEFAULTS.saturation) {
+          payload.saturation = normalizeLayerProperty("saturation", node.saturation);
+        }
+      }
       if (node.label && node.label !== definition?.label) payload.label = node.label;
       if (node.type === "group") payload.group = normalizeGroupMetadata(node.group);
       return payload;
@@ -2004,6 +2076,9 @@ function normalizeGraph(graph) {
         exposedParams: node.exposedParams,
         exposedParamConfig: node.exposedParamConfig,
         bypassed: node.bypassed,
+        opacity: node.opacity,
+        hue: node.hue,
+        saturation: node.saturation,
       });
     })
     .filter(Boolean);
@@ -2169,6 +2244,9 @@ function createNode(id, type, options = {}) {
     inputs: definition.inputs.map((socket) => ({ ...socket })),
     outputs: definition.outputs.map((socket) => ({ ...socket })),
     params: normalizeNodeParams(type, definition.defaultParams, options.params),
+    opacity: normalizeLayerProperty("opacity", options.opacity),
+    hue: normalizeLayerProperty("hue", options.hue),
+    saturation: normalizeLayerProperty("saturation", options.saturation),
     exposedParams: Array.isArray(options.exposedParams)
       ? options.exposedParams.filter((paramKey) => !explicitInputs.has(paramKey))
       : [],
@@ -2181,6 +2259,19 @@ function createNode(id, type, options = {}) {
   }
 
   return node;
+}
+
+function isLayerAdjustableType(type) {
+  return type !== "source" && type !== "viewer-output" && type !== "group";
+}
+
+function normalizeLayerProperty(key, value) {
+  const bounds = NODE_LAYER_BOUNDS[key];
+  const fallback = NODE_LAYER_DEFAULTS[key] ?? 0;
+  const numeric = Number(value);
+  const next = Number.isFinite(numeric) ? numeric : fallback;
+  if (!bounds) return next;
+  return Math.max(bounds.min, Math.min(bounds.max, next));
 }
 
 function normalizeNodeLabel(value, fallback) {
@@ -2247,6 +2338,16 @@ function normalizeNodeParams(type, defaultParams, incomingParams) {
     );
     delete incoming.shadowColor;
     delete incoming.highlightColor;
+  }
+  if (type === "scene-grade") {
+    incoming.colorMapStops = normalizeGradientMapStops(
+      incoming.colorMapStops,
+      defaultParams.colorMapStops,
+      incoming.colorMapShadow,
+      incoming.colorMapHighlight
+    );
+    delete incoming.colorMapShadow;
+    delete incoming.colorMapHighlight;
   }
   if (type === "mesh-gradient") {
     incoming.stops = normalizeMeshGradientStops(
