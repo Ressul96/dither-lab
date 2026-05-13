@@ -3551,6 +3551,23 @@ body.dragging-curve .curve-handle {
   background: var(--bg-input);
 }
 
+.export-sheet__slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.export-sheet__slider-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.export-sheet__slider-row .value {
+  flex: 0 0 32px;
+  text-align: right;
+}
+
 .export-sheet__path-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

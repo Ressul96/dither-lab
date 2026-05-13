@@ -8,9 +8,13 @@ import {
 } from "./source.js";
 
 const STILL_FORMATS = Object.freeze([
-  { id: "png", label: "PNG", extension: "png", mime: "image/png", quality: undefined },
-  { id: "jpeg", label: "JPEG", extension: "jpg", mime: "image/jpeg", quality: 0.92 },
+  { id: "png", label: "PNG", extension: "png", mime: "image/png" },
+  { id: "jpeg", label: "JPEG", extension: "jpg", mime: "image/jpeg" },
 ]);
+
+const JPEG_QUALITY_MIN = 1;
+const JPEG_QUALITY_MAX = 100;
+const JPEG_QUALITY_DEFAULT = 92;
 
 const SEQUENCE_FORMATS = STILL_FORMATS;
 const MIN_PADDING = 1;
@@ -175,6 +179,9 @@ function ensureExportSheet() {
       case "aspect-mode":
         exportSheetState.aspectMode = getAspectPreset(target.value)?.id ?? "original";
         break;
+      case "jpeg-quality":
+        exportSheetState.jpegQuality = clampJpegQuality(target.value);
+        break;
       case "custom-width":
         exportSheetState.customWidth = clampDimension(target.value, exportSheetState.customWidth);
         break;
@@ -232,6 +239,15 @@ function ensureExportSheet() {
 
     exportSheetState.error = "";
     renderExportSheet();
+  });
+
+  exportSheetEl.addEventListener("input", (event) => {
+    const target = event.target;
+    if (target?.dataset?.exportField !== "jpeg-quality") return;
+    const value = clampJpegQuality(target.value);
+    exportSheetState.jpegQuality = value;
+    const readout = exportSheetEl.querySelector("[data-jpeg-quality-readout]");
+    if (readout) readout.textContent = String(value);
   });
 
   window.addEventListener("keydown", (event) => {
@@ -378,6 +394,27 @@ function renderAspectField() {
   `;
 }
 
+function renderJpegQualityField() {
+  const quality = clampJpegQuality(exportSheetState.jpegQuality);
+  return `
+    <div class="field">
+      <label>JPEG Quality</label>
+      <div class="row export-sheet__slider-row">
+        <input
+          type="range"
+          min="${JPEG_QUALITY_MIN}"
+          max="${JPEG_QUALITY_MAX}"
+          step="1"
+          value="${quality}"
+          data-export-field="jpeg-quality"
+          aria-label="JPEG quality"
+        />
+        <span class="value mono" data-jpeg-quality-readout>${quality}</span>
+      </div>
+    </div>
+  `;
+}
+
 function renderStillExportFields(ditherAvailable) {
   const previewPath = exportSheetState.destinationChosen
     ? exportSheetState.destinationPath
@@ -417,6 +454,12 @@ function renderStillExportFields(ditherAvailable) {
         </div>
       </div>
     </div>
+
+    ${exportSheetState.stillFormat === "jpeg" ? `
+      <div class="export-sheet__grid">
+        ${renderJpegQualityField()}
+      </div>
+    ` : ""}
 
     <div class="export-sheet__grid">
       <div class="field">
@@ -700,6 +743,12 @@ function renderSequenceExportFields(ditherAvailable) {
         </div>
       </div>
     </div>
+
+    ${seq.format === "jpeg" ? `
+      <div class="export-sheet__grid">
+        ${renderJpegQualityField()}
+      </div>
+    ` : ""}
 
     <div class="export-sheet__grid">
       <div class="field">
@@ -1205,15 +1254,22 @@ function formatExportTime(seconds) {
 }
 
 async function canvasToImageBytes(canvas, format) {
+  const quality = format.id === "jpeg" ? clampJpegQuality(exportSheetState.jpegQuality) / 100 : undefined;
   const blob = await new Promise((resolve, reject) => {
     canvas.toBlob((nextBlob) => {
       if (nextBlob) resolve(nextBlob);
       else reject(new Error("Canvas export returned an empty blob"));
-    }, format.mime, format.quality);
+    }, format.mime, quality);
   });
 
   const buffer = await blob.arrayBuffer();
   return new Uint8Array(buffer);
+}
+
+function clampJpegQuality(value) {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return JPEG_QUALITY_DEFAULT;
+  return Math.max(JPEG_QUALITY_MIN, Math.min(JPEG_QUALITY_MAX, numeric));
 }
 
 async function writeImage(path, bytes) {
@@ -1251,6 +1307,7 @@ function createDefaultExportState() {
     target: "viewer-output",
     resolutionMode: "source",
     aspectMode: "original",
+    jpegQuality: JPEG_QUALITY_DEFAULT,
     customWidth: 0,
     customHeight: 0,
     destinationPath: "",
