@@ -49,6 +49,14 @@ const VIDEO_PRESETS = Object.freeze([
 ]);
 const MIN_CRF = 0;
 const MAX_CRF = 51;
+const EXPORT_PHASE_LABELS = Object.freeze({
+  preparing: "Preparing",
+  rendering: "Rendering",
+  writing: "Writing",
+  encoding: "Encoding",
+  finalizing: "Finalizing",
+  cancelling: "Cancelling",
+});
 
 let exportInFlight = false;
 let exportAbortController = null;
@@ -881,8 +889,14 @@ function renderSequenceExportFields(ditherAvailable) {
 function renderProgressBlock(progress) {
   const ratio = progress.total > 0 ? Math.min(1, progress.frame / progress.total) : 0;
   const percent = Math.round(ratio * 100);
+  const phase = formatExportPhase(progress);
+  const eta = formatExportEta(progress);
   return `
     <div class="export-sheet__progress">
+      <div class="export-sheet__progress-head">
+        <span class="export-sheet__progress-phase">${escapeHtml(phase)}</span>
+        <span class="mono">${escapeHtml(eta)}</span>
+      </div>
       <div class="export-sheet__progress-meta">
         <span class="mono">${progress.frame} / ${progress.total}</span>
         <span class="mono">${percent}%</span>
@@ -894,14 +908,43 @@ function renderProgressBlock(progress) {
   `;
 }
 
+function formatExportPhase(progress) {
+  if (progress.cancelled) return EXPORT_PHASE_LABELS.cancelling;
+  return EXPORT_PHASE_LABELS[progress.phase] ?? EXPORT_PHASE_LABELS.preparing;
+}
+
+function formatExportEta(progress) {
+  if (progress.cancelled) return "ETA --";
+  if (!progress.active) return "ETA --";
+  if (progress.total > 0 && progress.frame >= progress.total) return "ETA 0:00";
+  if (!(progress.frame > 0 && progress.total > progress.frame)) return "ETA calculating";
+  const startedAt = Number(progress.startedAt);
+  if (!Number.isFinite(startedAt)) return "ETA calculating";
+  const elapsedSeconds = Math.max(0, (currentExportTime() - startedAt) / 1000);
+  const secondsPerFrame = elapsedSeconds / progress.frame;
+  const remainingSeconds = secondsPerFrame * Math.max(0, progress.total - progress.frame);
+  if (!Number.isFinite(remainingSeconds)) return "ETA calculating";
+  return `ETA ${formatDuration(remainingSeconds)}`;
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.ceil(seconds));
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
 function renderStatusText(ditherAvailable) {
   const mode = exportSheetState.mode;
   if (exportSheetState.progress.active) {
     return exportSheetState.progress.cancelled
       ? "Cancelling export…"
-      : exportSheetState.progress.kind === "video"
-        ? "Streaming frames into the FFmpeg encoder."
-        : "Rendering frames through the preview graph.";
+      : `${formatExportPhase(exportSheetState.progress)} export…`;
   }
   if (exportInFlight && mode === "still") return "Exporting current frame…";
   if (exportSheetState.target === "dither-only" && !ditherAvailable) {
@@ -1017,7 +1060,7 @@ async function submitSequenceExport() {
   exportInFlight = true;
   exportAbortController = new AbortController();
   exportSheetState.error = "";
-  exportSheetState.progress = { active: true, frame: 0, total: totalFrames, cancelled: false, kind: "sequence" };
+  exportSheetState.progress = createExportProgress("sequence", totalFrames, "preparing");
   renderExportSheet();
   syncExportActions(source);
 
@@ -1028,6 +1071,8 @@ async function submitSequenceExport() {
 
   beginExportSession();
   try {
+    updateExportProgress({ phase: "rendering" });
+    renderExportSheet();
     for (let i = 0; i < totalFrames; i++) {
       if (signal.aborted) break;
       const t = Math.min(startTime + i / fps, startTime + rangeSeconds);
@@ -1045,11 +1090,13 @@ async function submitSequenceExport() {
 
       const fileName = buildFrameFilename(seq, format, seq.startIndex + i);
       const fullPath = joinPath(seq.directory, fileName);
+      updateExportProgress({ phase: "writing" });
+      renderExportSheet();
       const written = await writeImage(fullPath, bytes);
       if (!written) throw new Error(`Failed to write ${fileName}.`);
       writtenCount += 1;
 
-      exportSheetState.progress.frame = writtenCount;
+      updateExportProgress({ frame: writtenCount, phase: "rendering" });
       renderExportSheet();
     }
   } catch (error) {
@@ -1065,6 +1112,7 @@ async function submitSequenceExport() {
       total: totalFrames,
       cancelled,
       kind: "sequence",
+      phase: cancelled ? "cancelling" : "finalizing",
     };
 
     if (failure && !cancelled) {
@@ -1087,7 +1135,7 @@ async function submitSequenceExport() {
 
 function cancelInFlightExport() {
   if (!exportAbortController || exportSheetState.progress.cancelled) return;
-  exportSheetState.progress.cancelled = true;
+  updateExportProgress({ cancelled: true, phase: "cancelling" });
   exportAbortController.abort();
   renderExportSheet();
 }
@@ -1349,8 +1397,37 @@ function createDefaultExportState() {
       total: 0,
       cancelled: false,
       kind: "",
+      phase: "preparing",
+      startedAt: 0,
+      updatedAt: 0,
     },
   };
+}
+
+function createExportProgress(kind, total, phase = "preparing") {
+  const now = currentExportTime();
+  return {
+    active: true,
+    frame: 0,
+    total,
+    cancelled: false,
+    kind,
+    phase,
+    startedAt: now,
+    updatedAt: now,
+  };
+}
+
+function updateExportProgress(patch) {
+  exportSheetState.progress = {
+    ...exportSheetState.progress,
+    ...patch,
+    updatedAt: currentExportTime(),
+  };
+}
+
+function currentExportTime() {
+  return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
 }
 
 function clampDimension(value, fallback) {
@@ -1665,7 +1742,7 @@ async function submitVideoExport() {
   exportInFlight = true;
   exportAbortController = new AbortController();
   exportSheetState.error = "";
-  exportSheetState.progress = { active: true, frame: 0, total: totalFrames, cancelled: false, kind: "video" };
+  exportSheetState.progress = createExportProgress("video", totalFrames, "preparing");
   renderExportSheet();
   syncExportActions(source);
 
@@ -1677,6 +1754,8 @@ async function submitVideoExport() {
 
   beginExportSession();
   try {
+    updateExportProgress({ phase: "preparing" });
+    renderExportSheet();
     await invoke("ffmpeg_start_encode", {
       config: {
         outputPath: exportSheetState.video.outputPath,
@@ -1689,6 +1768,8 @@ async function submitVideoExport() {
       },
     });
     sessionStarted = true;
+    updateExportProgress({ phase: "encoding" });
+    renderExportSheet();
 
     for (let i = 0; i < totalFrames; i++) {
       if (signal.aborted) break;
@@ -1709,11 +1790,13 @@ async function submitVideoExport() {
 
       await invoke("ffmpeg_write_frame", { pixels });
       writtenCount += 1;
-      exportSheetState.progress.frame = writtenCount;
+      updateExportProgress({ frame: writtenCount, phase: "encoding" });
       renderExportSheet();
     }
 
     if (!signal.aborted) {
+      updateExportProgress({ phase: "finalizing" });
+      renderExportSheet();
       const finishResult = await invoke("ffmpeg_finish_encode");
       sessionStarted = false;
       console.info("[export] ffmpeg finished", finishResult);
@@ -1738,6 +1821,7 @@ async function submitVideoExport() {
       total: totalFrames,
       cancelled,
       kind: "video",
+      phase: cancelled ? "cancelling" : "finalizing",
     };
 
     if (failure && !cancelled) {

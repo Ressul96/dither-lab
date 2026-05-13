@@ -3625,6 +3625,21 @@ body.dragging-curve .curve-handle {
   border: 1px solid var(--border-subtle);
 }
 
+.export-sheet__progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.export-sheet__progress-phase {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .export-sheet__progress-meta {
   display: flex;
   justify-content: space-between;
