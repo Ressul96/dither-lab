@@ -5864,40 +5864,7 @@ function initGraphContextMenu() {
   if (graphMenuEl) return;
 
   graphMenuEl = document.createElement("div");
-  graphMenuEl.className = "context-menu floating-card hidden";
-  graphMenuEl.innerHTML = `
-    <button data-add-node="mesh-gradient">Add Mesh Gradient</button>
-    <button data-add-node="posterize">Add Posterize</button>
-    <button data-add-node="tone-map">Add Tone Map</button>
-    <button data-add-node="levels">Add Levels</button>
-    <button data-add-node="duotone">Add Duotone</button>
-    <button data-add-node="gradient-map">Add Gradient Map</button>
-    <button data-add-node="rgb-curves">Add RGB Curves</button>
-    <button data-add-node="scene-grade">Add Scene Grade</button>
-    <button data-add-node="blur">Add Blur</button>
-    <button data-add-node="pixelate">Add Pixelate</button>
-    <button data-add-node="transform">Add Transform</button>
-    <button data-add-node="dither">Add Dither</button>
-    <button data-add-node="pattern-dither">Add Pattern Dither</button>
-    <button data-add-node="threshold">Add Threshold</button>
-    <button data-add-node="mask-combine">Add Mask Combine</button>
-    <button data-add-node="mask-apply">Add Mask Apply</button>
-    <button data-add-node="glare">Add Bloom / Glare</button>
-    <button data-add-node="analog">Add Analog</button>
-    <button data-add-node="led-screen">Add LED Screen</button>
-    <button data-add-node="modulation">Add Modulation</button>
-    <button data-add-node="pixel-sorting">Add Pixel Sorting</button>
-    <button data-add-node="depth-of-field">Add Depth of Field</button>
-    <button data-add-node="lens-distort">Add Lens Distortion</button>
-    <button data-add-node="chromatic-aberration">Add Chromatic Aberration</button>
-    <button data-add-node="halation">Add Halation</button>
-    <button data-add-node="ascii">Add ASCII</button>
-    <button data-add-node="halftone">Add Halftone</button>
-    <button data-add-node="displace">Add Displace</button>
-    <button data-add-node="mix">Add Mix</button>
-    <button data-add-node="value">Add Value</button>
-    <button data-add-node="math">Add Math</button>
-  `;
+  graphMenuEl.className = "context-menu graph-node-picker floating-card hidden";
 
   graphMenuEl.addEventListener("click", (event) => {
     const button = event.target.closest("[data-add-node]");
@@ -5925,9 +5892,8 @@ function initGraphContextMenu() {
       edgeId: edge?.edgeId ?? "",
     };
     setInsertHighlight(edge?.edgeId ?? "");
-    graphMenuEl.style.left = `${event.clientX}px`;
-    graphMenuEl.style.top = `${event.clientY}px`;
-    graphMenuEl.classList.remove("hidden");
+    graphMenuEl.innerHTML = renderGraphContextMenuContent(Boolean(edge?.edgeId));
+    positionGraphContextMenu(event.clientX, event.clientY);
   });
 
   document.body.appendChild(graphMenuEl);
@@ -5947,6 +5913,80 @@ function hideGraphContextMenu() {
   graphMenuEl?.classList.add("hidden");
   graphMenuState = null;
   clearInsertHighlight();
+}
+
+function positionGraphContextMenu(clientX, clientY) {
+  if (!graphMenuEl) return;
+
+  const padding = 12;
+  graphMenuEl.style.left = `${clientX}px`;
+  graphMenuEl.style.top = `${clientY}px`;
+  graphMenuEl.classList.remove("hidden");
+
+  const rect = graphMenuEl.getBoundingClientRect();
+  const maxLeft = window.innerWidth - rect.width - padding;
+  const maxTop = window.innerHeight - rect.height - padding;
+  const left = Math.max(padding, Math.min(clientX, maxLeft));
+  const top = Math.max(padding, Math.min(clientY, maxTop));
+
+  graphMenuEl.style.left = `${left}px`;
+  graphMenuEl.style.top = `${top}px`;
+}
+
+function renderGraphContextMenuContent(insertOnEdge) {
+  const groups = getNodePaletteMenuGroups();
+  return `
+    <div class="graph-node-picker__header">
+      <span>${insertOnEdge ? "Insert Node" : "Add Node"}</span>
+      <span class="mono">${insertOnEdge ? "edge" : "canvas"}</span>
+    </div>
+    <div class="graph-node-picker__body">
+      ${groups.map(renderGraphContextMenuGroup).join("")}
+    </div>
+  `;
+}
+
+function renderGraphContextMenuGroup(group) {
+  return `
+    <section class="graph-node-picker__group" data-node-family="${escapeHtml(group.family)}">
+      <p class="graph-node-picker__label">${escapeHtml(group.label)}</p>
+      ${group.items.map(renderGraphContextMenuItem).join("")}
+    </section>
+  `;
+}
+
+function renderGraphContextMenuItem(item) {
+  return `
+    <button type="button" data-add-node="${escapeHtml(item.type)}">
+      <span class="graph-node-picker__swatch" aria-hidden="true"></span>
+      <span>${escapeHtml(item.label)}</span>
+    </button>
+  `;
+}
+
+function getNodePaletteMenuGroups() {
+  return Array.from(document.querySelectorAll(".node-palette-group"))
+    .map((group) => {
+      const family = group.dataset.nodeFamily ?? "utility";
+      const label = group.querySelector(".node-palette-label")?.textContent?.trim() || family;
+      const items = Array.from(group.querySelectorAll("[data-palette-node]"))
+        .map((item) => {
+          const type = item.dataset.paletteNode;
+          if (!type) return null;
+          const definition = getNodeDefinition(type);
+          return {
+            type,
+            label: normalizeMenuLabel(item.textContent) || definition?.label || type,
+          };
+        })
+        .filter(Boolean);
+      return { family, label, items };
+    })
+    .filter((group) => group.items.length > 0);
+}
+
+function normalizeMenuLabel(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
 function maybeAutoCenterGraph() {
