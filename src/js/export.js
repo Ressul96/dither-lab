@@ -38,7 +38,22 @@ const EXPORT_ASPECT_RATIOS = Object.freeze([
 ]);
 
 const VIDEO_CODECS = Object.freeze([
-  { id: "libx264", label: "H.264 (libx264)", extension: "mp4", mime: "video/mp4" },
+  {
+    id: "libx264",
+    label: "H.264 (FFmpeg libx264)",
+    extension: "mp4",
+    mime: "video/mp4",
+    encoder: "ffmpeg",
+  },
+  {
+    id: "webcodecs-vp9",
+    label: "VP9 Preview (WebCodecs)",
+    extension: "ivf",
+    mime: "video/x-ivf",
+    encoder: "webcodecs",
+    webCodec: "vp09.00.10.08",
+    fourcc: "VP90",
+  },
 ]);
 const VIDEO_PRESETS = Object.freeze([
   { id: "ultrafast", label: "Ultrafast" },
@@ -89,8 +104,8 @@ export async function openExport(options = {}) {
   renderExportSheet();
   exportSheetEl.classList.remove("hidden");
   exportSheetEl.setAttribute("aria-hidden", "false");
-  if (exportSheetState.mode === "video" && !exportSheetState.ffmpeg.checked) {
-    ensureFfmpegAvailability().catch(() => {});
+  if (exportSheetState.mode === "video") {
+    ensureSelectedVideoEncoderAvailability().catch(() => {});
   }
   return true;
 }
@@ -123,8 +138,8 @@ function ensureExportSheet() {
       exportSheetState.mode = modeButton.dataset.exportMode || "still";
       exportSheetState.error = "";
       renderExportSheet();
-      if (exportSheetState.mode === "video" && !exportSheetState.ffmpeg.checked) {
-        ensureFfmpegAvailability().catch(() => {});
+      if (exportSheetState.mode === "video") {
+        ensureSelectedVideoEncoderAvailability().catch(() => {});
       }
       return;
     }
@@ -143,10 +158,13 @@ function ensureExportSheet() {
         await chooseExportDirectory();
         break;
       case "choose-video-path":
-        await chooseVideoExportPath();
+        await chooseVideoExportPath({ allowBrowserFallback: videoUsesWebCodecs() });
         break;
       case "recheck-ffmpeg":
         await ensureFfmpegAvailability({ force: true });
+        break;
+      case "recheck-webcodecs":
+        await ensureWebCodecsAvailability({ force: true });
         break;
       case "cancel-progress":
         cancelInFlightExport();
@@ -225,6 +243,7 @@ function ensureExportSheet() {
             getVideoCodec(exportSheetState.video.codec).extension
           );
         }
+        ensureSelectedVideoEncoderAvailability().catch(() => {});
         break;
       case "video-preset":
         exportSheetState.video.preset = getVideoPreset(target.value).id;
@@ -296,10 +315,11 @@ function renderExportSheet() {
       : `Export ${getSequenceFormat(exportSheetState.sequence.format).label} Sequence`;
     submitDisabled = exportInFlight || dirty;
   } else if (mode === "video") {
+    const videoCodec = getVideoCodec(exportSheetState.video.codec);
     submitLabel = progress.active
       ? `Encoding ${progress.frame} / ${progress.total}`
-      : `Export ${getVideoCodec(exportSheetState.video.codec).label.split(" ")[0]} Video`;
-    submitDisabled = exportInFlight || dirty || !exportSheetState.ffmpeg.available;
+      : `Export ${videoCodec.label.split(" ")[0]} Video`;
+    submitDisabled = exportInFlight || dirty || !isSelectedVideoEncoderAvailable();
   }
 
   panel.innerHTML = `
@@ -532,6 +552,8 @@ function renderVideoExportFields(ditherAvailable) {
   const totalFrames = estimateSequenceFrames(effectiveFps, rangeSeconds);
   const customSize = resolveStillSize();
   const ffmpeg = exportSheetState.ffmpeg;
+  const webCodecs = exportSheetState.webCodecs;
+  const usesFfmpeg = videoUsesFfmpeg(codec);
   const destinationLabel = video.destinationChosen && video.outputPath
     ? video.outputPath
     : `Choose an output ${codec.extension.toUpperCase()} file…`;
@@ -653,24 +675,26 @@ function renderVideoExportFields(ditherAvailable) {
         : ""
     }
 
-    <div class="export-sheet__grid">
-      <div class="field">
-        <label>Preset</label>
-        <div class="dropdown">
-          <select data-export-field="video-preset">
-            ${VIDEO_PRESETS.map((item) => `
-              <option value="${item.id}" ${item.id === video.preset ? "selected" : ""}>
-                ${escapeHtml(item.label)}
-              </option>
-            `).join("")}
-          </select>
+    ${usesFfmpeg ? `
+      <div class="export-sheet__grid">
+        <div class="field">
+          <label>Preset</label>
+          <div class="dropdown">
+            <select data-export-field="video-preset">
+              ${VIDEO_PRESETS.map((item) => `
+                <option value="${item.id}" ${item.id === video.preset ? "selected" : ""}>
+                  ${escapeHtml(item.label)}
+                </option>
+              `).join("")}
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Quality (CRF ${video.crf})</label>
+          <input type="number" min="${MIN_CRF}" max="${MAX_CRF}" step="1" value="${video.crf}" data-export-field="video-crf" />
         </div>
       </div>
-      <div class="field">
-        <label>Quality (CRF ${video.crf})</label>
-        <input type="number" min="${MIN_CRF}" max="${MAX_CRF}" step="1" value="${video.crf}" data-export-field="video-crf" />
-      </div>
-    </div>
+    ` : ""}
 
     <div class="field">
       <label>Destination</label>
@@ -685,6 +709,12 @@ function renderVideoExportFields(ditherAvailable) {
       </div>
     </div>
 
+    ${usesFfmpeg ? renderFfmpegStatusBlock(ffmpeg) : renderWebCodecsStatusBlock(webCodecs)}
+  `;
+}
+
+function renderFfmpegStatusBlock(ffmpeg) {
+  return `
     <div class="export-sheet__ffmpeg ${ffmpeg.available ? "is-ok" : ffmpeg.checked ? "is-error" : ""}">
       <div class="export-sheet__ffmpeg-status">
         <span class="dot" aria-hidden="true"></span>
@@ -703,6 +733,28 @@ function renderFfmpegStatusText(ffmpeg) {
   return ffmpeg.error
     ? `FFmpeg not available: ${ffmpeg.error}`
     : "FFmpeg not available on this system.";
+}
+
+function renderWebCodecsStatusBlock(webCodecs) {
+  return `
+    <div class="export-sheet__ffmpeg ${webCodecs.available ? "is-ok" : webCodecs.checked ? "is-error" : ""}">
+      <div class="export-sheet__ffmpeg-status">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="hint">${escapeHtml(renderWebCodecsStatusText(webCodecs))}</span>
+      </div>
+      <button class="btn" type="button" data-export-action="recheck-webcodecs" ${webCodecs.checking ? "disabled" : ""}>
+        ${webCodecs.checking ? "Checking…" : webCodecs.checked ? "Re-check" : "Check WebCodecs"}
+      </button>
+    </div>
+  `;
+}
+
+function renderWebCodecsStatusText(webCodecs) {
+  if (!webCodecs.checked) return "WebCodecs availability has not been checked yet.";
+  if (webCodecs.available) return "WebCodecs VP9 preview export is available.";
+  return webCodecs.error
+    ? `WebCodecs unavailable: ${webCodecs.error}`
+    : "WebCodecs VP9 preview export is not available in this browser.";
 }
 
 function renderSequenceExportFields(ditherAvailable) {
@@ -956,6 +1008,15 @@ function renderStatusText(ditherAvailable) {
       : "Pick an output folder to render the numbered image sequence.";
   }
   if (mode === "video") {
+    const codec = getVideoCodec(exportSheetState.video.codec);
+    if (videoUsesWebCodecs(codec)) {
+      const webCodecs = exportSheetState.webCodecs;
+      if (!webCodecs.checked) return "Checking whether WebCodecs VP9 export is available…";
+      if (!webCodecs.available) return "Use the FFmpeg H.264 codec or open Dither Lab in a WebCodecs-capable browser.";
+      return exportSheetState.video.destinationChosen
+        ? "WebCodecs preview export writes a VP9 IVF file from the same rendered frames."
+        : "Pick a destination file or use the browser download fallback for the VP9 preview export.";
+    }
     if (!exportSheetState.ffmpeg.checked) return "Checking whether FFmpeg is reachable on your system…";
     if (!exportSheetState.ffmpeg.available) return "Install FFmpeg or expose it on PATH to enable video export.";
     return exportSheetState.video.destinationChosen
@@ -1391,6 +1452,12 @@ function createDefaultExportState() {
       version: "",
       checking: false,
     },
+    webCodecs: {
+      checked: false,
+      available: false,
+      error: "",
+      checking: false,
+    },
     progress: {
       active: false,
       frame: 0,
@@ -1571,6 +1638,26 @@ function getVideoCodec(id) {
   return VIDEO_CODECS.find((codec) => codec.id === id) ?? VIDEO_CODECS[0];
 }
 
+function videoUsesFfmpeg(codec = getVideoCodec(exportSheetState.video.codec)) {
+  return codec.encoder !== "webcodecs";
+}
+
+function videoUsesWebCodecs(codec = getVideoCodec(exportSheetState.video.codec)) {
+  return codec.encoder === "webcodecs";
+}
+
+function isSelectedVideoEncoderAvailable() {
+  const codec = getVideoCodec(exportSheetState.video.codec);
+  if (videoUsesWebCodecs(codec)) return exportSheetState.webCodecs.available;
+  return exportSheetState.ffmpeg.available;
+}
+
+async function ensureSelectedVideoEncoderAvailability(options = {}) {
+  const codec = getVideoCodec(exportSheetState.video.codec);
+  if (videoUsesWebCodecs(codec)) return ensureWebCodecsAvailability(options);
+  return ensureFfmpegAvailability(options);
+}
+
 function getVideoPreset(id) {
   return VIDEO_PRESETS.find((preset) => preset.id === id) ?? VIDEO_PRESETS[0];
 }
@@ -1638,10 +1725,60 @@ async function ensureFfmpegAvailability(options = {}) {
   return exportSheetState.ffmpeg.available;
 }
 
-async function chooseVideoExportPath() {
+async function ensureWebCodecsAvailability(options = {}) {
+  const webCodecs = exportSheetState.webCodecs;
+  if (!options.force && webCodecs.checked) return webCodecs.available;
+  if (webCodecs.checking) return webCodecs.available;
+
+  exportSheetState.webCodecs = { ...webCodecs, checking: true };
+  if (exportSheetState.open) renderExportSheet();
+
+  const codec = VIDEO_CODECS.find((item) => item.encoder === "webcodecs");
+  try {
+    if (typeof VideoEncoder === "undefined" || typeof VideoFrame === "undefined") {
+      throw new Error("VideoEncoder or VideoFrame is missing.");
+    }
+    if (typeof VideoEncoder.isConfigSupported === "function") {
+      const support = await VideoEncoder.isConfigSupported({
+        codec: codec.webCodec,
+        width: 16,
+        height: 16,
+        bitrate: 500_000,
+        framerate: 30,
+      });
+      if (!support?.supported) throw new Error(`${codec.webCodec} is not supported.`);
+    }
+    exportSheetState.webCodecs = {
+      checked: true,
+      available: true,
+      error: "",
+      checking: false,
+    };
+  } catch (error) {
+    exportSheetState.webCodecs = {
+      checked: true,
+      available: false,
+      error: error?.message || String(error),
+      checking: false,
+    };
+  }
+
+  if (exportSheetState.open) renderExportSheet();
+  return exportSheetState.webCodecs.available;
+}
+
+async function chooseVideoExportPath(options = {}) {
   const tauri = window.__TAURI__;
   const codec = getVideoCodec(exportSheetState.video.codec);
   if (!tauri?.dialog?.save) {
+    if (options.allowBrowserFallback) {
+      const fallbackPath = suggestedVideoExportName();
+      exportSheetState.video.outputPath = fallbackPath;
+      exportSheetState.video.destinationChosen = true;
+      exportSheetState.error = "";
+      renderExportSheet();
+      return fallbackPath;
+    }
     exportSheetState.error = "Video file picker is only available in the desktop app.";
     renderExportSheet();
     return null;
@@ -1687,6 +1824,12 @@ function readCanvasRGBA(canvas) {
 }
 
 async function submitVideoExport() {
+  const codec = getVideoCodec(exportSheetState.video.codec);
+  if (videoUsesWebCodecs(codec)) return submitWebCodecsVideoExport(codec);
+  return submitFfmpegVideoExport();
+}
+
+async function submitFfmpegVideoExport() {
   const video = exportSheetState.video;
   const source = getState().source;
   if (!source.loaded) {
@@ -1840,4 +1983,228 @@ async function submitVideoExport() {
   }
 
   return writtenCount === totalFrames && !failure ? exportSheetState.video.outputPath : null;
+}
+
+async function submitWebCodecsVideoExport(codec) {
+  const video = exportSheetState.video;
+  const source = getState().source;
+  if (!source.loaded) {
+    exportSheetState.error = "Load a source before exporting.";
+    renderExportSheet();
+    return null;
+  }
+
+  const ok = await ensureWebCodecsAvailability();
+  if (!ok) {
+    exportSheetState.error = exportSheetState.webCodecs.error || "WebCodecs VP9 export is not available.";
+    renderExportSheet();
+    return null;
+  }
+
+  if (!video.destinationChosen || !video.outputPath) {
+    const path = await chooseVideoExportPath({ allowBrowserFallback: true });
+    if (!path) return null;
+  }
+
+  const fps = video.fpsMode === "custom" ? video.customFps : getActiveSourceFps();
+  const rangeSeconds = getVideoRangeSeconds(video.range);
+  const totalFrames = estimateSequenceFrames(fps, rangeSeconds);
+  if (totalFrames <= 0) {
+    exportSheetState.error = "Range is empty — adjust trim handles or switch to Full Video.";
+    renderExportSheet();
+    return null;
+  }
+
+  const ditherAvailable = hasCurrentDitherFrame();
+  if (exportSheetState.target === "dither-only" && !ditherAvailable) {
+    exportSheetState.error = "Dither-only target requires a dither node in the graph.";
+    renderExportSheet();
+    return null;
+  }
+
+  const probeCanvas = buildStillExportCanvas();
+  if (!probeCanvas?.width || !probeCanvas?.height) {
+    exportSheetState.error = "Nothing is available to export for the selected target.";
+    renderExportSheet();
+    return null;
+  }
+  const width = probeCanvas.width;
+  const height = probeCanvas.height;
+
+  exportInFlight = true;
+  exportAbortController = new AbortController();
+  exportSheetState.error = "";
+  exportSheetState.progress = createExportProgress("video", totalFrames, "preparing");
+  renderExportSheet();
+  syncExportActions(source);
+
+  const signal = exportAbortController.signal;
+  const startTime = getVideoStartTime(video.range);
+  const encodedFrames = [];
+  let writtenCount = 0;
+  let failure = null;
+  let exportedPath = null;
+  let encoder = null;
+
+  beginExportSession();
+  try {
+    let encodeFailure = null;
+    encoder = new VideoEncoder({
+      output: (chunk) => {
+        const data = new Uint8Array(chunk.byteLength);
+        chunk.copyTo(data);
+        encodedFrames.push({
+          data,
+          timestamp: Math.max(0, Math.round((Number(chunk.timestamp) || 0) * fps / 1_000_000)),
+        });
+      },
+      error: (error) => {
+        encodeFailure = error;
+      },
+    });
+
+    const config = {
+      codec: codec.webCodec,
+      width,
+      height,
+      bitrate: estimateWebCodecsBitrate(width, height, fps),
+      framerate: fps,
+      hardwareAcceleration: "prefer-hardware",
+      latencyMode: "quality",
+    };
+    const supported = typeof VideoEncoder.isConfigSupported === "function"
+      ? await VideoEncoder.isConfigSupported(config)
+      : { supported: true, config };
+    if (!supported?.supported) throw new Error(`${codec.webCodec} is not supported at ${width} × ${height}.`);
+    encoder.configure(supported.config ?? config);
+
+    updateExportProgress({ phase: "encoding" });
+    renderExportSheet();
+    const keyInterval = Math.max(1, Math.round(fps * 2));
+    for (let i = 0; i < totalFrames; i++) {
+      if (signal.aborted) break;
+      const t = Math.min(startTime + i / fps, startTime + rangeSeconds);
+      const seekOk = await seekForExport(t);
+      if (!seekOk) throw new Error(`Frame seek failed at ${t.toFixed(3)}s (frame ${i + 1}).`);
+      if (signal.aborted) break;
+
+      const canvas = buildStillExportCanvas();
+      if (!canvas?.width || !canvas?.height) {
+        throw new Error(`Frame ${i + 1} produced an empty canvas.`);
+      }
+      if (canvas.width !== width || canvas.height !== height) {
+        throw new Error(`Frame ${i + 1} dimensions changed mid-encode.`);
+      }
+
+      const frame = new VideoFrame(canvas, {
+        timestamp: Math.round((i / fps) * 1_000_000),
+        duration: Math.round(1_000_000 / fps),
+      });
+      encoder.encode(frame, { keyFrame: i === 0 || i % keyInterval === 0 });
+      frame.close();
+
+      if (encodeFailure) throw encodeFailure;
+      writtenCount = i + 1;
+      updateExportProgress({ frame: writtenCount, phase: "encoding" });
+      renderExportSheet();
+    }
+
+    if (!signal.aborted) {
+      updateExportProgress({ phase: "finalizing" });
+      renderExportSheet();
+      await encoder.flush();
+      if (encodeFailure) throw encodeFailure;
+      if (encodedFrames.length === 0) throw new Error("WebCodecs encoder produced no frames.");
+      encodedFrames.sort((a, b) => a.timestamp - b.timestamp);
+      const bytes = createIvfFile({
+        frames: encodedFrames,
+        width,
+        height,
+        fps,
+        fourcc: codec.fourcc,
+      });
+      const path = exportSheetState.video.outputPath || suggestedVideoExportName();
+      const written = await writeImage(path, bytes);
+      if (!written) {
+        downloadFallback(bytes, path.split(/[/\\]/).pop() || suggestedVideoExportName(), codec.mime);
+      }
+      exportedPath = path;
+    }
+  } catch (error) {
+    failure = error;
+  } finally {
+    try {
+      encoder?.close();
+    } catch {}
+    endExportSession();
+    const cancelled = signal.aborted;
+    exportAbortController = null;
+    exportInFlight = false;
+    exportSheetState.progress = {
+      active: false,
+      frame: writtenCount,
+      total: totalFrames,
+      cancelled,
+      kind: "video",
+      phase: cancelled ? "cancelling" : "finalizing",
+    };
+
+    if (failure && !cancelled) {
+      exportSheetState.error = failure.message || "WebCodecs video export failed.";
+    } else if (cancelled) {
+      exportSheetState.error = `Cancelled after ${writtenCount} / ${totalFrames} frames.`;
+    } else {
+      exportSheetState.error = "";
+    }
+
+    syncExportActions(getState().source);
+    if (exportSheetState.open) renderExportSheet();
+    if (exportedPath && !failure && !cancelled && writtenCount === totalFrames) {
+      closeExportSheet({ force: true });
+    }
+  }
+
+  return exportedPath && writtenCount === totalFrames && !failure ? exportedPath : null;
+}
+
+function estimateWebCodecsBitrate(width, height, fps) {
+  const pixelsPerSecond = Math.max(1, width * height * fps);
+  return Math.round(Math.max(500_000, Math.min(18_000_000, pixelsPerSecond * 0.08)));
+}
+
+function createIvfFile({ frames, width, height, fps, fourcc }) {
+  const payloadBytes = frames.reduce((total, frame) => total + frame.data.byteLength, 0);
+  const bytes = new Uint8Array(32 + frames.length * 12 + payloadBytes);
+  const view = new DataView(bytes.buffer);
+  writeAscii(bytes, 0, "DKIF");
+  view.setUint16(4, 0, true);
+  view.setUint16(6, 32, true);
+  writeAscii(bytes, 8, fourcc);
+  view.setUint16(12, width, true);
+  view.setUint16(14, height, true);
+  view.setUint32(16, Math.max(1, Math.round(fps)), true);
+  view.setUint32(20, 1, true);
+  view.setUint32(24, frames.length, true);
+  view.setUint32(28, 0, true);
+
+  let offset = 32;
+  for (const frame of frames) {
+    view.setUint32(offset, frame.data.byteLength, true);
+    writeUint64Le(view, offset + 4, frame.timestamp);
+    bytes.set(frame.data, offset + 12);
+    offset += 12 + frame.data.byteLength;
+  }
+  return bytes;
+}
+
+function writeAscii(bytes, offset, value) {
+  for (let i = 0; i < value.length; i++) {
+    bytes[offset + i] = value.charCodeAt(i) & 0xff;
+  }
+}
+
+function writeUint64Le(view, offset, value) {
+  const n = Math.max(0, Math.floor(Number(value) || 0));
+  view.setUint32(offset, n >>> 0, true);
+  view.setUint32(offset + 4, Math.floor(n / 0x1_0000_0000), true);
 }
