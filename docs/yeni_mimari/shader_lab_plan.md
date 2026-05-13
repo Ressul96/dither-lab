@@ -232,7 +232,7 @@ quality/aspect preset'leri ve UI polish UX'i ciddi iyileştirir.
 | PR | Kapsam | Notlar |
 |---|---|---|
 | F12.1 | Quality preset'leri: draft 1280, standard 1920, high 3840, ultra 7680 long-edge | **✅ İndi (2026-05-13).** `export.js` `EXPORT_QUALITY_LONG_EDGE` katalogu export ediyor; `resolveStillSize` kaynak long-edge'i preset hedefine scale ederek aspect'i koruyor. Still/video/sequence üç export modunun resolution dropdown'u tek `renderResolutionOptions()` helper'ından besleniyor; `Source / Draft (1280) / Standard (1920) / High (3840) / Ultra (7680) / Half / Custom` sırası. |
-| F12.2 | Aspect preset'leri: 16:9, 1:1, 4:5, 9:16, original (+ custom WxH) | Crop math `composition.ts` örnek alınır |
+| F12.2 | Aspect preset'leri: 16:9, 1:1, 4:5, 9:16, original (+ custom WxH) | **✅ İndi (2026-05-13).** `EXPORT_ASPECT_RATIOS` katalogu (`original`, `16:9`, `1:1`, `4:5`, `9:16`) ve state `aspectMode` eklendi; `resolveStillSize` quality preset long-edge'i seçili oran üzerinden W×H'ye böl-çarp ediyor. `computeCoverCrop` aspect mismatch'inde kaynak görüntüyü center-crop ediyor; `buildStillExportCanvas` 9-arg `drawImage` ile distortion bırakmıyor. Custom WxH modu existing custom resolution hattıyla karşılanıyor, o modda Aspect dropdown disable. |
 | F12.3 | Still image export: PNG/JPG seçici + JPG quality slider | Mevcut snapshot path'i polish |
 | F12.4 | Export progress UI: phase ("preparing", "encoding"), ETA, cancel button | Mevcut export sheet üstüne |
 | F12.5 | (Opsiyonel) WebCodecs preview-export hattı — küçük dosya / hızlı preview için, fallback FFmpeg | F8.5 worker entegrasyonu uyumlu; production export için FFmpeg sidecar kalır |

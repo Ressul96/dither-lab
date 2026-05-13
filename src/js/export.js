@@ -25,6 +25,14 @@ const EXPORT_QUALITY_LONG_EDGE = Object.freeze([
   { id: "ultra", label: "Ultra (7680)", longEdge: 7680 },
 ]);
 
+const EXPORT_ASPECT_RATIOS = Object.freeze([
+  { id: "original", label: "Original" },
+  { id: "16:9", label: "16:9", ratio: 16 / 9 },
+  { id: "1:1", label: "1:1", ratio: 1 },
+  { id: "4:5", label: "4:5", ratio: 4 / 5 },
+  { id: "9:16", label: "9:16", ratio: 9 / 16 },
+]);
+
 const VIDEO_CODECS = Object.freeze([
   { id: "libx264", label: "H.264 (libx264)", extension: "mp4", mime: "video/mp4" },
 ]);
@@ -163,6 +171,9 @@ function ensureExportSheet() {
       }
       case "resolution-mode":
         exportSheetState.resolutionMode = target.value;
+        break;
+      case "aspect-mode":
+        exportSheetState.aspectMode = getAspectPreset(target.value)?.id ?? "original";
         break;
       case "custom-width":
         exportSheetState.customWidth = clampDimension(target.value, exportSheetState.customWidth);
@@ -346,6 +357,27 @@ function renderResolutionOptions() {
   `;
 }
 
+function renderAspectOptions() {
+  const mode = exportSheetState.aspectMode;
+  return EXPORT_ASPECT_RATIOS.map((preset) => `
+    <option value="${preset.id}" ${preset.id === mode ? "selected" : ""}>${escapeHtml(preset.label)}</option>
+  `).join("");
+}
+
+function renderAspectField() {
+  const disabled = exportSheetState.resolutionMode === "custom";
+  return `
+    <div class="field">
+      <label>Aspect</label>
+      <div class="dropdown">
+        <select data-export-field="aspect-mode" ${disabled ? "disabled" : ""}>
+          ${renderAspectOptions()}
+        </select>
+      </div>
+    </div>
+  `;
+}
+
 function renderStillExportFields(ditherAvailable) {
   const previewPath = exportSheetState.destinationChosen
     ? exportSheetState.destinationPath
@@ -396,6 +428,10 @@ function renderStillExportFields(ditherAvailable) {
         </div>
       </div>
 
+      ${renderAspectField()}
+    </div>
+
+    <div class="export-sheet__grid">
       <div class="field">
         <label>Size Preview</label>
         <div class="row export-sheet__size-preview">
@@ -533,6 +569,10 @@ function renderVideoExportFields(ditherAvailable) {
           </select>
         </div>
       </div>
+      ${renderAspectField()}
+    </div>
+
+    <div class="export-sheet__grid">
       <div class="field">
         <label>${video.fpsMode === "custom" ? "Size" : "Estimated Frames"}</label>
         <div class="row export-sheet__size-preview">
@@ -711,6 +751,10 @@ function renderSequenceExportFields(ditherAvailable) {
           </select>
         </div>
       </div>
+      ${renderAspectField()}
+    </div>
+
+    <div class="export-sheet__grid">
       <div class="field">
         <label>${seq.fpsMode === "custom" ? "Size" : "Estimated Frames"}</label>
         <div class="row export-sheet__size-preview">
@@ -1014,44 +1058,78 @@ function buildStillExportCanvas() {
   const context = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
   if (!context) return null;
   context.imageSmoothingEnabled = exportSheetState.target !== "dither-only";
-  context.drawImage(baseCanvas, 0, 0, width, height);
+  const crop = computeCoverCrop(baseCanvas.width, baseCanvas.height, width, height);
+  context.drawImage(baseCanvas, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height);
   return canvas;
 }
 
 function resolveStillSize(baseWidth = getState().source.videoWidth, baseHeight = getState().source.videoHeight) {
+  if (exportSheetState.resolutionMode === "custom") {
+    return {
+      width: clampDimension(exportSheetState.customWidth, baseWidth),
+      height: clampDimension(exportSheetState.customHeight, baseHeight),
+    };
+  }
+
+  const sourceLongEdge = Math.max(baseWidth, baseHeight);
+  let targetLongEdge;
   switch (exportSheetState.resolutionMode) {
     case "half":
-      return {
-        width: Math.max(1, Math.round(baseWidth / 2)),
-        height: Math.max(1, Math.round(baseHeight / 2)),
-      };
-    case "custom":
-      return {
-        width: clampDimension(exportSheetState.customWidth, baseWidth),
-        height: clampDimension(exportSheetState.customHeight, baseHeight),
-      };
+      targetLongEdge = sourceLongEdge / 2;
+      break;
     case "source":
-      return { width: baseWidth, height: baseHeight };
+      targetLongEdge = sourceLongEdge;
+      break;
     default: {
       const preset = getQualityPreset(exportSheetState.resolutionMode);
-      if (preset) return scaleToLongEdge(baseWidth, baseHeight, preset.longEdge);
-      return { width: baseWidth, height: baseHeight };
+      targetLongEdge = preset ? preset.longEdge : sourceLongEdge;
     }
   }
+
+  const aspect = resolveAspectRatio(baseWidth, baseHeight);
+  if (aspect >= 1) {
+    return {
+      width: Math.max(1, Math.round(targetLongEdge)),
+      height: Math.max(1, Math.round(targetLongEdge / aspect)),
+    };
+  }
+  return {
+    width: Math.max(1, Math.round(targetLongEdge * aspect)),
+    height: Math.max(1, Math.round(targetLongEdge)),
+  };
 }
 
 function getQualityPreset(id) {
   return EXPORT_QUALITY_LONG_EDGE.find((preset) => preset.id === id);
 }
 
-function scaleToLongEdge(width, height, longEdge) {
-  const sourceLongEdge = Math.max(width, height);
-  if (sourceLongEdge <= 0) return { width: longEdge, height: longEdge };
-  const scale = longEdge / sourceLongEdge;
-  return {
-    width: Math.max(1, Math.round(width * scale)),
-    height: Math.max(1, Math.round(height * scale)),
-  };
+function getAspectPreset(id) {
+  return EXPORT_ASPECT_RATIOS.find((preset) => preset.id === id);
+}
+
+function resolveAspectRatio(baseWidth, baseHeight) {
+  const preset = getAspectPreset(exportSheetState.aspectMode);
+  if (!preset || preset.id === "original" || typeof preset.ratio !== "number") {
+    return baseHeight > 0 ? baseWidth / baseHeight : 1;
+  }
+  return preset.ratio;
+}
+
+function computeCoverCrop(sourceW, sourceH, targetW, targetH) {
+  if (sourceW <= 0 || sourceH <= 0 || targetW <= 0 || targetH <= 0) {
+    return { sx: 0, sy: 0, sw: sourceW, sh: sourceH };
+  }
+  const sourceAspect = sourceW / sourceH;
+  const targetAspect = targetW / targetH;
+  if (Math.abs(sourceAspect - targetAspect) < 1e-4) {
+    return { sx: 0, sy: 0, sw: sourceW, sh: sourceH };
+  }
+  if (sourceAspect > targetAspect) {
+    const sw = sourceH * targetAspect;
+    return { sx: (sourceW - sw) / 2, sy: 0, sw, sh: sourceH };
+  }
+  const sh = sourceW / targetAspect;
+  return { sx: 0, sy: (sourceH - sh) / 2, sw: sourceW, sh };
 }
 
 function syncExportActions(source) {
@@ -1172,6 +1250,7 @@ function createDefaultExportState() {
     stillFormat: "png",
     target: "viewer-output",
     resolutionMode: "source",
+    aspectMode: "original",
     customWidth: 0,
     customHeight: 0,
     destinationPath: "",
