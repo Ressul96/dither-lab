@@ -302,6 +302,8 @@ olarak `viewer-output`'un primary input'una bağlanır. Mevcut bağlantı bir
 "solo stash"e kaydedilir. T'ye tekrar basıldığında stash geri yüklenir,
 solo edge silinir. Solo aktifken bir badge gösterilir.
 
+**Durum:** F13.4a indi (2026-05-14). İlk klavye paketi eklendi: `G` / `Shift+G` group-ungroup, `M` bypass toggle, `X`/Delete/Backspace delete, `A` current scope select-all, `Escape` selection clear, `Cmd/Ctrl+D` duplicate selected, `F` selected node'lara frame. `T` solo ve `R` inline rename ayrı dilimde kalıyor.
+
 ### F13.5 — Cursor + visual feedback
 | Kapsam | Notlar |
 |---|---|

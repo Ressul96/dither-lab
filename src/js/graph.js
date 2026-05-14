@@ -1355,38 +1355,65 @@ export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
 }
 
 export function duplicateNode(nodeId, options = {}) {
-  if (!nodeId) return null;
+  return duplicateNodes([nodeId], options)[0] ?? null;
+}
 
+export function duplicateNodes(nodeIds, options = {}) {
   const graph = ensureBootGraph();
-  const source = getNodeById(nodeId, graph);
-  if (!source || source.type === "source" || source.type === "viewer-output" || source.type === "group") {
-    return null;
-  }
+  const selectedIds = [...new Set(Array.isArray(nodeIds) ? nodeIds : [])];
+  const sources = selectedIds
+    .map((nodeId) => getNodeById(nodeId, graph))
+    .filter((node) => node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
+  if (sources.length === 0) return [];
 
   const offset = Number.isFinite(Number(options.offset)) ? Number(options.offset) : 36;
-  const nextId = nextNodeId(source.type, graph);
-  const nextNode = createNode(nextId, source.type, {
-    parentId: getNodeParentId(source),
-    label: createDuplicateLabel(source.label),
-    x: source.x + offset,
-    y: source.y + offset,
-    params: clone(source.params),
-    opacity: source.opacity,
-    hue: source.hue,
-    saturation: source.saturation,
-    exposedParams: clone(source.exposedParams),
-    exposedParamConfig: clone(source.exposedParamConfig),
-    bypassed: source.bypassed,
-  });
+  const nextNodes = graph.nodes.map((node) => clone(node));
+  const duplicatedIds = [];
+  const idMap = new Map();
 
-  const nextNodes = [...graph.nodes.map((node) => clone(node)), nextNode];
+  for (const source of sources) {
+    const nextId = nextNodeId(source.type, { ...graph, nodes: nextNodes });
+    idMap.set(source.id, nextId);
+    duplicatedIds.push(nextId);
+    nextNodes.push(
+      createNode(nextId, source.type, {
+        parentId: getNodeParentId(source),
+        label: createDuplicateLabel(source.label),
+        x: source.x + offset,
+        y: source.y + offset,
+        params: clone(source.params),
+        opacity: source.opacity,
+        hue: source.hue,
+        saturation: source.saturation,
+        exposedParams: clone(source.exposedParams),
+        exposedParamConfig: clone(source.exposedParamConfig),
+        bypassed: source.bypassed,
+      })
+    );
+  }
+
+  const nextEdges = graph.edges.map((edge) => ({ ...edge }));
+  for (const edge of graph.edges) {
+    const fromNode = idMap.get(edge.fromNode);
+    const toNode = idMap.get(edge.toNode);
+    if (!fromNode || !toNode) continue;
+    nextEdges.push({
+      id: createEdgeId(fromNode, edge.fromSocket, toNode, edge.toSocket),
+      fromNode,
+      fromSocket: edge.fromSocket,
+      toNode,
+      toSocket: edge.toSocket,
+    });
+  }
+
   dispatch("graph", {
-    nodes: refreshGroupMetadataForNodes(nextNodes, graph.edges),
-    selectedNodeId: nextId,
-    selectedNodeIds: [nextId],
+    nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
+    edges: nextEdges,
+    selectedNodeId: duplicatedIds.at(-1) ?? null,
+    selectedNodeIds: duplicatedIds,
   });
 
-  return nextId;
+  return duplicatedIds;
 }
 
 export function insertNodeOnEdge(edgeId, type, options = {}) {

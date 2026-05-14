@@ -5,6 +5,7 @@ import {
   addEdge,
   createFreeNode,
   duplicateNode,
+  duplicateNodes,
   ensureBootGraph,
   getNodeById,
   getNodeDefinition,
@@ -21,6 +22,7 @@ import {
   replacePaletteUsages,
   resolveGraphParentId,
   selectNode,
+  selectNodes,
   toggleParamExposed,
   toggleNodeBypass,
   ungroupNode,
@@ -120,6 +122,7 @@ let nodePaletteSearchEl = null;
 let nodePaletteEmptyEl = null;
 let graphSpacePanActive = false;
 let graphPointerInsideEditor = false;
+let graphKeyboardActive = false;
 let activeGraphMarquee = null;
 const paletteSwatchLocks = new Map();
 
@@ -535,6 +538,7 @@ function initViewportInteractions() {
 
   editorEl.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
+    graphKeyboardActive = true;
     if (e.target.closest("[data-node-id]") || e.target.closest(".graph-socket-hit")) return;
     // The breadcrumb lives inside #nodeEditor so the pan handler would
     // otherwise capture the pointer on this same `pointerdown` and the
@@ -860,6 +864,7 @@ function rectsIntersect(a, b) {
 function onGraphPointerDown(e) {
   if (e.button !== 0) return;
   if (e.target.closest("[data-node-action]")) return;
+  graphKeyboardActive = true;
 
   const socket = e.target.closest(".graph-socket-hit");
   if (socket) {
@@ -897,24 +902,53 @@ function wireKeyboard() {
       return;
     }
 
-    if (event.key === "Escape" && cancelActiveGraphMarquee()) {
-      event.preventDefault();
-      event.stopPropagation();
+    if (event.key === "Escape") {
+      const handled = cancelActiveGraphMarquee() || clearGraphSelection();
+      if (handled) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
       return;
     }
 
     const commandKey = event.metaKey || event.ctrlKey;
-    if (commandKey && event.key.toLowerCase() === "g") {
+    const key = event.key.toLowerCase();
+
+    if (commandKey && key === "d" && !event.shiftKey && !event.altKey) {
+      if (duplicateSelectedGraphNodes()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+      return;
+    }
+
+    if (key === "g" && !event.altKey && shouldHandleGraphShortcut()) {
       const handled = event.shiftKey ? ungroupCurrentSelection() : groupCurrentSelection();
       if (handled) event.preventDefault();
       return;
     }
 
-    if (event.key !== "Delete" && event.key !== "Backspace") return;
-    const selectedNodeId = getState().graph.selectedNodeId;
-    if (!selectedNodeId) return;
-    if (!removeNode(selectedNodeId)) return;
-    event.preventDefault();
+    if (key === "m" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
+      if (toggleBypassForSelectedNodes()) event.preventDefault();
+      return;
+    }
+
+    if ((key === "x" || event.key === "Delete" || event.key === "Backspace") && shouldHandleGraphShortcut()) {
+      if (removeSelectedGraphNodes()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+      return;
+    }
+
+    if (key === "a" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
+      if (selectAllVisibleGraphNodes()) event.preventDefault();
+      return;
+    }
+
+    if (key === "f" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
+      if (frameSelectedGraphNodes()) event.preventDefault();
+    }
   });
 
   window.addEventListener("keyup", (event) => {
@@ -940,8 +974,103 @@ function shouldUseGraphSpacePan() {
   return graphPointerInsideEditor || editorEl?.matches?.(":hover") || graphSpacePanActive;
 }
 
+function shouldHandleGraphShortcut() {
+  return (
+    graphKeyboardActive ||
+    graphPointerInsideEditor ||
+    editorEl?.matches?.(":hover") ||
+    getSelectedNodeIds().length > 0
+  );
+}
+
 function syncGraphSpacePanClass() {
   editorEl?.classList.toggle("space-panning", graphSpacePanActive && shouldUseGraphSpacePan());
+}
+
+function duplicateSelectedGraphNodes() {
+  const selectedIds = getSelectedNodeIds();
+  if (selectedIds.length === 0) return false;
+  return duplicateNodes(selectedIds).length > 0;
+}
+
+function toggleBypassForSelectedNodes() {
+  const ids = getSelectedNodeIds().filter((nodeId) => canBypassGraphNode(getNodeById(nodeId)));
+  let changed = false;
+  for (const id of ids) {
+    changed = toggleNodeBypass(id) || changed;
+  }
+  return changed;
+}
+
+function removeSelectedGraphNodes() {
+  const ids = getSelectedNodeIds();
+  let removed = false;
+  for (const id of ids) {
+    removed = removeNode(id) || removed;
+  }
+  return removed;
+}
+
+function selectAllVisibleGraphNodes() {
+  const { graph } = getState();
+  const ids = getVisibleGraphNodes(graph).map((node) => node.id);
+  if (ids.length === 0) return false;
+  selectNodes(ids, ids.at(-1));
+  return true;
+}
+
+function clearGraphSelection() {
+  if (getSelectedNodeIds().length === 0) return false;
+  selectNodes([]);
+  return true;
+}
+
+function frameSelectedGraphNodes() {
+  const { graph } = getState();
+  const visibleNodeIds = getVisibleGraphNodeIds(graph);
+  const nodes = getSelectedNodeIds(graph)
+    .filter((nodeId) => visibleNodeIds.has(nodeId))
+    .map((nodeId) => getNodeById(nodeId, graph))
+    .filter(Boolean);
+  if (nodes.length === 0) return false;
+
+  const rect = editorEl.getBoundingClientRect();
+  if (!rect.width || !rect.height) return false;
+
+  const bounds = getGraphNodesBounds(nodes);
+  const contentWidth = Math.max(1, bounds.maxX - bounds.minX);
+  const contentHeight = Math.max(1, bounds.maxY - bounds.minY);
+  const padding = Math.min(GRAPH_VIEW_PADDING, Math.max(48, Math.min(rect.width, rect.height) * 0.18));
+  const zoom = clamp(
+    Math.min((rect.width - padding * 2) / contentWidth, (rect.height - padding * 2) / contentHeight),
+    0.35,
+    1.65
+  );
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+
+  dispatch("graphView", {
+    zoom,
+    panX: rect.width / 2 - toSceneX(centerX) * zoom,
+    panY: rect.height / 2 - toSceneY(centerY) * zoom,
+  });
+  return true;
+}
+
+function getGraphNodesBounds(nodes) {
+  return nodes.reduce(
+    (acc, node) => ({
+      minX: Math.min(acc.minX, node.x),
+      maxX: Math.max(acc.maxX, node.x + NODE_WIDTH),
+      minY: Math.min(acc.minY, node.y),
+      maxY: Math.max(acc.maxY, node.y + getNodeRenderHeight(node)),
+    }),
+    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
+  );
+}
+
+function getNodeRenderHeight(node) {
+  return Math.max(NODE_HEIGHT, node.outputs?.length * SOCKET_STEP + SOCKET_Y + 26);
 }
 
 function groupCurrentSelection() {
