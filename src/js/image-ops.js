@@ -18,6 +18,7 @@ import {
   applyDepthOfFieldGpu,
   applyHalationGpu,
   applyHalftoneGpu,
+  applyGradientSourceGpu,
   applyGradientMapGpu,
   applyLedScreenGpu,
   applyMeshGradientGpu,
@@ -149,6 +150,12 @@ export function applyMeshGradientNode(params = {}, context = {}) {
   return applyMeshGradientCpu(params, context);
 }
 
+export function applyGradientNode(params = {}, context = {}) {
+  const gpuOutput = applyGradientSourceGpu(params, context);
+  if (gpuOutput) return gpuOutput;
+  return applyGradientCpu(params);
+}
+
 function applyMeshGradientCpu(params = {}, context = {}) {
   const width = clamp(Math.round(Number(params.width ?? 1920)), 256, 4096);
   const height = clamp(Math.round(Number(params.height ?? 1080)), 256, 4096);
@@ -187,6 +194,91 @@ function applyMeshGradientCpu(params = {}, context = {}) {
   }
   ctx.globalCompositeOperation = "source-over";
   return output;
+}
+
+function applyGradientCpu(params = {}) {
+  const width = gradientSourceDimension(params.width, 1920);
+  const height = gradientSourceDimension(params.height, 1080);
+  const output = createBuffer(width, height);
+  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
+  if (!ctx) return null;
+
+  const imageData = ctx.createImageData(width, height);
+  const data = imageData.data;
+  const lut = buildGradientLut(gradientMapStops(params));
+  const center = gradientSourceCenter(params);
+  const mode = gradientSourceMode(params.mode);
+  const angle = (Number(params.angle ?? 0) / 180) * Math.PI;
+  const dirX = Math.cos(angle);
+  const dirY = Math.sin(angle);
+  const radius = clamp(Number(params.radius ?? 75) / 100, 0.01, 2);
+  const repeat = clamp(Number(params.repeat ?? 1), 1, 20);
+  const shift = clamp(Number(params.shift ?? 0) / 100, -1, 1);
+  const minSide = Math.max(1, Math.min(width, height));
+  const aspectX = width / minSide;
+  const aspectY = height / minSide;
+
+  for (let y = 0; y < height; y++) {
+    const py = (y + 0.5) / height;
+    for (let x = 0; x < width; x++) {
+      const px = (x + 0.5) / width;
+      const raw = gradientSourceCoordinate(
+        mode,
+        px,
+        py,
+        center,
+        dirX,
+        dirY,
+        angle,
+        radius,
+        aspectX,
+        aspectY
+      );
+      const t = gradientMapCoordinate(raw, repeat, shift);
+      const color = sampleGradientLut(lut.data, lut.width, t);
+      const offset = (y * width + x) * 4;
+      data[offset] = Math.round(color[0]);
+      data[offset + 1] = Math.round(color[1]);
+      data[offset + 2] = Math.round(color[2]);
+      data[offset + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return output;
+}
+
+function gradientSourceDimension(value, fallback) {
+  return clamp(Math.round(Number(value ?? fallback)), 256, 4096);
+}
+
+function gradientSourceCenter(params = {}) {
+  return {
+    x: clamp(Number(params.centerX ?? 50) / 100, 0, 1),
+    y: clamp(Number(params.centerY ?? 50) / 100, 0, 1),
+  };
+}
+
+function gradientSourceMode(value) {
+  const mode = String(value ?? "linear").toLowerCase();
+  if (mode === "radial" || mode === "conic") return mode;
+  return "linear";
+}
+
+function gradientSourceCoordinate(mode, px, py, center, dirX, dirY, angle, radius, aspectX, aspectY) {
+  const dx = px - center.x;
+  const dy = py - center.y;
+  if (mode === "radial") {
+    return Math.hypot(dx * aspectX, dy * aspectY) / radius;
+  }
+  if (mode === "conic") {
+    return wrap01((Math.atan2(dy, dx) - angle) / (Math.PI * 2));
+  }
+  return 0.5 + dx * dirX + dy * dirY;
+}
+
+function wrap01(value) {
+  return value - Math.floor(value);
 }
 
 export function applyBlurNode(input, params) {

@@ -334,6 +334,8 @@ solo edge silinir. Solo aktifken bir badge gösterilir.
 | F14.2 | (Opsiyonel) `custom-shader` node type: kullanıcı GLSL fragment'ı yapıştırır, uniform UI auto-generated | `parameter-schema.ts` paterni; safety: compile error inline gösterimi. Advanced — son sırada |
 | F14.3 | (Opsiyonel) Fluid simulation source | Heavy; gerçekten ihtiyaç olursa |
 
+**Durum:** F14.1 indi (2026-05-14). `gradient` procedural source eklendi: Linear/Radial/Conic mode, ortak gradient ramp editörü, center/angle/repeat/shift/output size kontrolleri ve GPU source shader + CPU fallback aynı node üstünden çalışıyor.
+
 **Kapsam dışı bırakılanlar (kullanıcı kararı):** audio-reactive bindings.
 
 ---

@@ -1641,7 +1641,7 @@ function onInspectorInput(event) {
   const gradientStopControl = event.target.closest("[data-gradient-map-stop-color]");
   if (gradientStopControl) {
     const node = getSelectedNode();
-    if (!node || (node.type !== "gradient-map" && node.type !== "scene-grade")) return;
+    if (!isGradientRampNode(node)) return;
     if (gradientStopControl.dataset.inputKind === "gradient-stop-hex") {
       inspectorEditing = true;
       return;
@@ -1766,7 +1766,7 @@ function onInspectorChange(event) {
   if (gradientStopControl) {
     inspectorEditing = false;
     const node = getSelectedNode();
-    if (node?.type === "gradient-map" || node?.type === "scene-grade") {
+    if (isGradientRampNode(node)) {
       commitGradientMapStopColor(node, gradientStopControl);
       syncGradientStopSiblingControls(gradientStopControl);
     }
@@ -2423,6 +2423,8 @@ function renderNodeSpecifics(node) {
       return renderGroupNode(node);
     case "source":
       return renderSourceNode();
+    case "gradient":
+      return renderGradientNode(node);
     case "mesh-gradient":
       return renderMeshGradientNode(node);
     case "adjust":
@@ -2689,6 +2691,48 @@ function renderMeshGradientNode(node) {
       ${renderRangeField("Warp", "warp", warp, 0, 100, `${warp}%`)}
       ${renderRangeField("Zoom", "zoom", zoom, 25, 400, `${zoom}%`)}
       ${renderRangeField("Speed", "speed", speed, 0, 100, `${speed}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Output</header>
+      ${renderRangeField("Width", "width", width, 256, 4096, `${width}px`)}
+      ${renderRangeField("Height", "height", height, 256, 4096, `${height}px`)}
+    </section>
+  `;
+}
+
+function renderGradientNode(node) {
+  const params = node.params;
+  const mode = String(params.mode ?? "linear");
+  const angle = Number(params.angle ?? 0);
+  const centerX = Number(params.centerX ?? 50);
+  const centerY = Number(params.centerY ?? 50);
+  const radius = Number(params.radius ?? 75);
+  const repeat = Number(params.repeat ?? 1);
+  const shift = Number(params.shift ?? 0);
+  const width = Number(params.width ?? 1920);
+  const height = Number(params.height ?? 1080);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Gradient</header>
+      ${renderSelectField("Mode", "mode", mode, [
+        ["linear", "Linear"],
+        ["radial", "Radial"],
+        ["conic", "Conic"],
+      ])}
+      ${renderGradientRampField("Ramp", "stops", params.stops, { maxStops: GRADIENT_RAMP_MAX_STOPS })}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Shape</header>
+      ${renderXyPadField("Center", "centerX", "centerY", centerX, centerY, {
+        min: 0,
+        max: 100,
+        step: 1,
+        unit: "%",
+      })}
+      ${renderRangeField("Angle", "angle", angle, -180, 180, `${angle}deg`)}
+      ${mode === "radial" ? renderRangeField("Radius", "radius", radius, 1, 200, `${radius}%`) : ""}
+      ${renderRangeField("Repeat", "repeat", repeat, 1, 20, String(repeat))}
+      ${renderRangeField("Shift", "shift", shift, -100, 100, `${shift}%`)}
     </section>
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Output</header>
@@ -5941,7 +5985,7 @@ function commitNodeColorParam(paramKey, hex) {
 
 function commitGradientStopColorTarget(target, hex) {
   const node = getSelectedNode();
-  if (!node || (node.type !== "gradient-map" && node.type !== "scene-grade")) return;
+  if (!isGradientRampNode(node)) return;
   const paramKey = target.paramKey || "stops";
   const stops = normalizeGradientMapInspectorStops(node.params?.[paramKey]);
   const index = Math.max(
@@ -5955,6 +5999,10 @@ function commitGradientStopColorTarget(target, hex) {
     color: hex,
   };
   commitGradientRampStops(node.id, paramKey, nextStops);
+}
+
+function isGradientRampNode(node) {
+  return Boolean(node && (node.type === "gradient" || node.type === "gradient-map" || node.type === "scene-grade"));
 }
 
 function commitMeshStopColorTarget(target, hex) {

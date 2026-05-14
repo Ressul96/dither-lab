@@ -75,6 +75,53 @@ void main() {
 }
 `;
 
+const GRADIENT_SOURCE_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform sampler2D u_gradientLut;
+uniform vec2 u_resolution;
+uniform vec2 u_center;
+uniform float u_mode;      // 0 linear, 1 radial, 2 conic
+uniform float u_angle;     // radians
+uniform float u_radius;    // fraction of short side
+uniform float u_repeat;
+uniform float u_shift;
+
+in vec2 v_uv;
+out vec4 out_color;
+
+const float TAU = 6.28318530718;
+
+float gradientCoordinate(vec2 p) {
+  vec2 delta = p - u_center;
+  if (u_mode < 0.5) {
+    vec2 dir = vec2(cos(u_angle), sin(u_angle));
+    return 0.5 + dot(delta, dir);
+  }
+  if (u_mode < 1.5) {
+    float shortSide = max(min(u_resolution.x, u_resolution.y), 1.0);
+    vec2 aspect = vec2(u_resolution.x / shortSide, u_resolution.y / shortSide);
+    return length(delta * aspect) / max(u_radius, 0.001);
+  }
+  return fract((atan(delta.y, delta.x) - u_angle) / TAU);
+}
+
+float repeatCoordinate(float t) {
+  float raw = t * u_repeat + u_shift;
+  if (abs(u_shift) < 0.00001 && abs(u_repeat - 1.0) < 0.00001) {
+    return clamp(raw, 0.0, 1.0);
+  }
+  return fract(raw);
+}
+
+void main() {
+  vec2 p = vec2(v_uv.x, 1.0 - v_uv.y);
+  float t = repeatCoordinate(gradientCoordinate(p));
+  vec3 color = texture(u_gradientLut, vec2(t, 0.5)).rgb;
+  out_color = vec4(color, 1.0);
+}
+`;
+
 const CHROMATIC_ABERRATION_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
@@ -1502,6 +1549,34 @@ function meshGradientUniforms(params, context) {
   };
 }
 
+function gradientSourceSize(params) {
+  return {
+    width: clamp(Math.round(Number(params?.width ?? 1920)), 256, 4096),
+    height: clamp(Math.round(Number(params?.height ?? 1080)), 256, 4096),
+  };
+}
+
+function gradientSourceUniforms(params) {
+  return {
+    u_center: [
+      clamp(Number(params?.centerX ?? 50) / 100, 0, 1),
+      clamp(Number(params?.centerY ?? 50) / 100, 0, 1),
+    ],
+    u_mode: gradientSourceModeIndex(params?.mode ?? "linear"),
+    u_angle: (Number(params?.angle ?? 0) / 180) * Math.PI,
+    u_radius: clamp(Number(params?.radius ?? 75) / 100, 0.01, 2),
+    u_repeat: clamp(Number(params?.repeat ?? 1), 1, 20),
+    u_shift: clamp(Number(params?.shift ?? 0) / 100, -1, 1),
+  };
+}
+
+function gradientSourceModeIndex(value) {
+  const mode = String(value ?? "linear").toLowerCase();
+  if (mode === "radial") return 1;
+  if (mode === "conic") return 2;
+  return 0;
+}
+
 const SHADER_PASSES = Object.freeze({
   "chromatic-aberration": {
     fragment: CHROMATIC_ABERRATION_FRAGMENT_SHADER,
@@ -1876,6 +1951,19 @@ export function applyMeshGradientGpu(params, context) {
     width,
     height,
     meshGradientUniforms(params, context)
+  );
+}
+
+export function applyGradientSourceGpu(params, context) {
+  const activeRenderer = getRenderer();
+  if (!activeRenderer) return null;
+  const { width, height } = gradientSourceSize(params);
+  return activeRenderer.renderSource(
+    GRADIENT_SOURCE_FRAGMENT_SHADER,
+    width,
+    height,
+    gradientSourceUniforms(params, context),
+    { u_gradientLut: gradientLutTextureSource(params) }
   );
 }
 

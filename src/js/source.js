@@ -1075,7 +1075,7 @@ function findViewerProceduralSource(graph) {
     visited.add(nodeId);
 
     const node = nodeById.get(nodeId);
-    if (node?.type === "mesh-gradient") return node;
+    if (isProceduralSourceNode(node)) return node;
 
     const primarySocket = primaryImageInputSocket(node);
     if (!primarySocket) continue;
@@ -1094,6 +1094,7 @@ function primaryImageInputSocket(node) {
       return "mask_a";
     case "math":
     case "value":
+    case "gradient":
     case "mesh-gradient":
     case "source":
       return null;
@@ -1107,6 +1108,10 @@ function proceduralSourceSize(node) {
     width: clamp(Math.round(Number(node?.params?.width ?? 1920)), 256, 4096),
     height: clamp(Math.round(Number(node?.params?.height ?? 1080)), 256, 4096),
   };
+}
+
+function isProceduralSourceNode(node) {
+  return node?.type === "gradient" || node?.type === "mesh-gradient";
 }
 
 function recyclePreviewOutput(image) {

@@ -13,6 +13,7 @@ import {
   applyDuotoneNode,
   applyFlipNode,
   applyGlareNode,
+  applyGradientNode,
   applyGradientMapNode,
   applyHalationNode,
   applyHalftoneNode,
@@ -340,6 +341,7 @@ function inputSocketsFor(node) {
     case "math":
       return ["a", "b"];
     case "mesh-gradient":
+    case "gradient":
     case "value":
       return [];
     default:
@@ -488,6 +490,8 @@ function computeNodeOutput(node, index, results, context) {
       return applyDuotoneNode(resolveInputImage(node, "image", index, results), node.params);
     case "gradient-map":
       return applyGradientMapNode(resolveInputImage(node, "image", index, results), node.params);
+    case "gradient":
+      return applyGradientNode(node.params, context);
     case "mesh-gradient":
       return applyMeshGradientNode(node.params, context);
     case "hsv":
