@@ -343,12 +343,12 @@ solo edge silinir. Solo aktifken bir badge gösterilir.
 
 ---
 
-## 6b. F7 follow-up notları (küçük PR'lar, F9 öncesi de inebilir)
+## 6b. F7 follow-up notları (küçük PR'lar)
 
-| Kapsam | Notlar |
+| Kapsam | Durum |
 |---|---|
-| **Dashed gizmo for falloff** — ring gizmo'larda inner radius solid, outer (falloff) ring dashed | Depth-of-field gibi inner/outer iki çapı olan node'lar için. SVG `stroke-dasharray="4 3"` ile küçük CSS değişikliği |
-| **Crop / transform box gizmo** (F7.3 P2'den deferred) | gizmo_gelisme.md §6 P2; F7 plumbing'i hazır |
+| **Dashed gizmo for falloff** — ring gizmo'larda inner radius solid, outer (falloff) ring dashed | ✅ İndi (`4264cd8`). `viewer-ring-gizmo__falloff` CSS `stroke-dasharray: 4 3`; DoF falloff > 0 iken görünür |
+| **Crop / transform box gizmo** (F7.3 P2'den deferred idi) | ✅ İndi (`e140583`). `viewer-crop-box-gizmo` 4 edge + 4 corner handle, opposing edge clamp; `crop` + `transform` node'ları paylaşıyor |
 
 ---
 
@@ -379,8 +379,8 @@ yolumuzu güçlendirmek" üzerinedir.
    (G/M/X/T), mouse mode rework (box select on plain left-click).
 6. **F14 — Stretch** (procedural sources). ✅ F14.1 indi; F14.2 + F14.3 kullanıcı kararıyla düşürüldü.
 
-F7 follow-up'ları (dashed gizmo, crop/transform box) küçük PR'lar olarak
-F9'dan önce de inebilir.
+F7 follow-up'ları (dashed gizmo, crop/transform box) ✅ indi (`4264cd8`,
+`e140583`).
 
 Tahmin: F9 ≈ 2-3 hafta, F10 ≈ 2-3 hafta, F11 ≈ 1-2 hafta (UI primitive port
 yükü), F12 ≈ 1 hafta, F13 ≈ 1-2 hafta. Total ≈ 7-10 hafta tek dev.

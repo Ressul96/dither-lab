@@ -36,8 +36,8 @@ sistem için kendi md'sinde.
 | F13 | Graph editor UX overhaul (palette + shortcuts + mouse mode) | 1-2 hafta | ⬜ |
 | F14 | Stretch (procedural sources) | ~3 gün | ✅ F14.1 indi; F14.2 + F14.3 düşürüldü |
 
-F7 follow-up: dashed gizmo for falloff + crop/transform box gizmo — küçük
-PR'lar, F9 öncesi de inebilir.
+F7 follow-up: dashed gizmo for falloff (`4264cd8`) + crop/transform box gizmo
+(`e140583`) ✅ indi.
 
 F9–F14 detayları: [`shader_lab_plan.md`](shader_lab_plan.md). Karşılaştırma
 kaynağı: https://github.com/basementstudio/shader-lab. **Kullanıcı kararları
@@ -162,7 +162,9 @@ kadar Claude + `52c4269` / `0c77b8e` / `77e7e73` Codex).
 |---|---|---|---|
 | F7.1 | `viewer-overlay.js` SVG layer + screen ↔ stage koordinat dönüşümü | `gizmo_gelisme.md` | ✅ |
 | F7.2 | Point gizmo (chromatic-aberration, lens-distort) | `gizmo_gelisme.md` | ✅ |
-| F7.3 | Ring / angle gizmo'lar (halftone, chromatic-aberration directional, depth-of-field); bloom spatial param yok → atlandı; crop box ileri faza | `gizmo_gelisme.md` | ✅ |
+| F7.3 | Ring / angle gizmo'lar (halftone, chromatic-aberration directional, depth-of-field); bloom spatial param yok → atlandı | `gizmo_gelisme.md` | ✅ |
+| F7.4 | Dashed falloff outline (DoF ring gizmo) | `gizmo_gelisme.md` | ✅ `4264cd8` |
+| F7.5 | Crop / transform box gizmo (F7.3 P2'den çıkarıldı) | `gizmo_gelisme.md` | ✅ `e140583` |
 
 ---
 
