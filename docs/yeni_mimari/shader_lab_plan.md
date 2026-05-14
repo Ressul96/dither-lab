@@ -315,6 +315,8 @@ solo edge silinir. Solo aktifken bir badge gösterilir.
 | Marquee rectangle: dashed outline + subtle fill | Cancel'lanabilir (Escape) |
 | Cut path: dashed red stroke (mevcut görünüm korunur) | Mevcut |
 
+**Durum:** F13.5 indi (2026-05-14). Box select, Space pan ve Alt/Option cut cursor state'leri ayrıldı; cut-ready/drag sırasında scissors cursor gösteriliyor, cut path kırmızı dashed stroke'a taşındı. Marquee dashed outline + subtle fill F13.3a selection modeliyle aktif.
+
 **Kabul kriterleri:**
 1. Boş canvas'a sağ-tık → kategorize node picker açılır.
 2. Palette search box çalışır.

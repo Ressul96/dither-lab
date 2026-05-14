@@ -124,6 +124,7 @@ let gradientRampState = null;
 let nodePaletteSearchEl = null;
 let nodePaletteEmptyEl = null;
 let graphSpacePanActive = false;
+let graphCutCursorActive = false;
 let graphPointerInsideEditor = false;
 let graphKeyboardActive = false;
 let activeGraphMarquee = null;
@@ -533,13 +534,18 @@ function initViewportInteractions() {
     { passive: false }
   );
 
-  editorEl.addEventListener("pointerenter", () => {
+  editorEl.addEventListener("pointerenter", (e) => {
     graphPointerInsideEditor = true;
-    syncGraphSpacePanClass();
+    syncGraphCutCursorFromPointer(e);
+    syncGraphInteractionModeClasses();
+  });
+  editorEl.addEventListener("pointermove", (e) => {
+    syncGraphCutCursorFromPointer(e);
+    syncGraphInteractionModeClasses();
   });
   editorEl.addEventListener("pointerleave", () => {
     graphPointerInsideEditor = false;
-    syncGraphSpacePanClass();
+    syncGraphInteractionModeClasses();
   });
 
   editorEl.addEventListener("pointerdown", (e) => {
@@ -583,6 +589,7 @@ function startEdgeCut(e) {
   updatePath();
 
   document.body.classList.add("cutting-edges");
+  editorEl.classList.add("cutting");
   try {
     editorEl.setPointerCapture(e.pointerId);
   } catch {}
@@ -602,6 +609,7 @@ function startEdgeCut(e) {
     editorEl.removeEventListener("pointerup", onUp);
     editorEl.removeEventListener("pointercancel", onUp);
     document.body.classList.remove("cutting-edges");
+    editorEl.classList.remove("cutting");
     try {
       editorEl.releasePointerCapture(e.pointerId);
     } catch {}
@@ -901,11 +909,17 @@ function wireKeyboard() {
       return;
     }
 
+    if (event.key === "Alt" && shouldUseGraphCutCursor()) {
+      graphCutCursorActive = true;
+      syncGraphInteractionModeClasses();
+      return;
+    }
+
     if (isSpaceKey(event) && shouldUseGraphSpacePan()) {
       event.preventDefault();
       event.stopImmediatePropagation();
       graphSpacePanActive = true;
-      syncGraphSpacePanClass();
+      syncGraphInteractionModeClasses();
       return;
     }
 
@@ -969,16 +983,24 @@ function wireKeyboard() {
   });
 
   window.addEventListener("keyup", (event) => {
-    if (!isSpaceKey(event) || !graphSpacePanActive) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    graphSpacePanActive = false;
-    syncGraphSpacePanClass();
+    if (event.key === "Alt" && graphCutCursorActive) {
+      graphCutCursorActive = false;
+      syncGraphInteractionModeClasses();
+      return;
+    }
+
+    if (isSpaceKey(event) && graphSpacePanActive) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      graphSpacePanActive = false;
+      syncGraphInteractionModeClasses();
+    }
   });
 
   window.addEventListener("blur", () => {
     graphSpacePanActive = false;
-    syncGraphSpacePanClass();
+    graphCutCursorActive = false;
+    syncGraphInteractionModeClasses();
     cancelActiveGraphMarquee();
   });
 }
@@ -991,6 +1013,16 @@ function shouldUseGraphSpacePan() {
   return graphPointerInsideEditor || editorEl?.matches?.(":hover") || graphSpacePanActive;
 }
 
+function shouldUseGraphCutCursor() {
+  return graphPointerInsideEditor || editorEl?.matches?.(":hover") || graphCutCursorActive;
+}
+
+function syncGraphCutCursorFromPointer(event) {
+  const nextCutCursorActive = Boolean(event.altKey);
+  if (graphCutCursorActive === nextCutCursorActive) return;
+  graphCutCursorActive = nextCutCursorActive;
+}
+
 function shouldHandleGraphShortcut() {
   return (
     graphKeyboardActive ||
@@ -1000,8 +1032,9 @@ function shouldHandleGraphShortcut() {
   );
 }
 
-function syncGraphSpacePanClass() {
+function syncGraphInteractionModeClasses() {
   editorEl?.classList.toggle("space-panning", graphSpacePanActive && shouldUseGraphSpacePan());
+  editorEl?.classList.toggle("cut-ready", graphCutCursorActive && shouldUseGraphCutCursor());
 }
 
 function duplicateSelectedGraphNodes() {
