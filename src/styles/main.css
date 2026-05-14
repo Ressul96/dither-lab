@@ -9,6 +9,10 @@
 
   --border-subtle: #24242b;
   --border-strong: #2f2f38;
+  /* Translucent edge used by floating cards (dropzone, palette items, graph
+     nodes, player overlay). Lowered from 0.08 to 0.04 so the rim reads as a
+     faint hairline instead of a visible white border on dark surfaces. */
+  --card-edge: rgba(255, 255, 255, 0.04);
 
   --text-primary: #f0f0f2;
   --text-secondary: #9a9aa3;
@@ -297,35 +301,40 @@ body.resizing-y * {
 
 .panel-toggle,
 .workspace-edge-toggle {
-  width: 20px;
-  height: 64px;
+  width: 18px;
+  height: 68px;
   padding: 0;
   border-radius: var(--radius-handle);
-  border: 1px solid var(--border-subtle);
-  background: rgba(20, 20, 26, 0.92);
-  color: var(--text-secondary);
+  border: 1px solid var(--card-edge);
+  background: rgba(20, 20, 26, 0.78);
+  /* Chevron `‹` / `›` characters in the HTML are kept for a11y, but the
+     visual is the ::before pill below — hide the text without removing it
+     from accessibility name. */
+  color: transparent;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 0;
   line-height: 1;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(10px);
-  /* Micro-notch transition target — color, border, shadow follow the same
-     150ms curve so hover/focus feels coordinated. */
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(12px);
   transition:
     border-color 150ms ease,
-    color 150ms ease,
     background 150ms ease,
-    box-shadow 150ms ease;
+    box-shadow 150ms ease,
+    transform 150ms ease;
 }
 
 .panel-toggle:hover,
 .workspace-edge-toggle:hover {
-  border-color: rgba(255, 255, 255, 0.16);
-  color: var(--text-primary);
-  background: rgba(24, 24, 30, 0.96);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(28, 28, 36, 0.92);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.panel-toggle:active,
+.workspace-edge-toggle:active {
+  transform: scale(0.96);
 }
 
 /* Keyboard focus needs a visible affordance — the small handle disappears
@@ -364,16 +373,17 @@ body.resizing-y * {
 .workspace-edge-toggle::before {
   content: "";
   position: absolute;
-  width: 2px;
-  height: 22px;
+  width: 3px;
+  height: 26px;
   border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.22);
   transition: background 150ms ease, height 150ms ease;
 }
 
 .panel-toggle:hover::before,
 .workspace-edge-toggle:hover::before {
-  background: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.42);
+  height: 32px;
 }
 
 .panel-toggle:focus-visible::before,
@@ -838,7 +848,7 @@ body.resizing-y * {
   min-width: 240px;
   padding: 18px 22px;
   border-radius: var(--radius-shell);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--card-edge);
   background: rgba(20, 20, 26, 0.94);
   text-align: center;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
@@ -1168,7 +1178,7 @@ body.resizing-y * {
   width: 220px;
   padding: 16px 14px 12px;
   border-radius: var(--radius-shell);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--card-edge);
   background: rgba(18, 18, 22, 0.96);
   box-shadow:
     0 12px 24px rgba(0, 0, 0, 0.28),
@@ -1294,7 +1304,7 @@ body.resizing-y * {
   height: 20px;
   padding: 0;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--card-edge);
   background: rgba(255, 255, 255, 0.04);
   color: var(--node-family);
   font-size: 11px;
@@ -1637,7 +1647,7 @@ body.cutting-edges * {
   min-height: 28px;
   padding: 5px 9px;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--card-edge);
   background: rgba(22, 22, 28, 0.9);
   color: var(--text-primary);
   font-size: var(--text-base);
@@ -1918,7 +1928,7 @@ body.cutting-edges * {
   flex-direction: column;
   min-height: 0;
   transform: translateX(-50%);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid var(--card-edge);
   border-radius: var(--radius-player);
   background: rgba(15, 15, 18, 0.94);
   box-shadow:
