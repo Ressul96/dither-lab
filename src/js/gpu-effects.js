@@ -2000,6 +2000,11 @@ export function applyCrtGpu(input, params, context) {
 }
 
 export function applyBloomGpu(input, params) {
+  // F9.2: prefer the mip-pyramid path; the legacy single-pass disk stays as
+  // a fallback for the rare case where mip allocation or extra-texture
+  // binding fails (e.g. driver running out of FBO color attachments).
+  const multi = applyBloomMultiPass(input, params);
+  if (multi) return multi;
   return applyShaderPass("bloom", input, params);
 }
 
@@ -2079,6 +2084,10 @@ function createRenderer() {
   // pay nothing.
   let pingPongA = null;
   let pingPongB = null;
+  // F9.1 mip chain: array of decreasing-resolution framebuffers shared
+  // across multi-pass mip effects (bloom, halation, glow). Lazily grown
+  // by ensureMipChain on demand.
+  const mipChain = [];
 
   return {
     render(fragmentSource, input, uniforms, textures) {
@@ -2281,6 +2290,122 @@ function createRenderer() {
       ctx.drawImage(canvas, 0, 0);
       return output;
     },
+    // Low-level single-pass: read from sourceTexture (already uploaded) and
+    // write into targetFb (or canvas if null). Internal helper for the mip
+    // pipeline — `options.extraTextures` binds additional samplers starting
+    // at TEXTURE1, and `options.additive` enables ONE/ONE blending so the
+    // mip upsample-and-accumulate step can reuse this entry point.
+    renderPass(fragmentSource, sourceTexture, targetWidth, targetHeight, targetFb, options = {}) {
+      const program = getProgram(gl, programs, vertexShader, fragmentSource);
+      if (!program) return false;
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, targetFb ? targetFb.fbo : null);
+      if (!targetFb) {
+        if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+          canvas.width = targetWidth;
+          canvas.height = targetHeight;
+        }
+      }
+      gl.viewport(0, 0, targetWidth, targetHeight);
+
+      if (options.additive) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+      } else {
+        gl.disable(gl.BLEND);
+      }
+
+      gl.useProgram(program.handle);
+      gl.bindVertexArray(vao);
+      const positionLocation = gl.getAttribLocation(program.handle, "a_position");
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.enableVertexAttribArray(positionLocation);
+      gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, sourceTexture);
+      gl.uniform1i(getUniformLocation(gl, program, "u_image"), 0);
+      // Source resolution helps box-downsample compute the correct texel
+      // offsets; when omitted, fall back to target so single-resolution
+      // chains keep their existing behaviour.
+      gl.uniform2f(
+        getUniformLocation(gl, program, "u_resolution"),
+        options.sourceWidth ?? targetWidth,
+        options.sourceHeight ?? targetHeight,
+      );
+
+      let unit = 1;
+      if (options.extraTextures) {
+        for (const [name, tex] of Object.entries(options.extraTextures)) {
+          if (!tex) continue;
+          gl.activeTexture(gl.TEXTURE0 + unit);
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.uniform1i(getUniformLocation(gl, program, name), unit);
+          unit++;
+        }
+      }
+
+      applyUniforms(gl, program, options.uniforms ?? {});
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      if (options.additive) gl.disable(gl.BLEND);
+      return true;
+    },
+    clearFramebuffer(targetFb, color = [0, 0, 0, 0]) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, targetFb ? targetFb.fbo : null);
+      if (targetFb) gl.viewport(0, 0, targetFb.width, targetFb.height);
+      gl.clearColor(color[0], color[1], color[2], color[3]);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    },
+    // Lazily grow / resize the shared mip chain so it has at least `levels`
+    // entries sized as base, base/2, base/4, ... Re-uses framebuffers across
+    // calls; failed entries return null so the caller can bail.
+    ensureMipChain(baseWidth, baseHeight, levels) {
+      for (let i = 0; i < levels; i++) {
+        const w = Math.max(1, baseWidth >> i);
+        const h = Math.max(1, baseHeight >> i);
+        if (!mipChain[i]) {
+          mipChain[i] = createFramebuffer(gl, w, h);
+        } else {
+          mipChain[i] = resizeFramebuffer(gl, mipChain[i], w, h);
+        }
+        if (!mipChain[i]) return null;
+      }
+      return mipChain;
+    },
+    // Upload an input source image into the renderer's main input texture,
+    // returning the WebGLTexture handle so callers (mip pipelines, etc.)
+    // can read from it before any draw call. UNPACK_FLIP_Y matches the rest
+    // of the renderer so shaders keep a single UV convention.
+    uploadInput(input) {
+      if (!input?.width || !input?.height) return null;
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, input);
+      return texture;
+    },
+    // Copy the canvas backing store into a fresh 2D output canvas so the
+    // rest of the graph runtime keeps working with HTMLCanvasElements.
+    captureOutput(width, height) {
+      const output = createProcessingCanvas(width, height);
+      const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
+      if (!ctx) return null;
+      ctx.drawImage(canvas, 0, 0);
+      return output;
+    },
+    resizeBackingCanvas(width, height) {
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+    },
   };
 }
 
@@ -2402,6 +2527,158 @@ export function applyBlurGpu(input, params) {
     ],
     input,
   );
+}
+
+// F9.1 + F9.2 multi-pass mip bloom. Threshold the source into a bright
+// pyramid, downsample N levels at 2x2 box average, then bilinear-upsample
+// back up while additively accumulating each level into the next, and
+// finally composite the pyramid's level 0 over the original. Replaces the
+// single-pass golden-spiral disk for moderate radii where the ring artefact
+// shows up; the legacy shader is kept as a fallback when WebGL2 setup fails.
+const BLOOM_THRESHOLD_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D u_image;
+uniform float u_threshold;
+uniform float u_knee;
+uniform float u_saturation;
+in vec2 v_uv;
+out vec4 out_color;
+const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+void main() {
+  vec3 c = texture(u_image, v_uv).rgb;
+  float l = dot(c, LUMA);
+  vec3 sat = mix(vec3(l), c, u_saturation);
+  float lo = max(u_threshold - u_knee, 0.0);
+  float hi = u_threshold + u_knee + 0.001;
+  float w = smoothstep(lo, hi, l);
+  out_color = vec4(sat * w, 1.0);
+}
+`;
+
+const BLOOM_DOWNSAMPLE_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D u_image;
+uniform vec2 u_resolution; // source resolution; offsets are 0.5 texels of it
+in vec2 v_uv;
+out vec4 out_color;
+void main() {
+  vec2 texel = 1.0 / u_resolution;
+  vec2 o = texel * 0.5;
+  vec4 c = texture(u_image, v_uv + vec2(-o.x, -o.y));
+  c     += texture(u_image, v_uv + vec2( o.x, -o.y));
+  c     += texture(u_image, v_uv + vec2(-o.x,  o.y));
+  c     += texture(u_image, v_uv + vec2( o.x,  o.y));
+  out_color = c * 0.25;
+}
+`;
+
+const BLOOM_UPSAMPLE_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D u_image;
+in vec2 v_uv;
+out vec4 out_color;
+void main() {
+  // Bilinear filtering on the smaller mip handles the smooth upscale; the
+  // host pass enables additive blending so this output stacks onto the
+  // higher-resolution mip it is being written into.
+  out_color = texture(u_image, v_uv);
+}
+`;
+
+const BLOOM_COMPOSITE_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D u_image;   // original source
+uniform sampler2D u_bloom;   // accumulated bloom mip0
+uniform float u_intensity;
+uniform float u_opacity;
+in vec2 v_uv;
+out vec4 out_color;
+void main() {
+  vec3 src = texture(u_image, v_uv).rgb;
+  vec3 bloom = texture(u_bloom, v_uv).rgb;
+  vec3 lit = src + bloom * u_intensity;
+  out_color = vec4(mix(src, clamp(lit, 0.0, 1.0), clamp(u_opacity, 0.0, 1.0)), 1.0);
+}
+`;
+
+function bloomMipLevelsForRadius(radius) {
+  // Each downsample halves the effective blur radius covered by the box
+  // filter, so log2(radius)+1 levels comfortably reach a radius of `radius`
+  // pixels in the original image. Capped at 6 to bound memory + GPU work.
+  return Math.max(2, Math.min(6, Math.ceil(Math.log2(Math.max(2, radius))) + 1));
+}
+
+export function applyBloomMultiPass(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const radius = clamp(Number(params?.radius ?? 16), 0, 64);
+  const intensity = clamp(Number(params?.intensity ?? 100) / 100, 0, 4);
+  if (radius <= 0 || intensity <= 0) return input;
+
+  const activeRenderer = getRenderer();
+  if (!activeRenderer) return null;
+  // Renderer may have been built before mip support landed — only takeover
+  // when the helper surface is present so older code paths still load.
+  if (
+    typeof activeRenderer.ensureMipChain !== "function" ||
+    typeof activeRenderer.renderPass !== "function" ||
+    typeof activeRenderer.uploadInput !== "function" ||
+    typeof activeRenderer.captureOutput !== "function"
+  ) {
+    return null;
+  }
+
+  const levels = bloomMipLevelsForRadius(radius);
+  const mip = activeRenderer.ensureMipChain(input.width, input.height, levels);
+  if (!mip || mip.length < levels) return null;
+
+  const sourceTex = activeRenderer.uploadInput(input);
+  if (!sourceTex) return null;
+
+  const thresholdUniforms = {
+    u_threshold: clamp(Number(params?.threshold ?? 70) / 100, 0, 1),
+    u_knee: clamp(Number(params?.knee ?? 20) / 100, 0, 0.5),
+    u_saturation: clamp(Number(params?.saturation ?? 100) / 100, 0, 2),
+  };
+
+  // Threshold pass: source → mip[0] (full res, bright pixels only)
+  if (!activeRenderer.renderPass(BLOOM_THRESHOLD_SHADER, sourceTex, mip[0].width, mip[0].height, mip[0], {
+    uniforms: thresholdUniforms,
+  })) return null;
+
+  // Downsample chain: mip[i] → mip[i+1] (4-tap box average)
+  for (let i = 0; i < levels - 1; i++) {
+    const src = mip[i];
+    const dst = mip[i + 1];
+    if (!activeRenderer.renderPass(BLOOM_DOWNSAMPLE_SHADER, src.texture, dst.width, dst.height, dst, {
+      sourceWidth: src.width,
+      sourceHeight: src.height,
+    })) return null;
+  }
+
+  // Upsample-and-accumulate: mip[i+1] sampled bilinearly, additively blended
+  // into mip[i]. The smaller mip's contents (already-accumulated wider blur)
+  // get folded into the next level up; the loop ends with mip[0] holding the
+  // full progressively-blurred bloom.
+  for (let i = levels - 2; i >= 0; i--) {
+    const src = mip[i + 1];
+    const dst = mip[i];
+    if (!activeRenderer.renderPass(BLOOM_UPSAMPLE_SHADER, src.texture, dst.width, dst.height, dst, {
+      additive: true,
+    })) return null;
+  }
+
+  // Composite: source + mip[0] → canvas, then capture to a 2D canvas for
+  // the rest of the graph runtime.
+  activeRenderer.resizeBackingCanvas(input.width, input.height);
+  if (!activeRenderer.renderPass(BLOOM_COMPOSITE_SHADER, sourceTex, input.width, input.height, null, {
+    uniforms: {
+      u_intensity: intensity,
+      u_opacity: clamp(Number(params?.opacity ?? 100) / 100, 0, 1),
+    },
+    extraTextures: { u_bloom: mip[0].texture },
+  })) return null;
+
+  return activeRenderer.captureOutput(input.width, input.height);
 }
 
 function getProgram(gl, programs, vertexShader, fragmentSource) {

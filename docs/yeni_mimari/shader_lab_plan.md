@@ -48,8 +48,8 @@ multi-pass etkin renderer haline getirir. **Kullanıcının kalite/performans
 | PR | Kapsam | Notlar |
 |---|---|---|
 | F9.0 | `gpu-effects.js`'e ping-pong FBO altyapısı (`createFramebuffer`, swap A/B) | **✅ İndi (2026-05-14).** `applyShaderChain(passes, input)` export'u eklendi; iki RGBA8 framebuffer lazy alloc + resize, pass'ler arası ping-pong swap, son pass canvas backing'e yazıp 2D copy ile output döner. `applyShaderPass` legacy path'i değişmedi |
-| F9.1 | Mip pyramid downsample/upsample helper (RGBA8 önce; HDR sonra) | `gl.generateMipmap` + manuel level FBO'ları |
-| F9.2 | Bloom multi-pass (threshold → downsample N kez → upsample bilinear → add back) | Single-pass disk shader'ı fallback olarak kalsın |
+| F9.1 | Mip pyramid downsample/upsample helper (RGBA8 önce; HDR sonra) | **✅ İndi (2026-05-14).** Renderer'a `ensureMipChain(w, h, levels)`, `renderPass` (low-level, additive + extraTextures destekli), `uploadInput`, `captureOutput`, `resizeBackingCanvas` eklendi. Mip FBO'ları renderer ömründe paylaşılıyor |
+| F9.2 | Bloom multi-pass (threshold → downsample N kez → upsample bilinear → add back) | **✅ İndi (2026-05-14).** `applyBloomMultiPass`: threshold → 4-tap box downsample → bilinear upsample-and-additive-accumulate → composite. Levels = ceil(log2(radius))+1 (cap 6). `applyBloomGpu` artık multi-pass'i deneyip legacy single-pass disk shader'ına düşüyor. 256×256 @ ~0.37ms vs ~4.14ms single-pass (≈11× hızlanma) |
 | F9.3 | Halation aynı multi-pass altyapısı üzerine taşınsın | Tint hâlâ luma-only sample'lar üstünde uygulanır |
 | F9.4 | Glare / star-glow streaks: directional downsample chain | Streak iterasyonları mip seviyelerine bindirilir |
 | F9.5 | Blur node (Gauss): separable two-pass (H, V) — F9.0 altyapısı kullanır | **✅ İndi (2026-05-14).** `applyBlurGpu` 33-tap separable Gaussian; `applyShaderChain` üzerinde H + V iki pass. Sigma = radius/2 (3σ kuralı). MAX_RADIUS = 16; daha büyük radius'larda `image-ops.applyBlurNode` mevcut `blurImage` (ctx.filter / box blur) fallback'ine düşer. 256×256 @ ~0.26ms/iter ölçüldü |
