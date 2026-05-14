@@ -47,7 +47,7 @@ multi-pass etkin renderer haline getirir. **Kullanıcının kalite/performans
 
 | PR | Kapsam | Notlar |
 |---|---|---|
-| F9.0 | `gpu-effects.js`'e ping-pong FBO altyapısı (`createFramebuffer`, swap A/B) | Mevcut tek-pass `applyShaderPass` üstüne, opt-in `applyShaderChain(passes)` ekle |
+| F9.0 | `gpu-effects.js`'e ping-pong FBO altyapısı (`createFramebuffer`, swap A/B) | **✅ İndi (2026-05-14).** `applyShaderChain(passes, input)` export'u eklendi; iki RGBA8 framebuffer lazy alloc + resize, pass'ler arası ping-pong swap, son pass canvas backing'e yazıp 2D copy ile output döner. `applyShaderPass` legacy path'i değişmedi |
 | F9.1 | Mip pyramid downsample/upsample helper (RGBA8 önce; HDR sonra) | `gl.generateMipmap` + manuel level FBO'ları |
 | F9.2 | Bloom multi-pass (threshold → downsample N kez → upsample bilinear → add back) | Single-pass disk shader'ı fallback olarak kalsın |
 | F9.3 | Halation aynı multi-pass altyapısı üzerine taşınsın | Tint hâlâ luma-only sample'lar üstünde uygulanır |

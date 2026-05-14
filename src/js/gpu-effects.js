@@ -2074,6 +2074,11 @@ function createRenderer() {
   const texture = gl.createTexture();
   const extraTextures = new Map(); // uniformName -> WebGLTexture, reused per pass
   const programs = new Map();
+  // F9.0 ping-pong: two RGBA8 framebuffers re-used across multi-pass chains.
+  // Allocated lazily on the first renderChain call so single-pass effects
+  // pay nothing.
+  let pingPongA = null;
+  let pingPongB = null;
 
   return {
     render(fragmentSource, input, uniforms, textures) {
@@ -2197,7 +2202,131 @@ function createRenderer() {
       ctx.drawImage(canvas, 0, 0);
       return output;
     },
+    renderChain(passes, input) {
+      if (!input?.width || !input?.height) return null;
+      if (!Array.isArray(passes) || passes.length === 0) return null;
+
+      const width = input.width;
+      const height = input.height;
+
+      pingPongA = pingPongA
+        ? resizeFramebuffer(gl, pingPongA, width, height)
+        : createFramebuffer(gl, width, height);
+      pingPongB = pingPongB
+        ? resizeFramebuffer(gl, pingPongB, width, height)
+        : createFramebuffer(gl, width, height);
+      if (!pingPongA || !pingPongB) return null;
+
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      // Upload the source image once into the main input texture; subsequent
+      // passes sample the previous FBO's color attachment instead.
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, input);
+
+      let readTex = texture; // input texture for the first pass
+      let writeFb = pingPongA;
+      let otherFb = pingPongB;
+
+      for (let i = 0; i < passes.length; i++) {
+        const pass = passes[i];
+        const isLast = i === passes.length - 1;
+        const program = getProgram(gl, programs, vertexShader, pass.fragmentSource);
+        if (!program) return null;
+
+        // Final pass writes to the default framebuffer (canvas backing store)
+        // so the existing 2D copy path can pick it up. Intermediate passes
+        // write into the alternating FBO so the next iteration can sample it.
+        gl.bindFramebuffer(gl.FRAMEBUFFER, isLast ? null : writeFb.fbo);
+        gl.viewport(0, 0, width, height);
+
+        gl.useProgram(program.handle);
+        gl.bindVertexArray(vao);
+        const positionLocation = gl.getAttribLocation(program.handle, "a_position");
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.enableVertexAttribArray(positionLocation);
+        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, readTex);
+        gl.uniform1i(getUniformLocation(gl, program, "u_image"), 0);
+        gl.uniform2f(getUniformLocation(gl, program, "u_resolution"), width, height);
+
+        applyUniforms(gl, program, pass.uniforms ?? {});
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        if (!isLast) {
+          readTex = writeFb.texture;
+          const next = otherFb;
+          otherFb = writeFb;
+          writeFb = next;
+        }
+      }
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+      const output = createProcessingCanvas(width, height);
+      const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
+      if (!ctx) return null;
+      ctx.drawImage(canvas, 0, 0);
+      return output;
+    },
   };
+}
+
+function createFramebuffer(gl, width, height) {
+  const fbo = gl.createFramebuffer();
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  // Without a complete attachment subsequent draws no-op silently; fail loud
+  // so a broken extension or driver state surfaces here, not later.
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteTexture(tex);
+    gl.deleteFramebuffer(fbo);
+    return null;
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { fbo, texture: tex, width, height };
+}
+
+function resizeFramebuffer(gl, fb, width, height) {
+  if (!fb) return null;
+  if (fb.width === width && fb.height === height) return fb;
+  gl.bindTexture(gl.TEXTURE_2D, fb.texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  fb.width = width;
+  fb.height = height;
+  return fb;
+}
+
+// Opt-in multi-pass chain runner. Each pass is `{ fragmentSource, uniforms }`;
+// passes sample the prior step from `u_image` and `u_resolution` is set to the
+// input image size for every step. Single-pass arrays behave identically to
+// the canvas the legacy `render` path produces.
+export function applyShaderChain(passes, input) {
+  if (!input?.width || !input?.height) return null;
+  if (!Array.isArray(passes) || passes.length === 0) return null;
+  const activeRenderer = getRenderer();
+  if (!activeRenderer) return null;
+  return activeRenderer.renderChain(passes, input);
 }
 
 function getProgram(gl, programs, vertexShader, fragmentSource) {
