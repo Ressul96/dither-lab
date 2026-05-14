@@ -35,6 +35,11 @@ sistem için kendi md'sinde.
 | F12 | Export polish + preset'ler | ~1 hafta | ⬜ |
 | F13 | Graph editor UX overhaul (palette + shortcuts + mouse mode) | 1-2 hafta | ⬜ |
 | F14 | Stretch (procedural sources) | ~3 gün | ✅ F14.1 indi; F14.2 + F14.3 düşürüldü |
+| F17 | Param-history (undo) subsystem | ~1 hafta | ⬜ slider + gizmo + color picker + curve commits undo'ya bağlanır |
+| F18 | Procedural noise source nodes (perlin / simplex / value) | ~2-3 gün | ⬜ Sadece F18.2 alındı; watch folder + multi-source comp ertelendi |
+| F22 | Splash screen + startup (New project / Recent projects) | ~3 gün | ⬜ |
+| F23 | UI polish: timeline minimize/drag, hide buttons, card stroke, sliders, xy pad drag | ~1 hafta | ⬜ Multi-item; her madde ayrı küçük PR |
+| F24 | Node graph workflow: group in/out, gradient map endpoints, default pan, file drag-drop | ~1 hafta | ⬜ Multi-item; her madde ayrı küçük PR |
 
 F7 follow-up: dashed gizmo for falloff (`4264cd8`) + crop/transform box gizmo
 (`e140583`) ✅ indi.
