@@ -2013,6 +2013,10 @@ export function applyStarGlowGpu(input, params) {
 }
 
 export function applyHalationGpu(input, params) {
+  // F9.3: prefer the shared mip-pyramid path; legacy single-pass disk stays
+  // as the fallback for the rare case where mip allocation fails.
+  const multi = applyHalationMultiPass(input, params);
+  if (multi) return multi;
   return applyShaderPass("halation", input, params);
 }
 
@@ -2608,16 +2612,12 @@ function bloomMipLevelsForRadius(radius) {
   return Math.max(2, Math.min(6, Math.ceil(Math.log2(Math.max(2, radius))) + 1));
 }
 
-export function applyBloomMultiPass(input, params) {
-  if (!input?.width || !input?.height) return null;
-  const radius = clamp(Number(params?.radius ?? 16), 0, 64);
-  const intensity = clamp(Number(params?.intensity ?? 100) / 100, 0, 4);
-  if (radius <= 0 || intensity <= 0) return input;
-
+// Shared mip-bloom pipeline. The threshold step is parameterised so bloom and
+// halation can drop in their own threshold shader + uniforms; everything after
+// it (downsample chain → upsample-and-accumulate → composite) is identical.
+function runBrightMipPipeline(input, thresholdShader, thresholdUniforms, radius, intensity, opacity) {
   const activeRenderer = getRenderer();
   if (!activeRenderer) return null;
-  // Renderer may have been built before mip support landed — only takeover
-  // when the helper surface is present so older code paths still load.
   if (
     typeof activeRenderer.ensureMipChain !== "function" ||
     typeof activeRenderer.renderPass !== "function" ||
@@ -2634,18 +2634,10 @@ export function applyBloomMultiPass(input, params) {
   const sourceTex = activeRenderer.uploadInput(input);
   if (!sourceTex) return null;
 
-  const thresholdUniforms = {
-    u_threshold: clamp(Number(params?.threshold ?? 70) / 100, 0, 1),
-    u_knee: clamp(Number(params?.knee ?? 20) / 100, 0, 0.5),
-    u_saturation: clamp(Number(params?.saturation ?? 100) / 100, 0, 2),
-  };
-
-  // Threshold pass: source → mip[0] (full res, bright pixels only)
-  if (!activeRenderer.renderPass(BLOOM_THRESHOLD_SHADER, sourceTex, mip[0].width, mip[0].height, mip[0], {
+  if (!activeRenderer.renderPass(thresholdShader, sourceTex, mip[0].width, mip[0].height, mip[0], {
     uniforms: thresholdUniforms,
   })) return null;
 
-  // Downsample chain: mip[i] → mip[i+1] (4-tap box average)
   for (let i = 0; i < levels - 1; i++) {
     const src = mip[i];
     const dst = mip[i + 1];
@@ -2655,10 +2647,6 @@ export function applyBloomMultiPass(input, params) {
     })) return null;
   }
 
-  // Upsample-and-accumulate: mip[i+1] sampled bilinearly, additively blended
-  // into mip[i]. The smaller mip's contents (already-accumulated wider blur)
-  // get folded into the next level up; the loop ends with mip[0] holding the
-  // full progressively-blurred bloom.
   for (let i = levels - 2; i >= 0; i--) {
     const src = mip[i + 1];
     const dst = mip[i];
@@ -2667,18 +2655,76 @@ export function applyBloomMultiPass(input, params) {
     })) return null;
   }
 
-  // Composite: source + mip[0] → canvas, then capture to a 2D canvas for
-  // the rest of the graph runtime.
   activeRenderer.resizeBackingCanvas(input.width, input.height);
   if (!activeRenderer.renderPass(BLOOM_COMPOSITE_SHADER, sourceTex, input.width, input.height, null, {
-    uniforms: {
-      u_intensity: intensity,
-      u_opacity: clamp(Number(params?.opacity ?? 100) / 100, 0, 1),
-    },
+    uniforms: { u_intensity: intensity, u_opacity: opacity },
     extraTextures: { u_bloom: mip[0].texture },
   })) return null;
 
   return activeRenderer.captureOutput(input.width, input.height);
+}
+
+export function applyBloomMultiPass(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const radius = clamp(Number(params?.radius ?? 16), 0, 64);
+  const intensity = clamp(Number(params?.intensity ?? 100) / 100, 0, 4);
+  if (radius <= 0 || intensity <= 0) return input;
+  const opacity = clamp(Number(params?.opacity ?? 100) / 100, 0, 1);
+  return runBrightMipPipeline(input, BLOOM_THRESHOLD_SHADER, {
+    u_threshold: clamp(Number(params?.threshold ?? 70) / 100, 0, 1),
+    u_knee: clamp(Number(params?.knee ?? 20) / 100, 0, 0.5),
+    u_saturation: clamp(Number(params?.saturation ?? 100) / 100, 0, 2),
+  }, radius, intensity, opacity);
+}
+
+// F9.3 Halation multi-pass. Identical mip pipeline to bloom, but the
+// threshold pass tints luma-weighted bright pixels with u_tint so the
+// classic red/orange halation rim falls out of the same FBO chain.
+const HALATION_THRESHOLD_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D u_image;
+uniform float u_threshold;
+uniform float u_knee;
+uniform float u_saturation;
+uniform vec3 u_tint;
+in vec2 v_uv;
+out vec4 out_color;
+const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+void main() {
+  vec3 c = texture(u_image, v_uv).rgb;
+  float l = dot(c, LUMA);
+  // Saturation pre-mix: 0 collapses to pure luma * tint (classic film
+  // halation), 1 keeps source colour and just multiplies by tint, > 1
+  // supersaturates. Luma stays the threshold input either way so the
+  // bright cutoff feels the same as bloom.
+  vec3 sat = mix(vec3(l), c, u_saturation);
+  vec3 weighted = sat * u_tint;
+  float lo = max(u_threshold - u_knee, 0.0);
+  float hi = u_threshold + u_knee + 0.001;
+  float w = smoothstep(lo, hi, l);
+  out_color = vec4(weighted * w, 1.0);
+}
+`;
+
+export function applyHalationMultiPass(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const radius = clamp(Number(params?.radius ?? 24), 0, 96);
+  const intensity = clamp(Number(params?.intensity ?? 120) / 100, 0, 4);
+  if (radius <= 0 || intensity <= 0) return input;
+  const opacity = clamp(Number(params?.opacity ?? 100) / 100, 0, 1);
+  const tint = params?.tintColor
+    ? hexToRgb01(params.tintColor, [1, 0.47, 0.24])
+    : [
+        clamp(Number(params?.tintR ?? 255) / 255, 0, 1),
+        clamp(Number(params?.tintG ?? 120) / 255, 0, 1),
+        clamp(Number(params?.tintB ?? 60) / 255, 0, 1),
+      ];
+  return runBrightMipPipeline(input, HALATION_THRESHOLD_SHADER, {
+    u_threshold: clamp(Number(params?.threshold ?? 70) / 100, 0, 1),
+    u_knee: clamp(Number(params?.knee ?? 20) / 100, 0, 0.5),
+    u_saturation: clamp(Number(params?.saturation ?? 100) / 100, 0, 2),
+    u_tint: tint,
+  }, radius, intensity, opacity);
 }
 
 function getProgram(gl, programs, vertexShader, fragmentSource) {
