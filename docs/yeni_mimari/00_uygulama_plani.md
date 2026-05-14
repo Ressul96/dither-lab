@@ -34,7 +34,7 @@ sistem için kendi md'sinde.
 | F11 | Composite, scene grading + UI primitive parity | 1-2 hafta | ⬜ |
 | F12 | Export polish + preset'ler | ~1 hafta | ⬜ |
 | F13 | Graph editor UX overhaul (palette + shortcuts + mouse mode) | 1-2 hafta | ⬜ |
-| F14 | Stretch (custom-shader, procedural sources) | açık uçlu | ⬜ |
+| F14 | Stretch (procedural sources) | ~3 gün | ✅ F14.1 indi; F14.2 + F14.3 düşürüldü |
 
 F7 follow-up: dashed gizmo for falloff + crop/transform box gizmo — küçük
 PR'lar, F9 öncesi de inebilir.

@@ -326,17 +326,20 @@ solo edge silinir. Solo aktifken bir badge gösterilir.
 
 ---
 
-## 6. F14 — Stretch (custom-shader + procedural sources)
+## 6. F14 — Stretch (procedural sources)
 
 | PR | Kapsam | Notlar |
 |---|---|---|
 | F14.1 | `gradient` procedural source (mesh-gradient'in yanı sıra linear/radial/conic) | Üç ayrı shader; param schema benzer |
-| F14.2 | (Opsiyonel) `custom-shader` node type: kullanıcı GLSL fragment'ı yapıştırır, uniform UI auto-generated | `parameter-schema.ts` paterni; safety: compile error inline gösterimi. Advanced — son sırada |
-| F14.3 | (Opsiyonel) Fluid simulation source | Heavy; gerçekten ihtiyaç olursa |
 
 **Durum:** F14.1 indi (2026-05-14). `gradient` procedural source eklendi: Linear/Radial/Conic mode, ortak gradient ramp editörü, center/angle/repeat/shift/output size kontrolleri ve GPU source shader + CPU fallback aynı node üstünden çalışıyor.
 
-**Kapsam dışı bırakılanlar (kullanıcı kararı):** audio-reactive bindings.
+**Faz durumu:** ✅ Tamamlandı (2026-05-14). F14.1 ile faz kapandı.
+
+**Kapsam dışı bırakılanlar (kullanıcı kararı):**
+- Audio-reactive bindings.
+- F14.2 `custom-shader` node — gereksiz: node'lar kod yoluyla ekleniyor, son kullanıcının inline GLSL yazmasına ihtiyaç yok (2026-05-14).
+- F14.3 fluid simulation source — gereksiz, ağır ve ihtiyaç yok (2026-05-14).
 
 ---
 
@@ -374,14 +377,13 @@ yolumuzu güçlendirmek" üzerinedir.
 4. **F12 — Export polish**.
 5. **F13 — Graph editor UX overhaul**: search, sağ-tık menü, shortcut'lar
    (G/M/X/T), mouse mode rework (box select on plain left-click).
-6. **F14 — Stretch**, opsiyonel.
+6. **F14 — Stretch** (procedural sources). ✅ F14.1 indi; F14.2 + F14.3 kullanıcı kararıyla düşürüldü.
 
 F7 follow-up'ları (dashed gizmo, crop/transform box) küçük PR'lar olarak
 F9'dan önce de inebilir.
 
 Tahmin: F9 ≈ 2-3 hafta, F10 ≈ 2-3 hafta, F11 ≈ 1-2 hafta (UI primitive port
-yükü), F12 ≈ 1 hafta, F13 ≈ 1-2 hafta, F14 açık uçlu. Total ≈ 7-10 hafta
-tek dev.
+yükü), F12 ≈ 1 hafta, F13 ≈ 1-2 hafta. Total ≈ 7-10 hafta tek dev.
 
 ---
 
@@ -399,5 +401,3 @@ tek dev.
 * **Solo (T) davranışı** — başka node solo'da iken T'ye tekrar basınca
   diğeri unsolo olsun mu, yoksa yeni solo'ya mı geçsin? (Önerim: yeni
   solo'ya geç; tek aktif solo aynı anda.)
-* **Custom-shader user-API'si** (F14.2) güvenlik + compile error UX'i nedeniyle
-  ileri tarihe bırakılabilir.
