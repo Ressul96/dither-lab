@@ -3722,6 +3722,15 @@ function handleCurveChannelClick(control) {
 }
 
 function onInspectorPointerDown(event) {
+  // AE-style scrubbable number input: drag horizontally to change the value
+  // by step per pixel. Skip when the input already has focus so typing into
+  // it still works normally.
+  const numEdit = event.target.closest(".range-field .range-row .num-edit");
+  if (numEdit && document.activeElement !== numEdit) {
+    startNumEditScrub(event, numEdit);
+    return;
+  }
+
   const gradientRampStop = event.target.closest("[data-gradient-ramp-stop]");
   if (gradientRampStop) {
     startGradientRampStopDrag(event, gradientRampStop);
@@ -3851,6 +3860,64 @@ function curvePointsEqual(a, b) {
     if (a[i].x !== b[i].x || a[i].y !== b[i].y) return false;
   }
   return true;
+}
+
+function startNumEditScrub(event, input) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+
+  const min = Number(input.min);
+  const max = Number(input.max);
+  const startValue = Number(input.value);
+  const range = Math.max(1, Math.abs(max - min));
+  // One pixel of horizontal drag moves the value by 1/200th of the range,
+  // with Shift = 10x for big-step scrubbing. For 0..100 sliders that's
+  // ~0.5 / px, fine for ~70px of travel covering the full range; users who
+  // need finer control can still type directly into the field.
+  const baseStep = range / 200;
+
+  if (!Number.isFinite(startValue)) return;
+
+  let pointerLocked = false;
+  try {
+    input.requestPointerLock?.();
+    pointerLocked = true;
+  } catch {
+    pointerLocked = false;
+  }
+
+  document.body.classList.add("scrubbing-num-edit");
+  let accumulated = 0;
+
+  const onMove = (ev) => {
+    const deltaPx = pointerLocked ? ev.movementX : ev.clientX - event.clientX;
+    accumulated = pointerLocked ? accumulated + deltaPx : deltaPx;
+    const stepMultiplier = ev.shiftKey ? 10 : 1;
+    const nextRaw = startValue + accumulated * baseStep * stepMultiplier;
+    const next = Math.max(min, Math.min(max, nextRaw));
+    if (input.value !== String(next)) {
+      input.value = String(next);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  };
+
+  const onUp = () => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.removeEventListener("pointercancel", onUp);
+    document.body.classList.remove("scrubbing-num-edit");
+    if (pointerLocked) {
+      try {
+        document.exitPointerLock?.();
+      } catch {}
+    }
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("pointercancel", onUp);
 }
 
 function startXyPadInteraction(event, pad) {
@@ -5510,6 +5577,7 @@ function renderEmptyInspector() {
 function renderRangeField(label, key, value, min, max, _readout) {
   const safeKey = escapeHtml(key);
   const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+  const fillPct = sliderFillPercent(numericValue, min, max);
   return `
     <div class="field range-field">
       <label>
@@ -5528,6 +5596,7 @@ function renderRangeField(label, key, value, min, max, _readout) {
           value="${numericValue}"
           data-node-param="${safeKey}"
           data-input-kind="range"
+          style="--slider-fill: ${fillPct}%"
         />
         <input
           type="number"
@@ -5541,6 +5610,17 @@ function renderRangeField(label, key, value, min, max, _readout) {
       </div>
     </div>
   `;
+}
+
+function sliderFillPercent(value, min, max) {
+  const numericMin = Number(min);
+  const numericMax = Number(max);
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericMin) || !Number.isFinite(numericMax) || numericMax === numericMin) {
+    return 50;
+  }
+  const pct = ((numericValue - numericMin) / (numericMax - numericMin)) * 100;
+  return Math.max(0, Math.min(100, pct));
 }
 
 function renderLayerRangeField(label, key, value, min, max, _readout) {
@@ -6516,7 +6596,17 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
-function updateInlineReadout(_control) {}
+function updateInlineReadout(control) {
+  // F23 AE-style fill: write --slider-fill on the range input so the CSS
+  // `linear-gradient` track shows the filled portion up to the thumb.
+  if (!control || control.type !== "range") return;
+  const min = Number(control.min);
+  const max = Number(control.max);
+  const value = Number(control.value);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(value) || max === min) return;
+  const pct = clamp((value - min) / (max - min), 0, 1) * 100;
+  control.style.setProperty("--slider-fill", `${pct}%`);
+}
 
 function getSocketPoint(node, kind, socketName) {
   if (kind === "input" && typeof socketName === "string" && socketName.startsWith("param:")) {
