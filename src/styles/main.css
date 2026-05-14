@@ -1927,7 +1927,12 @@ body.cutting-edges * {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  transform: translateX(-50%);
+  /* --drag-x / --drag-y let the user pin the overlay anywhere on screen via
+     the top edge drag handle; they reset to 0 on reload (intentional —
+     pinning is meant for a single session, not project persistence). */
+  --drag-x: 0px;
+  --drag-y: 0px;
+  transform: translate(calc(-50% + var(--drag-x)), var(--drag-y));
   border: 1px solid var(--card-edge);
   border-radius: var(--radius-player);
   background: rgba(15, 15, 18, 0.94);
@@ -1946,6 +1951,34 @@ body.cutting-edges * {
 .player-card.is-collapsed {
   width: min(580px, calc(100% - 32px));
   max-height: 46px;
+}
+
+.player-card.is-dragging {
+  /* Pause the size / colour transitions while the user is dragging so the
+     card snaps to the cursor instead of easing behind it. */
+  transition: none;
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* Thin grab strip across the top edge of the card. Sits above other
+   transport controls but lets pointer events through to them outside the
+   strip itself. */
+.player-card-drag-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  z-index: 2;
+  cursor: grab;
+  background: transparent;
+}
+.player-card-drag-handle:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.player-card.is-dragging .player-card-drag-handle {
+  cursor: grabbing;
 }
 
 .player-card button {

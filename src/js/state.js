@@ -65,7 +65,7 @@ const state = {
     viewMode: "layers",         // "layers" | "graph"
     durationUnit: "frame",      // "frame" | "second"
     zoom: 1,                    // ruler zoom multiplier (0.25 – 8)
-    panelOpen: true,            // unified floating overlay body expanded
+    panelOpen: false,           // unified floating overlay body expanded; default collapsed so the canvas isn't covered on first launch
     selectedPropertyId: null,   // string | null — sol panelde aktif property
     expandedTrackIds: [],       // collapsed-by-default; user opens a lane explicitly
   },

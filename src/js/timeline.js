@@ -82,7 +82,7 @@ export function normalizeTimeline(raw = {}, fallback = {}) {
     viewMode: raw?.viewMode === "graph" ? "graph" : "layers",
     durationUnit: raw?.durationUnit === "second" ? "second" : "frame",
     zoom: clampZoom(raw?.zoom),
-    panelOpen: raw?.panelOpen !== false,
+    panelOpen: raw?.panelOpen === true,
     selectedPropertyId:
       typeof raw?.selectedPropertyId === "string" ? raw.selectedPropertyId : null,
     expandedTrackIds: Array.isArray(raw?.expandedTrackIds)

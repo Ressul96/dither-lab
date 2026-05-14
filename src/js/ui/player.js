@@ -170,6 +170,7 @@ export function initPlayer() {
   wireMoreMenu();
 
   cachePlayerEls();
+  wireTimelineDragHandle();
   subscribe("source", onSourceChange);
   subscribe("playback", onPlaybackChange);
   subscribe("view", onViewChange);
@@ -182,6 +183,62 @@ export function initPlayer() {
     if (bezierPopover.el) renderBezierPopoverContent();
   });
   subscribe("graph", renderAnimationTimeline);
+}
+
+function wireTimelineDragHandle() {
+  const card = document.getElementById("playerCard");
+  if (!card) return;
+
+  // Inject a thin strip across the top edge. We do this from JS so the HTML
+  // template stays unchanged; the handle isn't useful without the JS that
+  // backs it, so coupling them keeps the markup honest.
+  const handle = document.createElement("div");
+  handle.className = "player-card-drag-handle";
+  handle.setAttribute("aria-hidden", "true");
+  handle.title = "Drag to move timeline";
+  card.appendChild(handle);
+
+  let dragOriginX = 0;
+  let dragOriginY = 0;
+  let cardOriginX = 0;
+  let cardOriginY = 0;
+
+  const onPointerMove = (event) => {
+    const dx = event.clientX - dragOriginX;
+    const dy = event.clientY - dragOriginY;
+    card.style.setProperty("--drag-x", `${cardOriginX + dx}px`);
+    card.style.setProperty("--drag-y", `${cardOriginY + dy}px`);
+  };
+
+  const onPointerUp = (event) => {
+    document.removeEventListener("pointermove", onPointerMove);
+    document.removeEventListener("pointerup", onPointerUp);
+    document.removeEventListener("pointercancel", onPointerUp);
+    card.classList.remove("is-dragging");
+    try {
+      handle.releasePointerCapture(event.pointerId);
+    } catch {}
+  };
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragOriginX = event.clientX;
+    dragOriginY = event.clientY;
+    // Read current drag offsets from CSS custom properties so successive
+    // drags accumulate instead of snapping back to centre each time.
+    const styles = getComputedStyle(card);
+    cardOriginX = parseFloat(styles.getPropertyValue("--drag-x")) || 0;
+    cardOriginY = parseFloat(styles.getPropertyValue("--drag-y")) || 0;
+    card.classList.add("is-dragging");
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {}
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", onPointerUp);
+    document.addEventListener("pointercancel", onPointerUp);
+  });
 }
 
 function cachePlayerEls() {
