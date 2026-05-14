@@ -90,14 +90,26 @@ function bindAction(action, handler) {
 function initKeyboard() {
   window.addEventListener("keydown", (e) => {
     const t = e.target;
-    if (
-      t &&
-      (t.tagName === "INPUT" ||
+    // F17.4: text-editable controls keep their native shortcuts (typing,
+    // selection, native undo); selects keep arrow-key dropdown navigation.
+    // Range / checkbox style inputs keep their native arrow / space handling
+    // (they have meaningful keyboard semantics) but document-level undo /
+    // redo still wins — that's what makes Cmd+Z atomic over a slider drag
+    // when the slider still has focus after a release.
+    if (t) {
+      const isTextEditable =
+        t.isContentEditable ||
         t.tagName === "TEXTAREA" ||
-        t.tagName === "SELECT" ||
-        t.isContentEditable)
-    ) {
-      return;
+        (t.tagName === "INPUT" &&
+          ["text", "number", "search", "url", "email", "tel", "password"].includes(t.type));
+      if (isTextEditable) return;
+      if (t.tagName === "SELECT") return;
+      if (t.tagName === "INPUT") {
+        const isUndoCombo =
+          (e.metaKey || e.ctrlKey) &&
+          (e.key === "z" || e.key === "Z" || e.key === "y" || e.key === "Y");
+        if (!isUndoCombo) return;
+      }
     }
     const meta = e.metaKey || e.ctrlKey;
     // Frame stepping uses 10× when Shift is held — matches AE/Cavalry.
