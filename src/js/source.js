@@ -982,12 +982,12 @@ async function renderCurrentFrame() {
 
   // F8.5 preview/export split. Export must stay synchronous and
   // deterministic on the main thread — the encoder waits for a fully-
-  // committed frame before stepping to the next. Preview opts in via the
-  // `view.workerRender` flag; "on" routes evaluation through the adapter
-  // with latest-wins discard, so a stale frame never lands on the canvas.
+  // committed frame before stepping to the next. Preview honours
+  // `view.workerRender`: "on" always uses the worker, "auto" only switches
+  // for live video playback (where jank is most visible), "off" disables it.
   const useWorker =
     !exportSessionActive &&
-    (getState().view?.workerRender ?? "off") === "on" &&
+    shouldUseWorkerForPreview(getState().view?.workerRender, v) &&
     isWorkerAvailable();
 
   if (useWorker) {
@@ -1021,6 +1021,17 @@ async function renderCurrentFrame() {
   recyclePreviewOutput(graphOutputs.ditherOutput);
   presentPreview();
   queueNativePreview(nativeRenderGraph, currentRenderVersion, currentSourceToken);
+}
+
+function shouldUseWorkerForPreview(mode, video) {
+  const resolved = mode ?? "auto";
+  if (resolved === "off") return false;
+  if (resolved === "on") return true;
+  // "auto": live video playback is where the main thread chokes — each frame
+  // is a fresh decode that re-runs the entire graph. Image, procedural, and
+  // paused-video frames stay on the main thread so parameter tweaks reflect
+  // without a worker round-trip.
+  return video instanceof HTMLVideoElement && !video.paused && !video.ended;
 }
 
 function renderProceduralFrame(graph = ensureBootGraph(), sourceNode = findViewerProceduralSource(graph)) {

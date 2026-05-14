@@ -40,11 +40,12 @@ const state = {
     // resolution so the live preview matches the export pixel-for-pixel.
     playbackQuality: "auto",
     renderBackend: "js",
-    // F8 worker track. "off" keeps every evaluation on the main thread;
-    // "auto" / "on" are reserved for later phases once the worker adapter
-    // lands. F8.0 only adds the slot so the rest of the pipeline can read
-    // it without churn when the toggle eventually shows up in the UI.
-    workerRender: "off",
+    // F8 worker track. "auto" (default) routes live video playback to the
+    // worker — that is where main-thread jank is most visible — and keeps
+    // paused frames, image sources, and procedural sources on the main
+    // thread so parameter tweaks reflect with zero adapter overhead. "on"
+    // forces the worker for every preview render; "off" disables it.
+    workerRender: "auto",
   },
   graph: {
     nodes: [],
