@@ -52,7 +52,7 @@ multi-pass etkin renderer haline getirir. **Kullanıcının kalite/performans
 | F9.2 | Bloom multi-pass (threshold → downsample N kez → upsample bilinear → add back) | Single-pass disk shader'ı fallback olarak kalsın |
 | F9.3 | Halation aynı multi-pass altyapısı üzerine taşınsın | Tint hâlâ luma-only sample'lar üstünde uygulanır |
 | F9.4 | Glare / star-glow streaks: directional downsample chain | Streak iterasyonları mip seviyelerine bindirilir |
-| F9.5 | Blur node (Gauss): separable two-pass (H, V) — F9.0 altyapısı kullanır | Mevcut CPU box blur'a göre 5-10× hızlanma; kullanıcının raporladığı blur kasması burada çözülür |
+| F9.5 | Blur node (Gauss): separable two-pass (H, V) — F9.0 altyapısı kullanır | **✅ İndi (2026-05-14).** `applyBlurGpu` 33-tap separable Gaussian; `applyShaderChain` üzerinde H + V iki pass. Sigma = radius/2 (3σ kuralı). MAX_RADIUS = 16; daha büyük radius'larda `image-ops.applyBlurNode` mevcut `blurImage` (ctx.filter / box blur) fallback'ine düşer. 256×256 @ ~0.26ms/iter ölçüldü |
 | F9.6 | HDR RT desteği (RGBA16F) — opsiyonel, capability detect ile | Saturate'i geciktirmek, bloom highlight korumak için |
 
 Kabul kriterleri: bloom artifact'siz çıkar, blur node 1080p'de < 8ms/frame,

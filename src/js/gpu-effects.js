@@ -2329,6 +2329,81 @@ export function applyShaderChain(passes, input) {
   return activeRenderer.renderChain(passes, input);
 }
 
+// F9.5 Separable Gaussian blur. The same shader is run twice — once
+// horizontally, once vertically — so a 1D weight kernel covers a 2D Gaussian
+// at O(2N) cost per pixel instead of O(N^2). KERNEL is sized for radii up to
+// ~16px; the inspector caller should fall back to a wider path (mip pyramid
+// or ctx.filter) when the radius exceeds GAUSSIAN_BLUR_MAX_RADIUS.
+const GAUSSIAN_BLUR_KERNEL_SIZE = 33;
+const GAUSSIAN_BLUR_HALF = (GAUSSIAN_BLUR_KERNEL_SIZE - 1) / 2;
+export const GAUSSIAN_BLUR_MAX_RADIUS = GAUSSIAN_BLUR_HALF;
+
+const GAUSSIAN_BLUR_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+const int KERNEL = ${GAUSSIAN_BLUR_KERNEL_SIZE};
+const int HALF = ${GAUSSIAN_BLUR_HALF};
+
+uniform sampler2D u_image;
+uniform vec2 u_resolution;
+uniform vec2 u_direction;
+uniform float u_weights[KERNEL];
+
+in vec2 v_uv;
+out vec4 out_color;
+
+void main() {
+  vec2 step = u_direction / u_resolution;
+  vec4 sum = vec4(0.0);
+  for (int i = 0; i < KERNEL; i++) {
+    float offset = float(i - HALF);
+    sum += texture(u_image, v_uv + step * offset) * u_weights[i];
+  }
+  out_color = sum;
+}
+`;
+
+function gaussianBlurWeights(sigma) {
+  const weights = new Float32Array(GAUSSIAN_BLUR_KERNEL_SIZE);
+  const safeSigma = Math.max(sigma, 0.01);
+  const twoSigmaSquared = 2 * safeSigma * safeSigma;
+  let sum = 0;
+  for (let i = 0; i < GAUSSIAN_BLUR_KERNEL_SIZE; i++) {
+    const x = i - GAUSSIAN_BLUR_HALF;
+    const w = Math.exp(-(x * x) / twoSigmaSquared);
+    weights[i] = w;
+    sum += w;
+  }
+  for (let i = 0; i < GAUSSIAN_BLUR_KERNEL_SIZE; i++) weights[i] /= sum;
+  return weights;
+}
+
+export function applyBlurGpu(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const radius = Math.max(0, Number(params?.radius ?? 0));
+  if (radius === 0) return input;
+  if (radius > GAUSSIAN_BLUR_MAX_RADIUS) return null;
+
+  // Map radius (visible blur span in pixels) onto a Gaussian sigma. Half the
+  // radius is the standard rule — at 3*sigma the contribution falls below 1%,
+  // so a 33-tap kernel comfortably covers radius up to 16.
+  const sigma = Math.max(radius / 2, 0.5);
+  const weights = { type: "float[]", data: gaussianBlurWeights(sigma) };
+  return applyShaderChain(
+    [
+      {
+        fragmentSource: GAUSSIAN_BLUR_FRAGMENT_SHADER,
+        uniforms: { u_direction: [1, 0], u_weights: weights },
+      },
+      {
+        fragmentSource: GAUSSIAN_BLUR_FRAGMENT_SHADER,
+        uniforms: { u_direction: [0, 1], u_weights: weights },
+      },
+    ],
+    input,
+  );
+}
+
 function getProgram(gl, programs, vertexShader, fragmentSource) {
   const cached = programs.get(fragmentSource);
   if (cached) return cached;
