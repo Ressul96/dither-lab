@@ -1917,6 +1917,28 @@ export function updateNodeLayerProperties(nodeId, patch) {
   dispatch("graph", { nodes: nextNodes });
 }
 
+export function updateNodeLabel(nodeId, label) {
+  const { graph } = getState();
+  const node = getNodeById(nodeId, graph);
+  const definition = getNodeDefinition(node?.type);
+  if (!node || !definition) return false;
+
+  const nextLabel = normalizeNodeLabel(label, definition.label);
+  if (node.label === nextLabel) return false;
+
+  dispatch("graph", {
+    nodes: graph.nodes.map((item) =>
+      item.id === nodeId
+        ? {
+            ...item,
+            label: nextLabel,
+          }
+        : item
+    ),
+  });
+  return true;
+}
+
 export function toggleNodeBypass(nodeId) {
   const { graph } = getState();
   let changed = false;

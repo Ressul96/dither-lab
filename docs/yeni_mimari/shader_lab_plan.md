@@ -306,6 +306,8 @@ solo edge silinir. Solo aktifken bir badge gösterilir.
 
 **Durum:** F13.4b indi (2026-05-14). `T` solo toggle eklendi: seçili node primary output'u geçici olarak `viewer-output` primary input'una bağlanıyor; tekrar `T` eski viewer edge'ini stash'ten geri yüklüyor. Solo aktif node üzerinde `Solo` badge görünüyor; proje serialize ederken temporary solo edge'i değil stash'teki gerçek edge yazılıyor.
 
+**Durum:** F13.4c indi (2026-05-14). `R` inline rename eklendi: seçili node title'ı input'a dönüşüyor; Enter ve blur commit, Escape cancel. Label graph state'e yazılıyor ve inspector/timeline track label'ları yeni adı izliyor.
+
 ### F13.5 — Cursor + visual feedback
 | Kapsam | Notlar |
 |---|---|

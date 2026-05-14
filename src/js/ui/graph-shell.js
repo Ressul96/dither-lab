@@ -29,6 +29,7 @@ import {
   toggleNodeSolo,
   ungroupNode,
   updateNodeLayerProperties,
+  updateNodeLabel,
   updateNodeParams,
 } from "../graph.js";
 import { getAlgorithmOptions } from "../dither/index.js";
@@ -126,6 +127,7 @@ let graphSpacePanActive = false;
 let graphPointerInsideEditor = false;
 let graphKeyboardActive = false;
 let activeGraphMarquee = null;
+let graphRenameNodeId = null;
 const paletteSwatchLocks = new Map();
 
 export function initGraphShell() {
@@ -143,6 +145,8 @@ export function initGraphShell() {
   nodesEl.addEventListener("click", onNodeClick);
   nodesEl.addEventListener("dblclick", onNodeDoubleClick);
   nodesEl.addEventListener("pointerdown", onGraphPointerDown);
+  nodesEl.addEventListener("focusout", onGraphNodeFocusOut);
+  nodesEl.addEventListener("keydown", onGraphNodeKeyDown);
   inspectorEl.addEventListener("input", onInspectorInput);
   inspectorEl.addEventListener("change", onInspectorChange);
   inspectorEl.addEventListener("click", onInspectorClick);
@@ -865,6 +869,7 @@ function rectsIntersect(a, b) {
 
 function onGraphPointerDown(e) {
   if (e.button !== 0) return;
+  if (e.target.closest("[data-node-rename-input]")) return;
   if (e.target.closest("[data-node-action]")) return;
   graphKeyboardActive = true;
 
@@ -955,6 +960,11 @@ function wireKeyboard() {
 
     if (key === "t" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
       if (toggleSoloForSelectedNode()) event.preventDefault();
+      return;
+    }
+
+    if (key === "r" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
+      if (startRenamingSelectedNode()) event.preventDefault();
     }
   });
 
@@ -1068,6 +1078,40 @@ function toggleSoloForSelectedNode() {
   const nodeId = getState().graph.selectedNodeId ?? getSelectedNodeIds().at(-1);
   if (!nodeId) return false;
   return toggleNodeSolo(nodeId);
+}
+
+function startRenamingSelectedNode() {
+  const nodeId = getState().graph.selectedNodeId ?? getSelectedNodeIds().at(-1);
+  const node = getNodeById(nodeId);
+  if (!node) return false;
+
+  graphRenameNodeId = node.id;
+  renderGraph();
+  requestAnimationFrame(() => {
+    const input = nodesEl.querySelector(`[data-node-rename-input="${cssEscape(node.id)}"]`);
+    if (!(input instanceof HTMLInputElement)) return;
+    input.focus();
+    input.select();
+  });
+  return true;
+}
+
+function commitGraphNodeRename(input) {
+  const nodeId = input?.dataset?.nodeRenameInput;
+  if (!nodeId) return false;
+  if (graphRenameNodeId !== nodeId) return false;
+  graphRenameNodeId = null;
+  updateNodeLabel(nodeId, input.value);
+  renderGraph();
+  return true;
+}
+
+function cancelGraphNodeRename(input) {
+  const nodeId = input?.dataset?.nodeRenameInput;
+  if (!nodeId) return false;
+  graphRenameNodeId = null;
+  renderGraph();
+  return true;
 }
 
 function getGraphNodesBounds(nodes) {
@@ -1479,6 +1523,8 @@ function clearInsertHighlight() {
 }
 
 function onNodeClick(event) {
+  if (event.target.closest("[data-node-rename-input]")) return;
+
   const action = event.target.closest("[data-node-action]");
   if (action) {
     event.preventDefault();
@@ -1500,6 +1546,8 @@ function onNodeClick(event) {
 }
 
 function onNodeDoubleClick(event) {
+  if (event.target.closest("[data-node-rename-input]")) return;
+
   const nodeEl = event.target.closest("[data-node-id]");
   if (!nodeEl) return;
   const node = getNodeById(nodeEl.dataset.nodeId);
@@ -1507,6 +1555,30 @@ function onNodeDoubleClick(event) {
   event.preventDefault();
   event.stopPropagation();
   setCurrentGraphParent(node.id);
+}
+
+function onGraphNodeFocusOut(event) {
+  const input = event.target.closest("[data-node-rename-input]");
+  if (!input) return;
+  commitGraphNodeRename(input);
+}
+
+function onGraphNodeKeyDown(event) {
+  const input = event.target.closest("[data-node-rename-input]");
+  if (!input) return;
+
+  if (event.key === "Enter") {
+    event.preventDefault();
+    event.stopPropagation();
+    commitGraphNodeRename(input);
+    return;
+  }
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    cancelGraphNodeRename(input);
+  }
 }
 
 function onInspectorInput(event) {
@@ -2129,6 +2201,9 @@ function renderNode(node, selectedNodeIds, soloNodeId = null) {
   const family = familySlug(definition?.family);
   const canBypass = node.type !== "source" && node.type !== "viewer-output" && node.type !== "group";
   const bypassIcon = node.bypassed ? eyeClosedSvg() : eyeOpenSvg();
+  const title = graphRenameNodeId === node.id
+    ? `<input class="graph-node-title-input" data-node-rename-input="${escapeHtml(node.id)}" value="${escapeHtml(node.label)}" maxlength="48" spellcheck="false" />`
+    : `<span class="graph-node-title">${escapeHtml(node.label)}</span>`;
 
   return `
     <div
@@ -2142,7 +2217,7 @@ function renderNode(node, selectedNodeIds, soloNodeId = null) {
       title="${escapeHtml(node.id)}"
     >
       <div class="graph-node-head">
-        <span class="graph-node-title">${escapeHtml(node.label)}</span>
+        ${title}
         <span class="graph-node-head-actions">
           ${solo ? `<span class="graph-node-solo-badge">Solo</span>` : ""}
           ${
