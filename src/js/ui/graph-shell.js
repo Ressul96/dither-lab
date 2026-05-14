@@ -3724,6 +3724,10 @@ function onInspectorPointerDown(event) {
 
   inspectorEditing = true;
   let points = sanitizeCurvePoints(readCurveParamPoints(node, target.paramKey, target.legacyChannel));
+  // F17.3e: snapshot the pre-drag points before any commit (including the
+  // empty-area "drop a new point" branch below) so onUp can record one
+  // history entry covering the drop + adjust as a single user action.
+  const undoCurvePointsBefore = points.map((p) => ({ ...p }));
   let activeIndex;
   if (handle) {
     activeIndex = Number(handle.dataset.curveHandle);
@@ -3777,12 +3781,34 @@ function onInspectorPointerDown(event) {
     try {
       svg.releasePointerCapture(event.pointerId);
     } catch {}
+    // F17.3e flush: compare against the pre-drag snapshot and record one
+    // history entry covering the whole drop + drag.
+    const finalNode = getSelectedNode() ?? node;
+    const finalPoints = sanitizeCurvePoints(
+      readCurveParamPoints(finalNode, target.paramKey, target.legacyChannel),
+    );
+    if (!curvePointsEqual(undoCurvePointsBefore, finalPoints)) {
+      const beforeCopy = undoCurvePointsBefore.map((p) => ({ ...p }));
+      const afterCopy = finalPoints.map((p) => ({ ...p }));
+      pushHistory({
+        undo: () => commitCurvePoints(node.id, target.paramKey, beforeCopy),
+        redo: () => commitCurvePoints(node.id, target.paramKey, afterCopy),
+      });
+    }
     renderInspector();
   };
 
   document.addEventListener("pointermove", onMove);
   document.addEventListener("pointerup", onUp);
   document.addEventListener("pointercancel", onUp);
+}
+
+function curvePointsEqual(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].x !== b[i].x || a[i].y !== b[i].y) return false;
+  }
+  return true;
 }
 
 function startXyPadInteraction(event, pad) {
