@@ -134,6 +134,10 @@ const paletteSwatchLocks = new Map();
 // `input` fires for it, then turn the whole drag into a single history entry
 // when `change` flushes. Key: "${nodeId}|param|${paramKey}".
 const inspectorParamSnapshots = new Map();
+// F17.3b/c picker hex input + eyedropper undo. Keyed by colorPickerState's
+// targetId so a session of mid-typing inputs flushes a single entry once
+// `change` fires on blur / Enter.
+const pickerHexSnapshots = new Map();
 
 export function initGraphShell() {
   ensureBootGraph();
@@ -1643,6 +1647,14 @@ function onInspectorInput(event) {
   const pickerHexInput = event.target.closest("[data-color-picker-hex-input]");
   if (pickerHexInput) {
     inspectorEditing = true;
+    // F17.3c: snapshot the pre-edit color the first time `input` fires for
+    // this picker, then flush a single history entry on the matching change.
+    // Pull from node state rather than the DOM input — by the time `input`
+    // fires, input.value already holds the in-progress value.
+    const pickerTarget = resolveColorPickerTarget(pickerHexInput);
+    if (pickerTarget && !pickerHexSnapshots.has(pickerTarget.targetId)) {
+      pickerHexSnapshots.set(pickerTarget.targetId, readPickerValueFromState(pickerTarget));
+    }
     const nextHex = normalizeHexOrNull(pickerHexInput.value);
     pickerHexInput.classList.toggle("is-invalid", !nextHex);
     if (nextHex) commitColorPickerValue(pickerHexInput, nextHex);
@@ -1792,6 +1804,19 @@ function onInspectorChange(event) {
       commitColorPickerValue(pickerHexInput, nextHex);
     } else if (target) {
       syncColorPickerElements(target, readColorPickerCurrentHex(target));
+    }
+    // F17.3c flush: turn the typing session into a single undo entry. Read
+    // the final from state so it matches the snapshot's source of truth.
+    if (target && pickerHexSnapshots.has(target.targetId)) {
+      const oldHex = pickerHexSnapshots.get(target.targetId);
+      pickerHexSnapshots.delete(target.targetId);
+      const finalHex = readPickerValueFromState(target);
+      if (oldHex && finalHex && oldHex !== finalHex) {
+        pushHistory({
+          undo: () => applyColorPickerHex(target, oldHex),
+          redo: () => applyColorPickerHex(target, finalHex),
+        });
+      }
     }
     return;
   }
@@ -5959,6 +5984,11 @@ function startColorPickerDrag(event, control, mode) {
   inspectorEditing = true;
   document.body.classList.add("dragging-color-picker");
 
+  // F17.3b: snapshot the pre-drag color so onUp can record a single undo
+  // entry covering the whole SV-surface / hue-rail drag instead of one per
+  // pointermove commit.
+  const pickerUndoSnapshot = readColorPickerCurrentHex(target);
+
   const commitFromPointer = (ev) => {
     const current = hexToHsvColor(readColorPickerCurrentHex(target));
     const next = mode === "hue"
@@ -5987,11 +6017,59 @@ function startColorPickerDrag(event, control, mode) {
     try {
       control.releasePointerCapture(event.pointerId);
     } catch {}
+    // F17.3b flush: if the drag changed the color, record one history entry.
+    const finalHex = readColorPickerCurrentHex(target);
+    if (finalHex && pickerUndoSnapshot && finalHex !== pickerUndoSnapshot) {
+      pushHistory({
+        undo: () => applyColorPickerHex(target, pickerUndoSnapshot),
+        redo: () => applyColorPickerHex(target, finalHex),
+      });
+    }
   };
 
   control.addEventListener("pointermove", onMove);
   control.addEventListener("pointerup", onUp);
   control.addEventListener("pointercancel", onUp);
+}
+
+function applyColorPickerHex(target, hex) {
+  // Same dispatcher commitColorPickerValue uses, but takes a target object
+  // directly so undo callbacks don't need to look one up from a DOM element
+  // that may have been re-rendered since the history entry was pushed.
+  switch (target.kind) {
+    case "node-param":
+      commitNodeColorParam(target.paramKey, hex);
+      return;
+    case "gradient-stop":
+      commitGradientStopColorTarget(target, hex);
+      return;
+    case "mesh-stop":
+      commitMeshStopColorTarget(target, hex);
+      return;
+  }
+}
+
+// Read the picker's value from node state rather than the DOM input. The DOM
+// can be a beat ahead during typing (input event fires after the user pressed
+// a key, so input.value already reflects the in-progress edit), but the node
+// state still holds the pre-edit color until commitColorPickerValue runs.
+// Drag handlers can keep using readColorPickerCurrentHex since their
+// snapshots happen at pointerdown, before any DOM mutation.
+function readPickerValueFromState(target) {
+  if (!target) return null;
+  const node = getSelectedNode();
+  if (!node) return null;
+  switch (target.kind) {
+    case "node-param":
+      return node.params?.[target.paramKey];
+    case "gradient-stop": {
+      const stops = node.params?.[target.paramKey || "stops"];
+      return Array.isArray(stops) ? stops[target.stopIndex]?.color : null;
+    }
+    case "mesh-stop":
+      return node.params?.stops?.[target.stopIndex]?.color;
+  }
+  return null;
 }
 
 function hsvFromSurfacePointer(surface, current, clientX, clientY) {
@@ -6081,7 +6159,20 @@ async function handleColorPickerEyedropper(control) {
   if (typeof window === "undefined" || typeof window.EyeDropper !== "function") return;
   try {
     const result = await new window.EyeDropper().open();
-    if (result?.sRGBHex) commitColorPickerValue(control, result.sRGBHex);
+    if (!result?.sRGBHex) return;
+    // F17.3b eyedropper: single commit, snapshot before / push after.
+    const target = resolveColorPickerTarget(control);
+    const before = target ? readColorPickerCurrentHex(target) : null;
+    commitColorPickerValue(control, result.sRGBHex);
+    if (target && before) {
+      const after = readColorPickerCurrentHex(target);
+      if (after && before !== after) {
+        pushHistory({
+          undo: () => applyColorPickerHex(target, before),
+          redo: () => applyColorPickerHex(target, after),
+        });
+      }
+    }
   } catch {
     // User cancelled the picker; keep the current color.
   }
