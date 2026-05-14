@@ -4113,6 +4113,10 @@ function startGradientRampStopDrag(event, stop) {
   inspectorEditing = true;
   document.body.classList.add("dragging-gradient-ramp");
 
+  // F17.3d: snapshot the pre-drag stops so onUp can record a single history
+  // entry covering the whole drag rather than one per pointermove commit.
+  const undoStopsBefore = stops.map((s) => ({ ...s }));
+
   const bar = root?.querySelector("[data-gradient-ramp-bar]");
   const commitFromPointer = (ev) => {
     if (!bar) return;
@@ -4134,12 +4138,33 @@ function startGradientRampStopDrag(event, stop) {
     document.removeEventListener("pointercancel", onUp);
     inspectorEditing = false;
     document.body.classList.remove("dragging-gradient-ramp");
+    // F17.3d flush
+    pushGradientRampUndoEntry(target, undoStopsBefore);
     renderInspector();
   };
 
   document.addEventListener("pointermove", onMove);
   document.addEventListener("pointerup", onUp);
   document.addEventListener("pointercancel", onUp);
+}
+
+function pushGradientRampUndoEntry(target, stopsBefore) {
+  const stopsAfter = readGradientRampStops(target);
+  if (gradientRampStopsEqual(stopsBefore, stopsAfter)) return;
+  const beforeCopy = stopsBefore.map((s) => ({ ...s }));
+  const afterCopy = stopsAfter.map((s) => ({ ...s }));
+  pushHistory({
+    undo: () => commitGradientRampStops(target.nodeId, target.paramKey, beforeCopy),
+    redo: () => commitGradientRampStops(target.nodeId, target.paramKey, afterCopy),
+  });
+}
+
+function gradientRampStopsEqual(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].pos !== b[i].pos || a[i].color !== b[i].color) return false;
+  }
+  return true;
 }
 
 function resolveGradientRampTarget(element) {
@@ -4184,6 +4209,8 @@ function addGradientRampStop(target, position) {
   if (!node || node.id !== target.nodeId) return;
   const stops = readGradientRampStops(target);
   if (stops.length >= target.maxStops) return;
+  // F17.3d: snapshot before so undo restores the pre-add state.
+  const stopsBefore = stops.map((s) => ({ ...s }));
   const pos = clamp(Number(position), GRADIENT_RAMP_STOP_GAP, 1 - GRADIENT_RAMP_STOP_GAP);
   const color = sampleGradientRampColor(stops, pos);
   const nextStops = normalizeGradientRampEditableStops([...stops, { pos, color }]);
@@ -4191,6 +4218,7 @@ function addGradientRampStop(target, position) {
   gradientRampState = { targetId: target.targetId, selectedIndex };
   colorPickerState = null;
   commitGradientRampStops(node.id, target.paramKey, nextStops);
+  pushGradientRampUndoEntry(target, stopsBefore);
   renderInspector();
 }
 
@@ -4200,11 +4228,14 @@ function removeSelectedGradientRampStop(target) {
   const stops = readGradientRampStops(target);
   const selectedIndex = getGradientRampSelectedIndex(target.targetId, stops);
   if (selectedIndex <= 0 || selectedIndex >= stops.length - 1 || stops.length <= 2) return;
+  // F17.3d: snapshot before remove so undo brings the stop back.
+  const stopsBefore = stops.map((s) => ({ ...s }));
   const nextStops = stops.filter((_, index) => index !== selectedIndex);
   const nextSelectedIndex = Math.max(0, selectedIndex - 1);
   gradientRampState = { targetId: target.targetId, selectedIndex: nextSelectedIndex };
   colorPickerState = null;
   commitGradientRampStops(node.id, target.paramKey, nextStops);
+  pushGradientRampUndoEntry(target, stopsBefore);
   renderInspector();
 }
 
