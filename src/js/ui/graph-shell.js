@@ -2512,6 +2512,8 @@ function renderNodeSpecifics(node) {
       return renderGradientNode(node);
     case "mesh-gradient":
       return renderMeshGradientNode(node);
+    case "noise":
+      return renderNoiseNode(node);
     case "adjust":
       return renderAdjustNode(node);
     case "posterize":
@@ -2776,6 +2778,38 @@ function renderMeshGradientNode(node) {
       ${renderRangeField("Warp", "warp", warp, 0, 100, `${warp}%`)}
       ${renderRangeField("Zoom", "zoom", zoom, 25, 400, `${zoom}%`)}
       ${renderRangeField("Speed", "speed", speed, 0, 100, `${speed}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Output</header>
+      ${renderRangeField("Width", "width", width, 256, 4096, `${width}px`)}
+      ${renderRangeField("Height", "height", height, 256, 4096, `${height}px`)}
+    </section>
+  `;
+}
+
+function renderNoiseNode(node) {
+  const params = node.params;
+  const mode = String(params.mode ?? "perlin");
+  const scale = Number(params.scale ?? 4);
+  const octaves = Number(params.octaves ?? 4);
+  const persistence = Number(params.persistence ?? 50);
+  const seed = Number(params.seed ?? 0);
+  const animSpeed = Number(params.animSpeed ?? 0);
+  const width = Number(params.width ?? 1920);
+  const height = Number(params.height ?? 1080);
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Noise</header>
+      ${renderSelectField("Type", "mode", mode, [
+        ["perlin", "Perlin"],
+        ["simplex", "Simplex"],
+        ["value", "Value"],
+      ])}
+      ${renderRangeField("Scale", "scale", scale, 0.1, 64, String(scale))}
+      ${renderRangeField("Octaves", "octaves", octaves, 1, 8, String(octaves))}
+      ${renderRangeField("Persistence", "persistence", persistence, 0, 100, `${persistence}%`)}
+      ${renderRangeField("Seed", "seed", seed, 0, 999, String(seed))}
+      ${renderRangeField("Anim Speed", "animSpeed", animSpeed, 0, 200, `${animSpeed}%`)}
     </section>
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Output</header>

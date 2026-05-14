@@ -31,6 +31,7 @@ import {
   applyMeshGradientNode,
   applyModulationNode,
   applyMixNode,
+  applyNoiseNode,
   applyPixelateNode,
   applyPixelSortingNode,
   applyPosterizeNode,
@@ -342,6 +343,7 @@ function inputSocketsFor(node) {
       return ["a", "b"];
     case "mesh-gradient":
     case "gradient":
+    case "noise":
     case "value":
       return [];
     default:
@@ -494,6 +496,8 @@ function computeNodeOutput(node, index, results, context) {
       return applyGradientNode(node.params, context);
     case "mesh-gradient":
       return applyMeshGradientNode(node.params, context);
+    case "noise":
+      return applyNoiseNode(node.params, context);
     case "hsv":
       return applyHsvNode(resolveInputImage(node, "image", index, results), node.params);
     case "rgb-curves":

@@ -1577,6 +1577,171 @@ function gradientSourceModeIndex(value) {
   return 0;
 }
 
+// F18.2 procedural noise source. Perlin / simplex are Ashima / Ian McEwan
+// implementations (well-trodden, license-clean); value noise is a simple
+// hash-based bilinear interpolation. FBM stacks octaves so users get
+// turbulence / clouds with a single slider.
+const NOISE_SOURCE_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform vec2 u_resolution;
+uniform float u_scale;
+uniform float u_seed;
+uniform float u_mode;        // 0 perlin, 1 simplex, 2 value
+uniform float u_octaves;
+uniform float u_persistence;
+uniform float u_time;
+uniform float u_animSpeed;
+
+in vec2 v_uv;
+out vec4 out_color;
+
+vec4 mod289v4(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec3 mod289v3(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec2 mod289v2(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 permute4(vec4 x) { return mod289v4(((x * 34.0) + 1.0) * x); }
+vec3 permute3(vec3 x) { return mod289v3(((x * 34.0) + 1.0) * x); }
+vec4 taylorInvSqrt4(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+vec2 fade2(vec2 t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
+
+float perlinNoise2D(vec2 P) {
+  vec4 Pi = floor(P.xyxy) + vec4(0.0, 0.0, 1.0, 1.0);
+  vec4 Pf = fract(P.xyxy) - vec4(0.0, 0.0, 1.0, 1.0);
+  Pi = mod289v4(Pi);
+  vec4 ix = Pi.xzxz;
+  vec4 iy = Pi.yyww;
+  vec4 fx = Pf.xzxz;
+  vec4 fy = Pf.yyww;
+  vec4 i = permute4(permute4(ix) + iy);
+  vec4 gx = 2.0 * fract(i / 41.0) - 1.0;
+  vec4 gy = abs(gx) - 0.5;
+  vec4 tx = floor(gx + 0.5);
+  gx = gx - tx;
+  vec2 g00 = vec2(gx.x, gy.x);
+  vec2 g10 = vec2(gx.y, gy.y);
+  vec2 g01 = vec2(gx.z, gy.z);
+  vec2 g11 = vec2(gx.w, gy.w);
+  vec4 norm = taylorInvSqrt4(vec4(dot(g00, g00), dot(g01, g01), dot(g10, g10), dot(g11, g11)));
+  g00 *= norm.x; g01 *= norm.y; g10 *= norm.z; g11 *= norm.w;
+  float n00 = dot(g00, vec2(fx.x, fy.x));
+  float n10 = dot(g10, vec2(fx.y, fy.y));
+  float n01 = dot(g01, vec2(fx.z, fy.z));
+  float n11 = dot(g11, vec2(fx.w, fy.w));
+  vec2 f = fade2(Pf.xy);
+  vec2 n_x = mix(vec2(n00, n01), vec2(n10, n11), f.x);
+  return 2.3 * mix(n_x.x, n_x.y, f.y);
+}
+
+float simplexNoise2D(vec2 v) {
+  const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+  vec2 i = floor(v + dot(v, C.yy));
+  vec2 x0 = v - i + dot(i, C.xx);
+  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+  vec4 x12 = x0.xyxy + C.xxzz;
+  x12.xy -= i1;
+  i = mod289v2(i);
+  vec3 p = permute3(permute3(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
+  vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
+  m = m * m * m * m;
+  vec3 x = 2.0 * fract(p * C.www) - 1.0;
+  vec3 h = abs(x) - 0.5;
+  vec3 ox = floor(x + 0.5);
+  vec3 a0 = x - ox;
+  m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+  vec3 g;
+  g.x = a0.x * x0.x + h.x * x0.y;
+  g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+  return 130.0 * dot(m, g);
+}
+
+float hash21(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float valueNoise2D(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+}
+
+float singleNoise(vec2 p) {
+  if (u_mode < 0.5) return perlinNoise2D(p);
+  if (u_mode < 1.5) return simplexNoise2D(p);
+  return valueNoise2D(p);
+}
+
+float fbm(vec2 p) {
+  float sum = 0.0;
+  float amp = 1.0;
+  float freq = 1.0;
+  float maxSum = 0.0;
+  int oct = int(clamp(u_octaves, 1.0, 8.0));
+  for (int i = 0; i < 8; i++) {
+    if (i >= oct) break;
+    sum += amp * singleNoise(p * freq);
+    maxSum += amp;
+    amp *= u_persistence;
+    freq *= 2.0;
+  }
+  return sum / max(maxSum, 0.0001);
+}
+
+void main() {
+  vec2 aspect = vec2(u_resolution.x / max(u_resolution.y, 1.0), 1.0);
+  vec2 p = (v_uv - 0.5) * aspect * max(u_scale, 0.01);
+  // Seed offsets the sample plane so the same shape recurs deterministically;
+  // animSpeed advances time across the plane so the field flows over u_time.
+  p += vec2(u_seed * 12.34, u_seed * 56.78);
+  p += vec2(u_time * u_animSpeed * 0.5, u_time * u_animSpeed * 0.3);
+  float n = fbm(p);
+  float v = clamp(n * 0.5 + 0.5, 0.0, 1.0);
+  out_color = vec4(vec3(v), 1.0);
+}
+`;
+
+function noiseSourceSize(params) {
+  return {
+    width: clamp(Math.round(Number(params?.width ?? 1920)), 256, 4096),
+    height: clamp(Math.round(Number(params?.height ?? 1080)), 256, 4096),
+  };
+}
+
+function noiseModeIndex(value) {
+  const mode = String(value ?? "perlin").toLowerCase();
+  if (mode === "simplex") return 1;
+  if (mode === "value") return 2;
+  return 0;
+}
+
+function noiseSourceUniforms(params, context) {
+  return {
+    u_scale: clamp(Number(params?.scale ?? 4), 0.1, 64),
+    u_seed: clamp(Number(params?.seed ?? 0), 0, 999),
+    u_mode: noiseModeIndex(params?.mode),
+    u_octaves: clamp(Math.round(Number(params?.octaves ?? 4)), 1, 8),
+    u_persistence: clamp(Number(params?.persistence ?? 50) / 100, 0, 1),
+    u_time: Number(context?.timeSeconds) || 0,
+    u_animSpeed: clamp(Number(params?.animSpeed ?? 0) / 100, 0, 2),
+  };
+}
+
+export function applyNoiseSourceGpu(params, context) {
+  const activeRenderer = getRenderer();
+  if (!activeRenderer) return null;
+  const { width, height } = noiseSourceSize(params);
+  return activeRenderer.renderSource(
+    NOISE_SOURCE_FRAGMENT_SHADER,
+    width,
+    height,
+    noiseSourceUniforms(params, context),
+  );
+}
+
 const SHADER_PASSES = Object.freeze({
   "chromatic-aberration": {
     fragment: CHROMATIC_ABERRATION_FRAGMENT_SHADER,

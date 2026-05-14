@@ -24,6 +24,7 @@ import {
   applyLedScreenGpu,
   applyMeshGradientGpu,
   applyModulationGpu,
+  applyNoiseSourceGpu,
   applyPatternDitherGpu,
   applyPixelateGpu,
   applyPixelSortingGpu,
@@ -156,6 +157,23 @@ export function applyGradientNode(params = {}, context = {}) {
   const gpuOutput = applyGradientSourceGpu(params, context);
   if (gpuOutput) return gpuOutput;
   return applyGradientCpu(params);
+}
+
+// F18.2 procedural noise source. GPU-only for now; if WebGL2 setup fails we
+// return a solid grey canvas at the requested size so the rest of the graph
+// still has an image to operate on. A CPU FBM fallback could be added later
+// for headless environments without WebGL2.
+export function applyNoiseNode(params = {}, context = {}) {
+  const gpuOutput = applyNoiseSourceGpu(params, context);
+  if (gpuOutput) return gpuOutput;
+  const width = clamp(Math.round(Number(params?.width ?? 1920)), 256, 4096);
+  const height = clamp(Math.round(Number(params?.height ?? 1080)), 256, 4096);
+  const output = createBuffer(width, height);
+  const ctx = output.getContext("2d", { alpha: false });
+  if (!ctx) return null;
+  ctx.fillStyle = "#808080";
+  ctx.fillRect(0, 0, width, height);
+  return output;
 }
 
 function applyMeshGradientCpu(params = {}, context = {}) {

@@ -1107,6 +1107,7 @@ function primaryImageInputSocket(node) {
     case "value":
     case "gradient":
     case "mesh-gradient":
+    case "noise":
     case "source":
       return null;
     default:
@@ -1122,7 +1123,7 @@ function proceduralSourceSize(node) {
 }
 
 function isProceduralSourceNode(node) {
-  return node?.type === "gradient" || node?.type === "mesh-gradient";
+  return node?.type === "gradient" || node?.type === "mesh-gradient" || node?.type === "noise";
 }
 
 function recyclePreviewOutput(image) {
