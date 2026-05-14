@@ -281,6 +281,8 @@ Kullanıcının istediği yeni model:
 > önemli bir kassel kıran değişiklik — eski kullanıcı kasları bozulur, ama
 > standart 2D editör paterniyle (Figma, Blender 2.8+) uyumlu hale geliyor.
 
+**Durum:** F13.3a indi (2026-05-14). Boş canvas sol-drag artık marquee box select; boş canvas tek tık selection clear. Edge cut `Option/Alt + sol-drag` oldu; canvas pan `Space + sol-drag` moduna taşındı ve trackpad/wheel pan korunuyor. Marquee selection live inspector/edge highlight sync ediyor, Escape ile drag iptal edilebiliyor.
+
 ### F13.4 — Klavye kısayolları (genişletilmiş)
 | Tuş | Eylem |
 |---|---|

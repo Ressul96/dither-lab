@@ -88,6 +88,7 @@ const EDGE_INSERT_RADIUS = 140;
 const EDGE_INSERT_FALLBACK_RADIUS = 240;
 const GRAPH_VIEW_PADDING = 120;
 const EDGE_CUT_RADIUS = 10;
+const GRAPH_MARQUEE_THRESHOLD = 4;
 const CURVE_CANVAS_SIZE = 240;
 const CURVE_HANDLE_RADIUS = 6;
 const CURVE_CHANNELS = ["master", "red", "green", "blue"];
@@ -117,6 +118,9 @@ let colorPickerState = null;
 let gradientRampState = null;
 let nodePaletteSearchEl = null;
 let nodePaletteEmptyEl = null;
+let graphSpacePanActive = false;
+let graphPointerInsideEditor = false;
+let activeGraphMarquee = null;
 const paletteSwatchLocks = new Map();
 
 export function initGraphShell() {
@@ -520,6 +524,15 @@ function initViewportInteractions() {
     { passive: false }
   );
 
+  editorEl.addEventListener("pointerenter", () => {
+    graphPointerInsideEditor = true;
+    syncGraphSpacePanClass();
+  });
+  editorEl.addEventListener("pointerleave", () => {
+    graphPointerInsideEditor = false;
+    syncGraphSpacePanClass();
+  });
+
   editorEl.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
     if (e.target.closest("[data-node-id]") || e.target.closest(".graph-socket-hit")) return;
@@ -528,11 +541,15 @@ function initViewportInteractions() {
     // follow-up `click` never reaches the Root / group buttons — that's
     // why entering a group looked one-way.
     if (e.target.closest(".graph-breadcrumb")) return;
-    if (e.metaKey || e.ctrlKey) {
+    if (e.altKey) {
       startEdgeCut(e);
       return;
     }
-    startEditorPan(e);
+    if (graphSpacePanActive) {
+      startEditorPan(e);
+      return;
+    }
+    startGraphBoxSelect(e);
   });
 }
 
@@ -668,6 +685,7 @@ function zoomGraphAtPointer(e) {
 }
 
 function startEditorPan(e) {
+  e.preventDefault();
   const { graphView } = getState();
   const startX = e.clientX;
   const startY = e.clientY;
@@ -699,6 +717,144 @@ function startEditorPan(e) {
   editorEl.addEventListener("pointermove", onMove);
   editorEl.addEventListener("pointerup", onUp);
   editorEl.addEventListener("pointercancel", onUp);
+}
+
+function startGraphBoxSelect(e) {
+  e.preventDefault();
+
+  const startClient = { x: e.clientX, y: e.clientY };
+  const extendSelection = e.shiftKey || e.metaKey || e.ctrlKey;
+  const initialSelectedIds = getSelectedNodeIds();
+  let nextSelectedIds = extendSelection ? initialSelectedIds : [];
+  let moved = false;
+
+  const marqueeEl = document.createElement("div");
+  marqueeEl.className = "graph-marquee hidden";
+  editorEl.appendChild(marqueeEl);
+
+  try {
+    editorEl.setPointerCapture(e.pointerId);
+  } catch {}
+
+  const applySelection = (nodeIds) => {
+    nextSelectedIds = nodeIds;
+    selectNodesWithoutDispatch(nodeIds, nodeIds.at(-1) ?? null);
+    syncRenderedNodeSelection(nodeIds);
+    renderInspector();
+    renderEdges();
+  };
+
+  const finish = (cancelled = false) => {
+    editorEl.removeEventListener("pointermove", onMove);
+    editorEl.removeEventListener("pointerup", onUp);
+    editorEl.removeEventListener("pointercancel", onCancel);
+    editorEl.classList.remove("box-selecting");
+    marqueeEl.remove();
+    if (activeGraphMarquee?.el === marqueeEl) activeGraphMarquee = null;
+    try {
+      editorEl.releasePointerCapture(e.pointerId);
+    } catch {}
+
+    const finalIds = cancelled ? initialSelectedIds : moved ? nextSelectedIds : [];
+    dispatch("graph", {
+      selectedNodeId: finalIds.at(-1) ?? null,
+      selectedNodeIds: finalIds,
+    });
+  };
+
+  const updateMarquee = (clientX, clientY) => {
+    const rect = getMarqueeLocalRect(startClient, { x: clientX, y: clientY });
+    marqueeEl.style.left = `${rect.left}px`;
+    marqueeEl.style.top = `${rect.top}px`;
+    marqueeEl.style.width = `${rect.width}px`;
+    marqueeEl.style.height = `${rect.height}px`;
+  };
+
+  const onMove = (ev) => {
+    const dx = ev.clientX - startClient.x;
+    const dy = ev.clientY - startClient.y;
+    if (!moved && Math.hypot(dx, dy) < GRAPH_MARQUEE_THRESHOLD) return;
+    if (!moved) {
+      moved = true;
+      editorEl.classList.add("box-selecting");
+      marqueeEl.classList.remove("hidden");
+    }
+
+    updateMarquee(ev.clientX, ev.clientY);
+    const marqueeClientRect = getMarqueeClientRect(startClient, { x: ev.clientX, y: ev.clientY });
+    const hitIds = getNodeIdsInClientRect(marqueeClientRect);
+    const selectedIds = extendSelection ? mergeNodeSelection(initialSelectedIds, hitIds) : hitIds;
+    applySelection(selectedIds);
+  };
+
+  const onUp = () => finish(false);
+  const onCancel = () => finish(true);
+
+  activeGraphMarquee = {
+    el: marqueeEl,
+    cancel: onCancel,
+  };
+  editorEl.addEventListener("pointermove", onMove);
+  editorEl.addEventListener("pointerup", onUp);
+  editorEl.addEventListener("pointercancel", onCancel);
+}
+
+function cancelActiveGraphMarquee() {
+  if (!activeGraphMarquee) return false;
+  activeGraphMarquee.cancel();
+  return true;
+}
+
+function syncRenderedNodeSelection(nodeIds) {
+  const selectedIds = new Set(nodeIds);
+  for (const el of nodesEl.querySelectorAll("[data-node-id]")) {
+    el.classList.toggle("selected", selectedIds.has(el.dataset.nodeId));
+  }
+}
+
+function mergeNodeSelection(baseIds, addedIds) {
+  return [...new Set([...(baseIds ?? []), ...(addedIds ?? [])])].filter(Boolean);
+}
+
+function getNodeIdsInClientRect(selectionRect) {
+  return Array.from(nodesEl.querySelectorAll("[data-node-id]"))
+    .filter((nodeEl) => rectsIntersect(selectionRect, nodeEl.getBoundingClientRect()))
+    .map((nodeEl) => nodeEl.dataset.nodeId)
+    .filter(Boolean);
+}
+
+function getMarqueeLocalRect(start, current) {
+  const editorRect = editorEl.getBoundingClientRect();
+  const clientRect = getMarqueeClientRect(start, current);
+  const left = clamp(clientRect.left - editorRect.left, 0, editorRect.width);
+  const top = clamp(clientRect.top - editorRect.top, 0, editorRect.height);
+  const right = clamp(clientRect.right - editorRect.left, 0, editorRect.width);
+  const bottom = clamp(clientRect.bottom - editorRect.top, 0, editorRect.height);
+  return {
+    left,
+    top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+  };
+}
+
+function getMarqueeClientRect(start, current) {
+  const left = Math.min(start.x, current.x);
+  const top = Math.min(start.y, current.y);
+  const right = Math.max(start.x, current.x);
+  const bottom = Math.max(start.y, current.y);
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
+function rectsIntersect(a, b) {
+  return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top;
 }
 
 function onGraphPointerDown(e) {
@@ -733,6 +889,20 @@ function wireKeyboard() {
       return;
     }
 
+    if (isSpaceKey(event) && shouldUseGraphSpacePan()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      graphSpacePanActive = true;
+      syncGraphSpacePanClass();
+      return;
+    }
+
+    if (event.key === "Escape" && cancelActiveGraphMarquee()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     const commandKey = event.metaKey || event.ctrlKey;
     if (commandKey && event.key.toLowerCase() === "g") {
       const handled = event.shiftKey ? ungroupCurrentSelection() : groupCurrentSelection();
@@ -746,6 +916,32 @@ function wireKeyboard() {
     if (!removeNode(selectedNodeId)) return;
     event.preventDefault();
   });
+
+  window.addEventListener("keyup", (event) => {
+    if (!isSpaceKey(event) || !graphSpacePanActive) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    graphSpacePanActive = false;
+    syncGraphSpacePanClass();
+  });
+
+  window.addEventListener("blur", () => {
+    graphSpacePanActive = false;
+    syncGraphSpacePanClass();
+    cancelActiveGraphMarquee();
+  });
+}
+
+function isSpaceKey(event) {
+  return event.key === " " || event.code === "Space";
+}
+
+function shouldUseGraphSpacePan() {
+  return graphPointerInsideEditor || editorEl?.matches?.(":hover") || graphSpacePanActive;
+}
+
+function syncGraphSpacePanClass() {
+  editorEl?.classList.toggle("space-panning", graphSpacePanActive && shouldUseGraphSpacePan());
 }
 
 function groupCurrentSelection() {
