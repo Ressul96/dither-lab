@@ -1,5 +1,5 @@
-import { getState, subscribe } from "../state.js";
-import { getSelectedNode, updateNodeParams } from "../graph.js";
+import { getState, pushHistory, subscribe } from "../state.js";
+import { getNodeById, getSelectedNode, updateNodeParams } from "../graph.js";
 import {
   commitParamValueToTimeline,
   updateParamKeyframeAtCurrentTime,
@@ -470,6 +470,11 @@ function beginDrag(handle, e, descriptor) {
     pending: null,
     flushQueued: false,
     shiftAxis: null,
+    // F17.2: snapshot the params we're about to move so onDragEnd can record
+    // a single history entry covering the whole drag rather than one per
+    // raf-flushed param patch. Mesh-stops carry a stops array, so we deep-
+    // copy it instead of relying on the shallow params clone.
+    undoSnapshot: descriptor.nodeId ? snapshotGizmoParams(descriptor.nodeId) : null,
     ...descriptor,
   };
   if (descriptor.groupEl) descriptor.groupEl.dataset.dragging = "true";
@@ -477,6 +482,21 @@ function beginDrag(handle, e, descriptor) {
   handle.addEventListener("pointermove", onDragMove);
   handle.addEventListener("pointerup", onDragEnd);
   handle.addEventListener("pointercancel", onDragEnd);
+}
+
+function snapshotGizmoParams(nodeId) {
+  const node = getNodeById(nodeId);
+  if (!node?.params) return null;
+  const params = { ...node.params };
+  if (Array.isArray(params.stops)) {
+    params.stops = params.stops.map((s) => ({ ...s }));
+  }
+  return params;
+}
+
+function gizmoParamsEqual(a, b) {
+  if (!a || !b) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function onDragMove(e) {
@@ -520,6 +540,21 @@ function onDragEnd(e) {
   dragState.handle.removeEventListener("pointerup", onDragEnd);
   dragState.handle.removeEventListener("pointercancel", onDragEnd);
   flushPendingPatch(dragState);
+  // F17.2: now that the final patch has landed, compare against the pre-drag
+  // snapshot. If the drag moved anything, record one history entry covering
+  // the whole drag — undo restores the snapshot, redo replays the final
+  // params. No-op drags (click without movement) produce nothing.
+  const nodeId = dragState.nodeId;
+  const before = dragState.undoSnapshot;
+  if (nodeId && before) {
+    const after = snapshotGizmoParams(nodeId);
+    if (after && !gizmoParamsEqual(before, after)) {
+      pushHistory({
+        undo: () => updateNodeParams(nodeId, before),
+        redo: () => updateNodeParams(nodeId, after),
+      });
+    }
+  }
   if (dragState.groupEl) delete dragState.groupEl.dataset.dragging;
   document.body.classList.remove("dragging-gizmo");
   dragState = null;
