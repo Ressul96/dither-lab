@@ -2009,6 +2009,11 @@ export function applyBloomGpu(input, params) {
 }
 
 export function applyStarGlowGpu(input, params) {
+  // F9.4: prefer the bright-extract + refined-streak multi-pass; legacy
+  // single-pass shader stays as the fallback for the rare WebGL setup
+  // failure.
+  const multi = applyStarGlowMultiPass(input, params);
+  if (multi) return multi;
   return applyShaderPass("star-glow", input, params);
 }
 
@@ -2705,6 +2710,154 @@ void main() {
   out_color = vec4(weighted * w, 1.0);
 }
 `;
+
+// F9.4 Star-glow multi-pass. Pre-extract bright pixels once into mip[0] so
+// the streak pass can sample them at every tap without re-running luma /
+// threshold checks; this lets us bump the tap count from 8 to 16 (visibly
+// smoother streaks) at roughly the same overall sample cost, and a single
+// composite step folds the accumulated streaks back over the source.
+const STAR_GLOW_BRIGHT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D u_image;
+uniform float u_threshold;
+uniform float u_knee;
+uniform float u_saturation;
+in vec2 v_uv;
+out vec4 out_color;
+const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+void main() {
+  vec3 c = texture(u_image, v_uv).rgb;
+  float l = dot(c, LUMA);
+  vec3 sat = mix(vec3(l), c, u_saturation);
+  float lo = max(u_threshold - u_knee, 0.0);
+  float hi = u_threshold + u_knee + 0.001;
+  float w = smoothstep(lo, hi, l);
+  out_color = vec4(sat * w, 1.0);
+}
+`;
+
+const STAR_GLOW_STREAK_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D u_image;       // pre-extracted bright pixels
+uniform sampler2D u_source;      // original source for composite
+uniform vec2 u_resolution;
+uniform float u_intensity;
+uniform float u_streaks;
+uniform float u_angle;
+uniform float u_lengthPx;
+uniform float u_falloff;
+uniform float u_alternate;
+uniform float u_colorize;
+uniform float u_opacity;
+
+in vec2 v_uv;
+out vec4 out_color;
+
+const float PI = 3.141592653589793;
+const float TAU = 6.283185307179586;
+const int MAX_STREAKS = 8;
+const int STAR_TAPS = 16;
+
+vec3 starTint(float t, float axisNorm) {
+  float phase = t * 0.55 + axisNorm * 0.18;
+  return 0.72 + 0.28 * cos(TAU * (vec3(0.0, 0.33, 0.67) + phase));
+}
+
+void main() {
+  vec3 src = texture(u_source, v_uv).rgb;
+  if (u_intensity <= 0.0001 || u_lengthPx <= 0.0001) {
+    out_color = vec4(src, 1.0);
+    return;
+  }
+
+  vec2 invResolution = 1.0 / max(u_resolution, vec2(1.0));
+  float axisCount = max(u_streaks, 1.0);
+  vec3 glow = vec3(0.0);
+
+  for (int axis = 0; axis < MAX_STREAKS; axis++) {
+    float axisIndex = float(axis);
+    if (axisIndex >= u_streaks) break;
+    float axisNorm = axisIndex / max(axisCount - 1.0, 1.0);
+    float angle = u_angle + axisIndex * PI / axisCount;
+    vec2 dir = vec2(cos(angle), sin(angle));
+    float secondary = mix(1.0, u_alternate, step(0.5, mod(axisIndex, 2.0)));
+
+    for (int tapIndex = 1; tapIndex <= STAR_TAPS; tapIndex++) {
+      float tap = float(tapIndex) / float(STAR_TAPS);
+      float distancePx = tap * u_lengthPx;
+      float tail = pow(1.0 - tap, mix(6.0, 1.15, u_falloff)) * secondary;
+      vec2 offset = dir * distancePx * invResolution;
+
+      // Bright canvas is already threshold-masked, so each tap is a single
+      // sample — no luma / smoothstep work inside the inner loop.
+      vec3 positive = texture(u_image, v_uv + offset).rgb;
+      vec3 negative = texture(u_image, v_uv - offset).rgb;
+      vec3 tint = starTint(tap, axisNorm);
+      positive = mix(positive, positive * tint * 1.35, u_colorize);
+      negative = mix(negative, negative * tint * 1.35, u_colorize);
+
+      glow += positive * tail;
+      glow += negative * tail;
+    }
+  }
+
+  glow /= max(axisCount * 1.35, 1.0);
+  vec3 lit = src + glow * u_intensity;
+  out_color = vec4(mix(src, clamp(lit, 0.0, 1.0), clamp(u_opacity, 0.0, 1.0)), 1.0);
+}
+`;
+
+export function applyStarGlowMultiPass(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const intensity = clamp(Number(params?.intensity ?? 100) / 100, 0, 4);
+  const lengthPx = clamp(Number(params?.length ?? 64), 1, 192);
+  if (intensity <= 0 || lengthPx <= 0) return input;
+
+  const activeRenderer = getRenderer();
+  if (!activeRenderer) return null;
+  if (
+    typeof activeRenderer.ensureMipChain !== "function" ||
+    typeof activeRenderer.renderPass !== "function" ||
+    typeof activeRenderer.uploadInput !== "function" ||
+    typeof activeRenderer.captureOutput !== "function"
+  ) {
+    return null;
+  }
+
+  // Star-glow only needs a single scratch FBO at full resolution, so we
+  // borrow mip[0] from the shared mip chain. ensureMipChain re-sizes the
+  // existing entry when bloom runs after with a deeper chain.
+  const mip = activeRenderer.ensureMipChain(input.width, input.height, 1);
+  if (!mip || mip.length < 1) return null;
+
+  const sourceTex = activeRenderer.uploadInput(input);
+  if (!sourceTex) return null;
+
+  if (!activeRenderer.renderPass(STAR_GLOW_BRIGHT_SHADER, sourceTex, mip[0].width, mip[0].height, mip[0], {
+    uniforms: {
+      u_threshold: clamp(Number(params?.threshold ?? 70) / 100, 0, 1),
+      u_knee: clamp(Number(params?.knee ?? 20) / 100, 0, 0.5),
+      u_saturation: clamp(Number(params?.saturation ?? 100) / 100, 0, 2),
+    },
+  })) return null;
+
+  activeRenderer.resizeBackingCanvas(input.width, input.height);
+  if (!activeRenderer.renderPass(STAR_GLOW_STREAK_SHADER, mip[0].texture, input.width, input.height, null, {
+    uniforms: {
+      u_intensity: intensity,
+      u_streaks: clamp(Math.round(Number(params?.streaks ?? 4)), 1, 8),
+      u_angle: ((Number(params?.angle ?? 0) / 180) * Math.PI),
+      u_lengthPx: lengthPx,
+      u_falloff: clamp(Number(params?.falloff ?? 80) / 100, 0.05, 1),
+      u_alternate: clamp(Number(params?.alternate ?? 100) / 100, 0, 1),
+      u_colorize: clamp(Number(params?.colorize ?? 0) / 100, 0, 1),
+      u_opacity: clamp(Number(params?.opacity ?? 100) / 100, 0, 1),
+    },
+    extraTextures: { u_source: sourceTex },
+  })) return null;
+
+  return activeRenderer.captureOutput(input.width, input.height);
+}
 
 export function applyHalationMultiPass(input, params) {
   if (!input?.width || !input?.height) return null;
