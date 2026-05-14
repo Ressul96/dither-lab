@@ -1726,6 +1726,15 @@ function onInspectorInput(event) {
     // pick up the final value and commit through this same path.
     if (control.dataset.inputKind === "color-hex") {
       inspectorEditing = true;
+      // F17.3a: snapshot the pre-edit hex even though we skip the live
+      // commit, so the matching change event can record a single undo
+      // entry covering the whole typing session.
+      const nodeId = node.id;
+      const paramKey = control.dataset.nodeParam;
+      const undoSnapshotKey = `${nodeId}|param|${paramKey}`;
+      if (!inspectorParamSnapshots.has(undoSnapshotKey)) {
+        inspectorParamSnapshots.set(undoSnapshotKey, getNodeById(nodeId)?.params?.[paramKey]);
+      }
       return;
     }
 
