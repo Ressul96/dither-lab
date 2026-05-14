@@ -12,6 +12,7 @@ import {
   getNodeParentId,
   getSelectedNode,
   getSelectedNodeIds,
+  getSoloNodeId,
   getValueNodeOutputBounds,
   groupSelectedNodes,
   insertExistingNodeOnEdge,
@@ -25,6 +26,7 @@ import {
   selectNodes,
   toggleParamExposed,
   toggleNodeBypass,
+  toggleNodeSolo,
   ungroupNode,
   updateNodeLayerProperties,
   updateNodeParams,
@@ -948,6 +950,11 @@ function wireKeyboard() {
 
     if (key === "f" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
       if (frameSelectedGraphNodes()) event.preventDefault();
+      return;
+    }
+
+    if (key === "t" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
+      if (toggleSoloForSelectedNode()) event.preventDefault();
     }
   });
 
@@ -1055,6 +1062,12 @@ function frameSelectedGraphNodes() {
     panY: rect.height / 2 - toSceneY(centerY) * zoom,
   });
   return true;
+}
+
+function toggleSoloForSelectedNode() {
+  const nodeId = getState().graph.selectedNodeId ?? getSelectedNodeIds().at(-1);
+  if (!nodeId) return false;
+  return toggleNodeSolo(nodeId);
 }
 
 function getGraphNodesBounds(nodes) {
@@ -2071,9 +2084,10 @@ function renderGraph() {
   const parentId = getCurrentGraphParentId();
   const visibleNodes = getVisibleGraphNodes(graph, parentId);
   const selectedNodeIds = new Set(getSelectedNodeIds(graph));
+  const soloNodeId = getSoloNodeId(graph);
   nodesEl.style.width = `${GRAPH_WORLD_SIZE}px`;
   nodesEl.style.height = `${GRAPH_WORLD_SIZE}px`;
-  nodesEl.innerHTML = visibleNodes.map((node) => renderNode(node, selectedNodeIds)).join("");
+  nodesEl.innerHTML = visibleNodes.map((node) => renderNode(node, selectedNodeIds, soloNodeId)).join("");
   renderedGraphParentId = parentId;
   renderEdges(parentId);
   syncGraphBreadcrumb(parentId);
@@ -2107,17 +2121,18 @@ function getVisibleGraphNodeIds(graph, parentId = getCurrentGraphParentId()) {
   return new Set(getVisibleGraphNodes(graph, parentId).map((node) => node.id));
 }
 
-function renderNode(node, selectedNodeIds) {
+function renderNode(node, selectedNodeIds, soloNodeId = null) {
   const definition = getNodeDefinition(node.type);
   const selected = selectedNodeIds.has(node.id) ? " selected" : "";
   const bypassed = node.bypassed ? " is-bypassed" : "";
+  const solo = soloNodeId === node.id ? " is-solo" : "";
   const family = familySlug(definition?.family);
   const canBypass = node.type !== "source" && node.type !== "viewer-output" && node.type !== "group";
   const bypassIcon = node.bypassed ? eyeClosedSvg() : eyeOpenSvg();
 
   return `
     <div
-      class="graph-node graph-node--${family}${selected}${bypassed}"
+      class="graph-node graph-node--${family}${selected}${bypassed}${solo}"
       role="button"
       tabindex="0"
       draggable="false"
@@ -2129,6 +2144,7 @@ function renderNode(node, selectedNodeIds) {
       <div class="graph-node-head">
         <span class="graph-node-title">${escapeHtml(node.label)}</span>
         <span class="graph-node-head-actions">
+          ${solo ? `<span class="graph-node-solo-badge">Solo</span>` : ""}
           ${
             canBypass
               ? `<button class="graph-node-action graph-node-action--visibility" type="button" data-node-action="toggle-bypass" title="${node.bypassed ? "Enable node" : "Bypass node"}" aria-label="${node.bypassed ? "Enable node" : "Bypass node"}">${bypassIcon}</button>`

@@ -1248,6 +1248,14 @@ body.resizing-y * {
   filter: saturate(0.55);
 }
 
+.graph-node.is-solo {
+  border-color: rgba(255, 232, 128, 0.68);
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.34),
+    0 0 0 1px rgba(255, 232, 128, 0.36),
+    0 0 24px rgba(255, 205, 82, 0.2);
+}
+
 .graph-node--drag-preview {
   opacity: 0.82;
   pointer-events: none;
@@ -1297,6 +1305,17 @@ body.resizing-y * {
 .graph-node-action:hover {
   border-color: color-mix(in srgb, var(--node-family) 60%, white 12%);
   background: color-mix(in srgb, var(--node-family) 14%, transparent);
+}
+
+.graph-node-solo-badge {
+  min-height: 18px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 214, 92, 0.14);
+  color: #ffe88a;
+  font-size: 9px;
+  font-weight: 750;
+  text-transform: uppercase;
 }
 
 .graph-node-title {

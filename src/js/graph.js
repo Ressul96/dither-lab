@@ -1936,6 +1936,69 @@ export function toggleNodeBypass(nodeId) {
   return true;
 }
 
+export function toggleNodeSolo(nodeId) {
+  if (!nodeId) return false;
+
+  let graph = ensureBootGraph();
+  const activeSolo = normalizeSoloState(graph.solo);
+  if (activeSolo) {
+    const restoredEdges = restoreSoloEdges(graph, activeSolo);
+    if (activeSolo.nodeId === nodeId) {
+      dispatch("graph", {
+        nodes: refreshGroupMetadataForNodes(graph.nodes.map((node) => clone(node)), restoredEdges),
+        edges: restoredEdges,
+        solo: null,
+      });
+      return true;
+    }
+    graph = { ...graph, edges: restoredEdges, solo: null };
+  }
+
+  const node = getNodeById(nodeId, graph);
+  const viewer = graph.nodes.find((item) => item.type === "viewer-output");
+  if (!node || !viewer || node.id === viewer.id || node.type === "group") return false;
+
+  const outputSocket = getPrimaryOutputSocket(node);
+  const viewerInput = getPrimaryInputSocket(viewer);
+  if (!outputSocket || !viewerInput) return false;
+  if (!socketsCompatible(node, outputSocket, viewer, viewerInput)) return false;
+
+  const previousEdges = graph.edges.filter(
+    (edge) => edge.toNode === viewer.id && edge.toSocket === viewerInput
+  );
+  const baseEdges = graph.edges.filter(
+    (edge) => !(edge.toNode === viewer.id && edge.toSocket === viewerInput)
+  );
+  if (wouldCreateCycle(node.id, viewer.id, baseEdges)) return false;
+
+  const soloEdge = {
+    id: createEdgeId(node.id, outputSocket, viewer.id, viewerInput),
+    fromNode: node.id,
+    fromSocket: outputSocket,
+    toNode: viewer.id,
+    toSocket: viewerInput,
+  };
+  const nextEdges = sanitizeEdges([...baseEdges, soloEdge], graph.nodes);
+  if (!nextEdges.some((edge) => edge.id === soloEdge.id)) return false;
+
+  dispatch("graph", {
+    nodes: refreshGroupMetadataForNodes(graph.nodes.map((item) => clone(item)), nextEdges),
+    edges: nextEdges,
+    solo: {
+      nodeId: node.id,
+      viewerNodeId: viewer.id,
+      viewerInput,
+      previousEdges: previousEdges.map((edge) => ({ ...edge })),
+      soloEdgeId: soloEdge.id,
+    },
+  });
+  return true;
+}
+
+export function getSoloNodeId(graph = getState().graph) {
+  return normalizeSoloState(graph?.solo)?.nodeId ?? null;
+}
+
 export function setParamExposed(nodeId, paramKey, exposed, config = null) {
   if (!nodeId || !paramKey) return false;
   const { graph } = getState();
@@ -2044,7 +2107,8 @@ export function replaceGraph(nextGraph) {
 }
 
 export function serializeGraph(graph = getState().graph) {
-  const nodes = refreshGroupMetadataForNodes(graph.nodes, graph.edges);
+  const persistedEdges = getPersistableGraphEdges(graph);
+  const nodes = refreshGroupMetadataForNodes(graph.nodes, persistedEdges);
   return {
     nodes: nodes.map((node) => {
       const definition = getNodeDefinition(node.type);
@@ -2074,7 +2138,7 @@ export function serializeGraph(graph = getState().graph) {
       if (node.type === "group") payload.group = normalizeGroupMetadata(node.group);
       return payload;
     }),
-    edges: graph.edges.map((edge) => ({ ...edge })),
+    edges: persistedEdges.map((edge) => ({ ...edge })),
     selectedNodeId: graph.selectedNodeId,
     selectedNodeIds: getSelectedNodeIds(graph),
   };
@@ -2187,6 +2251,39 @@ function normalizeSelectedNodeIds(selectedNodeIds, nodes, fallbackId = null) {
     : [];
   if (ids.length > 0) return ids;
   return fallbackId && existing.has(fallbackId) ? [fallbackId] : [];
+}
+
+function getPersistableGraphEdges(graph) {
+  const activeSolo = normalizeSoloState(graph?.solo);
+  if (!activeSolo) return graph.edges.map((edge) => ({ ...edge }));
+  return restoreSoloEdges(graph, activeSolo);
+}
+
+function restoreSoloEdges(graph, solo) {
+  const viewerNodeId = solo.viewerNodeId;
+  const viewerInput = solo.viewerInput;
+  const baseEdges = graph.edges
+    .filter((edge) => edge.id !== solo.soloEdgeId)
+    .filter((edge) => !(edge.toNode === viewerNodeId && edge.toSocket === viewerInput))
+    .map((edge) => ({ ...edge }));
+  const restoredEdges = [...baseEdges, ...solo.previousEdges.map((edge) => ({ ...edge }))];
+  return sanitizeEdges(restoredEdges, graph.nodes);
+}
+
+function normalizeSoloState(solo) {
+  if (!solo || typeof solo !== "object") return null;
+  const nodeId = typeof solo.nodeId === "string" ? solo.nodeId : "";
+  const viewerNodeId = typeof solo.viewerNodeId === "string" ? solo.viewerNodeId : "";
+  const viewerInput = typeof solo.viewerInput === "string" ? solo.viewerInput : "";
+  const soloEdgeId = typeof solo.soloEdgeId === "string" ? solo.soloEdgeId : "";
+  if (!nodeId || !viewerNodeId || !viewerInput || !soloEdgeId) return null;
+  return {
+    nodeId,
+    viewerNodeId,
+    viewerInput,
+    soloEdgeId,
+    previousEdges: Array.isArray(solo.previousEdges) ? solo.previousEdges : [],
+  };
 }
 
 function normalizeNodeParents(nodes) {
