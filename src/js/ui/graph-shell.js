@@ -186,6 +186,14 @@ export function initGraphShell() {
     ) {
       graphAutoCentered = false;
     }
+    // Skip the full graph DOM rebuild while an inspector drag is live. The
+    // node cards' visible content (label, position, selection, edges) does
+    // not depend on the params being edited mid-drag, so rebuilding 220px-
+    // wide cards on every XY-pad / slider pointermove tick is wasted work
+    // that surfaced as visible lag on the focused control. The drag-end
+    // path calls renderInspector explicitly, and the next non-edit graph
+    // dispatch catches the shell up.
+    if (inspectorEditing) return;
     renderShell();
   });
   subscribe("timeline", () => {
