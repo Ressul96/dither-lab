@@ -1,4 +1,4 @@
-import { DEFAULT_GRAPH_VIEW, dispatch, getState, subscribe } from "../state.js";
+import { DEFAULT_GRAPH_VIEW, dispatch, getState, pushHistory, subscribe } from "../state.js";
 import {
   MESH_GRADIENT_MAX_STOPS,
   ROOT_PARENT_ID,
@@ -130,6 +130,10 @@ let graphKeyboardActive = false;
 let activeGraphMarquee = null;
 let graphRenameNodeId = null;
 const paletteSwatchLocks = new Map();
+// F17.1 inspector undo: snapshot a control's pre-drag value the first time
+// `input` fires for it, then turn the whole drag into a single history entry
+// when `change` flushes. Key: "${nodeId}|param|${paramKey}".
+const inspectorParamSnapshots = new Map();
 
 export function initGraphShell() {
   ensureBootGraph();
@@ -1614,6 +1618,27 @@ function onGraphNodeKeyDown(event) {
   }
 }
 
+function flushInspectorParamUndo(nodeId, key, kind = "param") {
+  if (!nodeId || !key) return;
+  const snapshotKey = `${nodeId}|${kind}|${key}`;
+  if (!inspectorParamSnapshots.has(snapshotKey)) return;
+  const oldValue = inspectorParamSnapshots.get(snapshotKey);
+  inspectorParamSnapshots.delete(snapshotKey);
+  const node = getNodeById(nodeId);
+  const newValue = kind === "property" ? node?.[key] : node?.params?.[key];
+  // No-op drags (click without movement, typing the same number) don't
+  // deserve a history entry — keeps the undo stack focused on real edits.
+  if (oldValue === newValue) return;
+  const applyValue = (value) => {
+    if (kind === "property") updateNodeLayerProperties(nodeId, { [key]: value });
+    else updateNodeParams(nodeId, { [key]: value });
+  };
+  pushHistory({
+    undo: () => applyValue(oldValue),
+    redo: () => applyValue(newValue),
+  });
+}
+
 function onInspectorInput(event) {
   const pickerHexInput = event.target.closest("[data-color-picker-hex-input]");
   if (pickerHexInput) {
@@ -1661,6 +1686,13 @@ function onInspectorInput(event) {
     const propertyKey = propertyControl.dataset.nodeProperty;
     if (!propertyKey) return;
     inspectorEditing = true;
+    // F17.1: capture the pre-drag value on the first input tick so the
+    // matching change event can record a single history entry covering the
+    // whole drag (parity with the data-node-param branch below).
+    const undoSnapshotKey = `${nodeId}|property|${propertyKey}`;
+    if (!inspectorParamSnapshots.has(undoSnapshotKey)) {
+      inspectorParamSnapshots.set(undoSnapshotKey, getNodeById(nodeId)?.[propertyKey]);
+    }
     const value = readControlValue(propertyControl);
     const binding = {
       type: TIMELINE_BINDING_NODE_PROPERTY,
@@ -1707,6 +1739,14 @@ function onInspectorInput(event) {
 
     const nodeId = node.id;
     const paramKey = control.dataset.nodeParam;
+    // F17.1: capture the pre-drag value before the first update so the
+    // matching change event can record a single history entry covering the
+    // entire slider/typing session. Subsequent input ticks see the snapshot
+    // is already set and skip.
+    const undoSnapshotKey = `${nodeId}|param|${paramKey}`;
+    if (!inspectorParamSnapshots.has(undoSnapshotKey)) {
+      inspectorParamSnapshots.set(undoSnapshotKey, getNodeById(nodeId)?.params?.[paramKey]);
+    }
     const value = readControlValue(control);
     updateNodeParams(nodeId, {
       [paramKey]: value,
@@ -1777,6 +1817,10 @@ function onInspectorChange(event) {
   const propertyControl = event.target.closest("[data-node-property]");
   if (propertyControl) {
     inspectorEditing = false;
+    const node = getSelectedNode();
+    if (node) {
+      flushInspectorParamUndo(node.id, propertyControl.dataset.nodeProperty, "property");
+    }
     renderInspector();
     return;
   }
@@ -1806,6 +1850,13 @@ function onInspectorChange(event) {
         updateParamKeyframeAtCurrentTime(nodeId, paramKey, value);
       }
       syncSiblingControls(control);
+    }
+    // F17.1: flush the drag snapshot into a single history entry. The
+    // pre-drag value was captured the first time onInspectorInput fired
+    // for this control; if the drag actually moved the param, record one
+    // undo entry covering the whole drag rather than one per slider tick.
+    if (node) {
+      flushInspectorParamUndo(node.id, control.dataset.nodeParam);
     }
     renderInspector();
     return;
