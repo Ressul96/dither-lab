@@ -29,7 +29,7 @@ sistem için kendi md'sinde.
 | F6 | Editor scaling: Group nodes | 1-2 hafta | ✅ |
 | F7 | On-canvas Gizmos | 1 hafta | ✅ |
 | F8 | Web Worker / OffscreenCanvas | 2-4 hafta | ✅ |
-| F9 | Renderer altyapı (ping-pong + mip + HDR) | 2-3 hafta | ⬜ |
+| F9 | Renderer altyapı (ping-pong + mip + HDR) | 2-3 hafta | ✅ F9.0/1/2/3/4/5 indi; F9.6 HDR RT atlandı |
 | F10 | Timeline + Player UI yeniden tasarım | 2-3 hafta | ⬜ F10.1-F10.4 indi |
 | F11 | Composite, scene grading + UI primitive parity | 1-2 hafta | ⬜ |
 | F12 | Export polish + preset'ler | ~1 hafta | ⬜ |

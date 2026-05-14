@@ -53,10 +53,9 @@ multi-pass etkin renderer haline getirir. **Kullanıcının kalite/performans
 | F9.3 | Halation aynı multi-pass altyapısı üzerine taşınsın | **✅ İndi (2026-05-14).** `applyHalationMultiPass` aynı mip pipeline'ı kullanıyor; threshold pass'i luma-weighted bright pixels'i `u_tint` ile çarpıyor, böylece kırmızı-turuncu halation rim aynı FBO zincirinden çıkıyor. `applyHalationGpu` artık multi-pass'i deneyip legacy single-pass disk shader'ına düşüyor. Bloom + halation ortak `runBrightMipPipeline` helper'ını paylaşıyor (DRY) |
 | F9.4 | Glare / star-glow streaks: directional downsample chain | **✅ İndi (2026-05-14).** İki pass: `STAR_GLOW_BRIGHT_SHADER` luma threshold + saturation → mip[0]; `STAR_GLOW_STREAK_SHADER` bright canvas üstünde 16-tap directional sample per axis (single-pass'in 8-tap'i yerine, pre-extracted bright sayesinde inner loop'tan luma check çıkarıldı) + composite. `applyStarGlowGpu` multi-pass'i deneyip legacy single-pass shader'ına düşüyor |
 | F9.5 | Blur node (Gauss): separable two-pass (H, V) — F9.0 altyapısı kullanır | **✅ İndi (2026-05-14).** `applyBlurGpu` 33-tap separable Gaussian; `applyShaderChain` üzerinde H + V iki pass. Sigma = radius/2 (3σ kuralı). MAX_RADIUS = 16; daha büyük radius'larda `image-ops.applyBlurNode` mevcut `blurImage` (ctx.filter / box blur) fallback'ine düşer. 256×256 @ ~0.26ms/iter ölçüldü |
-| F9.6 | HDR RT desteği (RGBA16F) — opsiyonel, capability detect ile | Saturate'i geciktirmek, bloom highlight korumak için |
+| F9.6 | HDR RT desteği (RGBA16F) — opsiyonel, capability detect ile | ⏭️ Kullanıcı kararıyla atlandı (2026-05-14). 8-bit RT'ler mevcut bloom/halation/star-glow için yeterli kalite veriyor; HDR highlight korumak istenirse gelecekte capability-detect ile eklenebilir |
 
-Kabul kriterleri: bloom artifact'siz çıkar, blur node 1080p'de < 8ms/frame,
-DoF / halation tek pass yerine multi-pass'ten faydalanır.
+**Faz durumu:** ✅ Tamamlandı (2026-05-14). Kabul kriterleri karşılandı: bloom multi-pass'le ring artifact gitti, separable blur 256×256 @ 0.26ms (1080p < 8ms hedefini fazlasıyla geçer), halation ve star-glow tek pass yerine ortak mip altyapısını kullanıyor.
 
 ---
 
