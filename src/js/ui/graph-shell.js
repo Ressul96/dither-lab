@@ -2285,10 +2285,102 @@ function renderGraph() {
   const soloNodeId = getSoloNodeId(graph);
   nodesEl.style.width = `${GRAPH_WORLD_SIZE}px`;
   nodesEl.style.height = `${GRAPH_WORLD_SIZE}px`;
-  nodesEl.innerHTML = visibleNodes.map((node) => renderNode(node, selectedNodeIds, soloNodeId)).join("");
+  const nodesHtml = visibleNodes.map((node) => renderNode(node, selectedNodeIds, soloNodeId)).join("");
+  // F24 group I/O proxies: when the user has descended into a group, render
+  // virtual "Group Input" / "Group Output" cards on either side of the
+  // children so the boundary connections are visible from inside. These are
+  // DOM-only — not part of graph.nodes — and read straight from the parent
+  // group's pre-computed `group.inputBindings` / `outputBindings` arrays.
+  const proxiesHtml = parentId !== ROOT_PARENT_ID
+    ? renderGroupProxies(graph, parentId, visibleNodes)
+    : "";
+  nodesEl.innerHTML = nodesHtml + proxiesHtml;
   renderedGraphParentId = parentId;
   renderEdges(parentId);
   syncGraphBreadcrumb(parentId);
+}
+
+function renderGroupProxies(graph, parentId, visibleNodes) {
+  const groupNode = getNodeById(parentId, graph);
+  if (!groupNode || groupNode.type !== "group") return "";
+
+  const inputBindings = Array.isArray(groupNode.group?.inputBindings)
+    ? groupNode.group.inputBindings
+    : [];
+  const outputBindings = Array.isArray(groupNode.group?.outputBindings)
+    ? groupNode.group.outputBindings
+    : [];
+
+  // Place the proxies just to the left / right of the children's bounding
+  // box so they read as bookends. An empty group falls back to the world
+  // centre so the cards still appear somewhere sensible.
+  const bbox = computeChildrenBbox(visibleNodes);
+  const inputX = bbox.minX - 280;
+  const outputX = bbox.maxX + 40;
+  const y = bbox.centerY - 60;
+
+  return [
+    renderGroupProxy("input", inputX, y, inputBindings, graph),
+    renderGroupProxy("output", outputX, y, outputBindings, graph),
+  ].join("");
+}
+
+function computeChildrenBbox(nodes) {
+  if (!nodes?.length) {
+    return {
+      minX: GRAPH_WORLD_ORIGIN,
+      maxX: GRAPH_WORLD_ORIGIN + 220,
+      minY: GRAPH_WORLD_ORIGIN,
+      maxY: GRAPH_WORLD_ORIGIN + 120,
+      centerY: GRAPH_WORLD_ORIGIN + 60,
+    };
+  }
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const node of nodes) {
+    minX = Math.min(minX, node.x);
+    maxX = Math.max(maxX, node.x + 220);
+    minY = Math.min(minY, node.y);
+    maxY = Math.max(maxY, node.y + 120);
+  }
+  return { minX, maxX, minY, maxY, centerY: (minY + maxY) / 2 };
+}
+
+function renderGroupProxy(kind, x, y, bindings, graph) {
+  const title = kind === "input" ? "Group Input" : "Group Output";
+  const emptyLabel = kind === "input" ? "No incoming connections" : "No outgoing connections";
+  const body = bindings.length === 0
+    ? `<div class="graph-proxy-empty">${emptyLabel}</div>`
+    : bindings.map((binding) => renderGroupProxyBinding(kind, binding, graph)).join("");
+  return `
+    <div class="graph-proxy-node graph-proxy-node--${kind}"
+         style="left:${toSceneX(x)}px;top:${toSceneY(y)}px"
+         data-group-proxy="${kind}"
+         aria-hidden="true">
+      <div class="graph-proxy-head">${title}</div>
+      <div class="graph-proxy-body">${body}</div>
+    </div>
+  `;
+}
+
+function renderGroupProxyBinding(kind, binding, graph) {
+  // Input bindings flow outer → inner, output bindings flow inner → outer.
+  // Either way we render the inner side prominently (that's what the user
+  // is working with inside the group) and the outer side as the link target.
+  const outerId = kind === "input" ? binding.fromNode : binding.toNode;
+  const outerSocket = kind === "input" ? binding.fromSocket : binding.toSocket;
+  const innerId = kind === "input" ? binding.toNode : binding.fromNode;
+  const innerSocket = kind === "input" ? binding.toSocket : binding.fromSocket;
+  const outer = getNodeById(outerId, graph);
+  const inner = getNodeById(innerId, graph);
+  const outerLabel = `${outer?.label ?? outerId}.${outerSocket}`;
+  const innerLabel = `${inner?.label ?? innerId}.${innerSocket}`;
+  const line = kind === "input"
+    ? `${outerLabel} → ${innerLabel}`
+    : `${innerLabel} → ${outerLabel}`;
+  return `<div class="graph-proxy-binding">${escapeHtml(line)}</div>`;
 }
 
 function renderEdges(parentId = getCurrentGraphParentId()) {

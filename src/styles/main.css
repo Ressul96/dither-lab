@@ -1299,6 +1299,61 @@ body.resizing-y * {
   min-width: 0;
 }
 
+/* F24 group I/O proxy nodes — DOM-only cards rendered when the user is
+   inside a group, listing the boundary bindings on either side. Static
+   (pointer-events: none) for now; later iterations make them draggable
+   and let users wire new connections through them. */
+.graph-proxy-node {
+  position: absolute;
+  width: 240px;
+  padding: 12px 14px;
+  border-radius: var(--radius-shell);
+  border: 1px solid var(--card-edge);
+  background: rgba(18, 18, 22, 0.92);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  pointer-events: none;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+}
+
+.graph-proxy-node--input {
+  border-left: 3px solid var(--family-input);
+}
+
+.graph-proxy-node--output {
+  border-right: 3px solid var(--accent);
+}
+
+.graph-proxy-head {
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.graph-proxy-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.graph-proxy-binding {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.graph-proxy-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .graph-node-action {
   width: 20px;
   height: 20px;
