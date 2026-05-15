@@ -1056,7 +1056,10 @@ body.resizing-y * {
   border-radius: var(--radius-surface);
   background:
     linear-gradient(180deg, rgba(28, 28, 34, 0.92), rgba(15, 15, 18, 0.98));
-  cursor: crosshair;
+  /* Default left-drag is pan now (F24), so the resting cursor advertises
+     that. Cmd / Ctrl held swaps to crosshair (marquee-ready), Alt to
+     scissors (cut-ready), Space keeps the grab affordance redundantly. */
+  cursor: grab;
 }
 
 .node-editor-surface.space-panning {
@@ -1067,7 +1070,8 @@ body.resizing-y * {
   cursor: grabbing;
 }
 
-.node-editor-surface.box-selecting {
+.node-editor-surface.box-selecting,
+.node-editor-surface.marquee-ready {
   cursor: crosshair;
 }
 

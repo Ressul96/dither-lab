@@ -125,6 +125,10 @@ let nodePaletteSearchEl = null;
 let nodePaletteEmptyEl = null;
 let graphSpacePanActive = false;
 let graphCutCursorActive = false;
+// Tracks Meta/Ctrl held above the editor — drives the marquee-ready cursor
+// (crosshair) and lets the empty-area pointerdown branch route to marquee
+// instead of the new default pan.
+let graphMarqueeModifierActive = false;
 let graphPointerInsideEditor = false;
 let graphKeyboardActive = false;
 let activeGraphMarquee = null;
@@ -577,11 +581,15 @@ function initViewportInteractions() {
       startEdgeCut(e);
       return;
     }
-    if (graphSpacePanActive) {
-      startEditorPan(e);
+    // Cmd / Ctrl held over empty canvas opens the marquee box-select.
+    // Plain left-drag is back to panning — that's the default users built
+    // muscle memory around before F13.3 swapped them. Space-pan still
+    // works as a redundant alternative.
+    if (e.metaKey || e.ctrlKey) {
+      startGraphBoxSelect(e);
       return;
     }
-    startGraphBoxSelect(e);
+    startEditorPan(e);
   });
 }
 
@@ -931,6 +939,14 @@ function wireKeyboard() {
       return;
     }
 
+    // Cmd / Ctrl: arm marquee-ready cursor when the pointer is over the
+    // editor. Don't preventDefault — we still want regular Cmd shortcuts
+    // (G, D, Z, etc.) to fire below.
+    if ((event.key === "Meta" || event.key === "Control") && shouldUseGraphMarqueeCursor()) {
+      graphMarqueeModifierActive = true;
+      syncGraphInteractionModeClasses();
+    }
+
     if (isSpaceKey(event) && shouldUseGraphSpacePan()) {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -1005,6 +1021,11 @@ function wireKeyboard() {
       return;
     }
 
+    if ((event.key === "Meta" || event.key === "Control") && graphMarqueeModifierActive) {
+      graphMarqueeModifierActive = false;
+      syncGraphInteractionModeClasses();
+    }
+
     if (isSpaceKey(event) && graphSpacePanActive) {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -1033,6 +1054,10 @@ function shouldUseGraphCutCursor() {
   return graphPointerInsideEditor || editorEl?.matches?.(":hover") || graphCutCursorActive;
 }
 
+function shouldUseGraphMarqueeCursor() {
+  return graphPointerInsideEditor || editorEl?.matches?.(":hover") || graphMarqueeModifierActive;
+}
+
 function syncGraphCutCursorFromPointer(event) {
   const nextCutCursorActive = Boolean(event.altKey);
   if (graphCutCursorActive === nextCutCursorActive) return;
@@ -1051,6 +1076,7 @@ function shouldHandleGraphShortcut() {
 function syncGraphInteractionModeClasses() {
   editorEl?.classList.toggle("space-panning", graphSpacePanActive && shouldUseGraphSpacePan());
   editorEl?.classList.toggle("cut-ready", graphCutCursorActive && shouldUseGraphCutCursor());
+  editorEl?.classList.toggle("marquee-ready", graphMarqueeModifierActive && shouldUseGraphMarqueeCursor());
 }
 
 function duplicateSelectedGraphNodes() {
