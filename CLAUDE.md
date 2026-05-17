@@ -118,6 +118,8 @@ Read only the docs relevant to the task instead of loading everything by default
 
 - [docs/spec/v2-node-graph.md](docs/spec/v2-node-graph.md)
   - v2 product direction, split preview/node layout, node workflow, graph rules, v2 rollout
+- [docs/spec/v3-timeline-editing.md](docs/spec/v3-timeline-editing.md)
+  - v3 multi-track clip-based timeline on top of the node graph, edit operations, OpenCut-inspired
 - [docs/spec/product.md](docs/spec/product.md)
   - product scope, feature commitments, inputs, project files, deferred items
 - [docs/spec/ui-and-ux.md](docs/spec/ui-and-ux.md)
@@ -135,6 +137,8 @@ Read only the docs relevant to the task instead of loading everything by default
 
 - For the node-graph v2 direction:
   - start with `docs/spec/v2-node-graph.md`
+- For clip-based timeline / multi-track editing (v3):
+  - start with `docs/spec/v3-timeline-editing.md`
 - For scaffolding or phase work:
   - start with `docs/spec/implementation-plan.md`
 - For UI work:

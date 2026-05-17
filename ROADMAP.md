@@ -237,9 +237,76 @@ All 27 algorithms registered in `src/js/dither/` and verified by `smoke/algorith
 - [ ] Blend pipeline
 - [ ] Tracker input binding
 
+## V3 Timeline Editing Track
+
+Spec: [docs/spec/v3-timeline-editing.md](docs/spec/v3-timeline-editing.md). OpenCut-inspired
+clip-based multi-track editor on top of the V2 node graph. Two "track" namespaces stay separated:
+existing `state.timeline.tracks` = Parameter Tracks (keyframes); new `state.composition.tracks` =
+Media Tracks (clips).
+
+### Phase A - Composition State
+
+- [ ] Add `state.composition` slice (version, fps, duration, tracks, sources)
+- [ ] Composition reducer + dispatch path (single chokepoint for edit ops)
+- [ ] Project save/load: read/write `composition` key with schema version bump
+- [ ] Backward-compat migration: legacy project with single source → one video track, one clip
+- [ ] Autosave covers composition state
+- [ ] Resolve four open questions from the spec (inspector mode, composition node, schema number,
+      panel persist scope)
+
+### Phase B - Read-Only Timeline
+
+- [ ] Timeline panel container in the player card area (resizable, persistent height)
+- [ ] Ruler + playhead driven by composition time
+- [ ] Single Media Track lane rendering clip rectangles
+- [ ] Preview pulls active clip's source frame into the existing graph at time `t`
+- [ ] Export walks `composition.duration * fps`; reuses Phase 11 ffmpeg pipeline
+- [ ] Parameter Tracks render under the same time axis (collapsed by default)
+
+### Phase C - Core Edit Operations
+
+- [ ] Drag media from source list onto track (insert clip with snap)
+- [ ] Trim head/tail (clamps to source extents and neighbor edges)
+- [ ] Split at playhead (`S`)
+- [ ] Move clip with snap (playhead, neighbors, ruler ticks)
+- [ ] Ripple delete (`Shift+Delete`)
+- [ ] Per-clip enable toggle
+- [ ] Undo/redo via existing F17 atomic-drag pattern
+- [ ] Selection model (single clip → inspector shows clip props)
+
+### Phase D - Multi-Track + Audio
+
+- [ ] Second video track with top-wins resolver
+- [ ] Video element pool (LRU, N=2–3 warm decoders)
+- [ ] Audio Media Track type
+- [ ] Web Audio preview (mute/solo per track)
+- [ ] FFmpeg `-filter_complex` plan for audio export
+- [ ] Source-id namespacing in frame cache (avoid collisions between clips sharing a source)
+
+### Phase E - Polish
+
+- [ ] Slip (`Alt+drag` body)
+- [ ] Slide (`Cmd+drag` body)
+- [ ] Ripple trim (`Alt+drag` edge)
+- [ ] Zoomable ruler (mouse wheel + pinch)
+- [ ] Magnet snap toggle (`N`)
+- [ ] Marker support
+- [ ] Export sheet: Range becomes Full Composition / In-Out / Selected Clip
+
+### Deferred to V4
+
+- [ ] Transitions (cross-fade, dip-to-black) — needs a render-time blend pass
+- [ ] Per-clip independent node graphs
+- [ ] Nested compositions / sub-sequences
+- [ ] Adjustment-layer effect tracks
+- [ ] Speed ramps, time remapping, reverse
+- [ ] Multi-camera angles
+- [ ] Title / text / sticker tools
+
 ## Recommended Next Ticks (Plan B order)
 
 - [ ] Phase C stabilization smoke on real Tauri dev (playback + compare + branched graph)
 - [ ] Phase 11: video export via FFmpeg sidecar
 - [ ] Phase 11: sequence export
 - [ ] Phase 11: progress + cancel + reveal
+- [ ] V3 Phase A: composition state slice + project schema bump
