@@ -755,6 +755,7 @@ export function beginExportSession() {
   }
   exportSessionActive = true;
   playbackSyncSuspended = true;
+  clearFrameCache();
 }
 
 export function endExportSession() {
@@ -772,32 +773,80 @@ export async function seekForExport(seconds) {
   const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
 
   if (Math.abs(before - target) <= 0.0005) {
-    renderCurrentFrame();
+    await renderCurrentFrame();
     return true;
   }
 
-  return new Promise((resolve) => {
+  // `seeked` alone is not enough: it tells us the position updated, but
+  // the <video>'s drawImage source can still hold the previous decoded
+  // frame. After `seeked` we wait one more paint — via
+  // requestVideoFrameCallback when available, with a double-rAF fallback
+  // because some WebViews (notably WKWebView for paused video) don't
+  // fire rVFC reliably.
+  const supportsVFC =
+    typeof v.requestVideoFrameCallback === "function" &&
+    v instanceof HTMLVideoElement;
+
+  const ok = await new Promise((resolve) => {
     let settled = false;
-    const finalize = (ok) => {
-      if (settled) return;
-      settled = true;
+
+    const cleanup = () => {
       v.removeEventListener("seeked", onSeeked);
       v.removeEventListener("error", onError);
       clearTimeout(timer);
-      if (ok) renderCurrentFrame();
-      resolve(ok);
     };
-    const onSeeked = () => finalize(true);
-    const onError = () => finalize(false);
-    const timer = setTimeout(() => finalize(false), 5000);
+    const succeed = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(true);
+    };
+    const fail = (reason) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      console.warn("[seekForExport] failed", {
+        reason,
+        target,
+        before,
+        readyState: v.readyState,
+        videoError: v.error && { code: v.error.code, message: v.error.message },
+      });
+      resolve(false);
+    };
+
+    const waitForPaint = () => {
+      if (!supportsVFC) {
+        requestAnimationFrame(() => requestAnimationFrame(succeed));
+        return;
+      }
+      let painted = false;
+      const onPaint = () => { if (!painted) { painted = true; succeed(); } };
+      v.requestVideoFrameCallback(onPaint);
+      requestAnimationFrame(() => requestAnimationFrame(onPaint));
+    };
+
+    const onSeeked = () => waitForPaint();
+    // Tauri's asset protocol can trigger spurious `error` events during seek
+    // even when no real decode failure has occurred. Only fail if v.error
+    // carries an actual MediaError code; otherwise let seeked/paint resolve.
+    const onError = () => {
+      if (v.error && v.error.code) fail("video-error");
+    };
+    const timer = setTimeout(() => fail("timeout"), 5000);
+
     v.addEventListener("seeked", onSeeked);
     v.addEventListener("error", onError);
+
     try {
       v.currentTime = target;
-    } catch {
-      finalize(false);
+    } catch (e) {
+      fail("set-currentTime-throw:" + (e?.message || e));
     }
   });
+
+  if (ok) await renderCurrentFrame();
+  return ok;
 }
 
 export function stepFrame(direction) {
@@ -865,7 +914,10 @@ export function setFps(fps) {
 export function getCurrentExportFrameCanvas(target = "viewer-output") {
   const { video: v } = ensureEls();
   if (!v || v.readyState < 2) return null;
-  renderCurrentFrame();
+  // During export, seekForExport already awaited a fresh render — calling
+  // it again would be redundant work and silently fire-and-forget (this
+  // function is sync), risking that callers read a stale canvas.
+  if (!exportSessionActive) renderCurrentFrame();
   if (target === "dither-only") {
     return hasDitherOutput ? ditherCanvas ?? null : null;
   }
@@ -875,14 +927,14 @@ export function getCurrentExportFrameCanvas(target = "viewer-output") {
 export function hasCurrentDitherFrame() {
   const { video: v } = ensureEls();
   if (!v || v.readyState < 2) return false;
-  renderCurrentFrame();
+  if (!exportSessionActive) renderCurrentFrame();
   return hasDitherOutput && Boolean(ditherCanvas?.width && ditherCanvas?.height);
 }
 
 export function getCurrentSourceFrameCanvas() {
   const { video: v } = ensureEls();
   if (!v || v.readyState < 2) return null;
-  renderCurrentFrame();
+  if (!exportSessionActive) renderCurrentFrame();
   return sourceCanvas ?? null;
 }
 
@@ -1167,6 +1219,15 @@ function buildPreviewSource(fullSource) {
 
 function drawSourceFrame(v) {
   if (!sourceCtx || !sourceCanvas) return;
+  // Export drives back-to-back seeks where `<video>.drawImage` can briefly
+  // read the previous decoded frame. Caching those pixels under the new
+  // frame's key would poison subsequent reads, so always draw fresh while
+  // the export session is active.
+  if (exportSessionActive) {
+    sourceCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+    sourceCtx.drawImage(v.drawable || v, 0, 0, sourceCanvas.width, sourceCanvas.height);
+    return;
+  }
   const key = sourceFrameKey(v);
   if (key !== null) {
     const cached = frameCache.get(key);
