@@ -52,6 +52,7 @@ import { applyLayerAdjustmentsNode } from "./image-ops/layer-adjustments.js";
 import { applyLensDistortNode } from "./image-ops/lens-distort.js";
 import { applyDisplaceNode } from "./image-ops/displace.js";
 import { applyRgbToBwNode } from "./image-ops/rgb-to-bw.js";
+import { applyPosterizeNode } from "./image-ops/posterize.js";
 import {
   applyAnalogNode,
   applyAsciiNode,
@@ -89,6 +90,7 @@ export { applyLayerAdjustmentsNode };
 export { applyLensDistortNode };
 export { applyDisplaceNode };
 export { applyRgbToBwNode };
+export { applyPosterizeNode };
 export {
   applyAnalogNode,
   applyAsciiNode,
@@ -113,7 +115,6 @@ import {
 import { buildGradientLut } from "./gl/gradient-lut.js";
 import {
   applyBloomGpu,
-  applyPosterizeGpu,
   applyStarGlowGpu,
 } from "./gpu-effects.js";
 
@@ -506,65 +507,8 @@ function renderStreaks(brightCanvas, streakCount, angleOffset, iterations, fade)
 // Posterize — reduce smooth gradients to N discrete color levels per channel.
 // Tries the GPU shader first (supports per-channel steps, gamma, luma mode);
 // falls back to the legacy CPU path for old saves on machines without WebGL2.
-export function applyPosterizeNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  const gpuOutput = applyPosterizeGpu(input, params);
-  if (gpuOutput) return gpuOutput;
-  return applyPosterizeCpu(input, params);
-}
-
-function applyPosterizeCpu(input, params) {
-  const stepsR = clamp(Math.round(Number(params.steps ?? 8)), 2, 64);
-  const rawG = Number(params.stepsG ?? 0);
-  const rawB = Number(params.stepsB ?? 0);
-  const stepsG = rawG > 0 ? clamp(Math.round(rawG), 2, 64) : stepsR;
-  const stepsB = rawB > 0 ? clamp(Math.round(rawB), 2, 64) : stepsR;
-  const gamma = String(params.gamma ?? "linear").toLowerCase() === "srgb";
-  const lumaMode = String(params.lumaMode ?? "rgb").toLowerCase() === "luma";
-  const opacity = clamp(Number(params.opacity ?? 100) / 100, 0, 1);
-  if (opacity <= 0) return input;
-
-  const output = createBuffer(input.width, input.height);
-  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  ctx.drawImage(input, 0, 0);
-  const imageData = ctx.getImageData(0, 0, output.width, output.height);
-  const data = imageData.data;
-  const levelR = stepsR - 1;
-  const levelG = stepsG - 1;
-  const levelB = stepsB - 1;
-  for (let i = 0; i < data.length; i += 4) {
-    const srcR = data[i] / 255;
-    const srcG = data[i + 1] / 255;
-    const srcB = data[i + 2] / 255;
-    const workR = gamma ? toLinear(srcR) : srcR;
-    const workG = gamma ? toLinear(srcG) : srcG;
-    const workB = gamma ? toLinear(srcB) : srcB;
-
-    let outR;
-    let outG;
-    let outB;
-    if (lumaMode) {
-      const luma = luminanceBt601(workR, workG, workB);
-      const quantizedLuma = Math.floor(luma * levelR + 0.5) / levelR;
-      outR = quantizedLuma + (workR - luma);
-      outG = quantizedLuma + (workG - luma);
-      outB = quantizedLuma + (workB - luma);
-    } else {
-      outR = Math.floor(clamp01(workR) * levelR + 0.5) / levelR;
-      outG = Math.floor(clamp01(workG) * levelG + 0.5) / levelG;
-      outB = Math.floor(clamp01(workB) * levelB + 0.5) / levelB;
-    }
-
-    const finalR = gamma ? toSrgb(clamp01(outR)) : clamp01(outR);
-    const finalG = gamma ? toSrgb(clamp01(outG)) : clamp01(outG);
-    const finalB = gamma ? toSrgb(clamp01(outB)) : clamp01(outB);
-    data[i] = mixByte(data[i], finalR * 255, opacity);
-    data[i + 1] = mixByte(data[i + 1], finalG * 255, opacity);
-    data[i + 2] = mixByte(data[i + 2], finalB * 255, opacity);
-  }
-  ctx.putImageData(imageData, 0, 0);
-  return output;
-}
+// applyPosterizeNode + applyPosterizeCpu + toLinear/toSrgb moved to
+// image-ops/posterize.js. Re-exported at the top of this file.
 
 // applyInvertNode moved to image-ops/geometry.js and re-exported at the
 // top of this file. Kept here only as a breadcrumb for grep/contributors.
@@ -966,13 +910,8 @@ function scaleRgbToLumaInto(r, g, b, targetLuma, target, offset) {
 // image-ops/pixel-math.js. Imported at the top of this file so existing
 // callsites inside image-ops resolve unchanged.
 
-function toLinear(value) {
-  return Math.pow(clamp01(value), 2.2);
-}
-
-function toSrgb(value) {
-  return Math.pow(clamp01(value), 1 / 2.2);
-}
+// toLinear / toSrgb moved alongside applyPosterizeCpu into
+// image-ops/posterize.js (its only consumer).
 
 // thresholdChannelValue moved to image-ops/threshold.js (single
 // consumer, no other module needs it).
