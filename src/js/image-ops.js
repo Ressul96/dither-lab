@@ -44,6 +44,20 @@ import {
   sampleGradientLutInto,
 } from "./image-ops/gradient.js";
 import { applyNoiseNode } from "./image-ops/noise-source.js";
+import {
+  applyAnalogNode,
+  applyAsciiNode,
+  applyBloomNode,
+  applyCrtNode,
+  applyDepthOfFieldNode,
+  applyHalationNode,
+  applyHalftoneNode,
+  applyLedScreenNode,
+  applyModulationNode,
+  applyPatternDitherNode,
+  applyPixelSortingNode,
+  applyVhsNode,
+} from "./image-ops/stylize-gpu.js";
 
 // Re-export the pool so external consumers (graph-runtime.js, source.js)
 // keep importing from "./image-ops.js" unchanged. Internal effect
@@ -60,6 +74,20 @@ export { applyDitherNode };
 export { applyGradientMapNode, applyGradientNode, applyMeshGradientNode };
 export { applyBlurNode };
 export { applyNoiseNode };
+export {
+  applyAnalogNode,
+  applyAsciiNode,
+  applyBloomNode,
+  applyCrtNode,
+  applyDepthOfFieldNode,
+  applyHalationNode,
+  applyHalftoneNode,
+  applyLedScreenNode,
+  applyModulationNode,
+  applyPatternDitherNode,
+  applyPixelSortingNode,
+  applyVhsNode,
+};
 import {
   areRgbCurvesIdentity,
   buildCurveLut,
@@ -69,20 +97,10 @@ import {
 } from "./curve-lut.js";
 import { buildGradientLut } from "./gl/gradient-lut.js";
 import {
-  applyAsciiGpu,
   applyBloomGpu,
   applyChromaticAberrationGpu,
-  applyCrtGpu,
-  applyDepthOfFieldGpu,
-  applyHalationGpu,
-  applyHalftoneGpu,
-  applyLedScreenGpu,
-  applyModulationGpu,
-  applyPatternDitherGpu,
-  applyPixelSortingGpu,
   applyPosterizeGpu,
   applyStarGlowGpu,
-  applyVhsGpu,
 } from "./gpu-effects.js";
 
 // supportsBlurFilter moved to image-ops/blur-support.js so the mix
@@ -1094,123 +1112,10 @@ export function applyLensDistortNode(input, params) {
   return output;
 }
 
-export function applyHalftoneNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  // Halftone is GPU-only for now; if WebGL2 is unavailable we'd rather
-  // pass-through the source than burn CPU time on a slow software fallback
-  // (the dot grid math is significantly more expensive per-pixel than the
-  // chromatic aberration shader).
-  const gpuOutput = applyHalftoneGpu(input, params);
-  return gpuOutput ?? input;
-}
-
-export function applyLedScreenNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  // LED Screen is GPU-only: the per-pixel diode, subpixel and glow mask math
-  // is exactly what the fullscreen shader path is for. Pass-through keeps the
-  // graph usable on WebGL2-disabled browsers.
-  const gpuOutput = applyLedScreenGpu(input, params);
-  return gpuOutput ?? input;
-}
-
-export function applyModulationNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  // Modulation is GPU-only: phase-modulated line masks are cheap in a shader
-  // but not worth a per-pixel CPU fallback during video playback.
-  const gpuOutput = applyModulationGpu(input, params);
-  return gpuOutput ?? input;
-}
-
-export function applyPixelSortingNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  // P1 Pixel Sorting is a GPU-only glitch-sort approximation. True segment
-  // sorting would need a CPU/worker or multi-pass path and stays out of the
-  // live playback route for now.
-  const gpuOutput = applyPixelSortingGpu(input, params);
-  return gpuOutput ?? input;
-}
-
-export function applyDepthOfFieldNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  // Depth of Field P1 is GPU-only: even 32 round aperture taps per pixel are
-  // too expensive for the live CPU path. Pass-through fallback keeps older
-  // browsers rendering the graph rather than producing a blank frame.
-  const gpuOutput = applyDepthOfFieldGpu(input, params);
-  return gpuOutput ?? input;
-}
-
-export function applyVhsNode(input, params, context) {
-  if (!input?.width || !input?.height) return null;
-  // VHS is GPU-only — the shader does multi-tap chroma blur, scrolling
-  // tracking bands, and per-frame noise; a CPU port would be unusable in
-  // realtime. Fall through to the input frame when WebGL2 is missing so
-  // the rest of the chain still renders.
-  const gpuOutput = applyVhsGpu(input, params, context);
-  return gpuOutput ?? input;
-}
-
-export function applyCrtNode(input, params, context) {
-  if (!input?.width || !input?.height) return null;
-  // CRT is GPU-only for the same reason as VHS: barrel distortion plus a
-  // 5-tap glow blur per pixel and a per-pixel mask lookup blow up CPU cost
-  // very quickly. Pass-through to the input frame when WebGL2 is missing.
-  const gpuOutput = applyCrtGpu(input, params, context);
-  return gpuOutput ?? input;
-}
-
-export function applyAnalogNode(input, params, context) {
-  if (!input?.width || !input?.height) return null;
-  const mode = String(params?.mode ?? "vhs");
-  if (mode === "crt") {
-    return applyCrtNode(input, params, context);
-  }
-  if (mode === "vhs-crt") {
-    const vhs = applyVhsNode(input, params, context);
-    const crt = applyCrtNode(vhs, params, context);
-    if (vhs && vhs !== input && vhs !== crt) releaseBuffer(vhs);
-    return crt;
-  }
-  return applyVhsNode(input, params, context);
-}
-
-export function applyBloomNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  // Bloom is GPU-only — the single-pass shader does 24 disk-distributed
-  // texture taps per output pixel (golden-spiral sampling), which is wildly
-  // out of reach for a CPU implementation at preview resolutions. Fall
-  // through to the input frame when WebGL2 is missing.
-  const gpuOutput = applyBloomGpu(input, params);
-  return gpuOutput ?? input;
-}
-
-export function applyHalationNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  // Halation shares Bloom's per-pixel cost profile — same 24-tap golden
-  // spiral, so it's GPU-only too. Pass-through fallback when WebGL2 is
-  // missing keeps the graph rendering rather than producing a black frame.
-  const gpuOutput = applyHalationGpu(input, params);
-  return gpuOutput ?? input;
-}
-
-export function applyAsciiNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  // ASCII relies on a glyph atlas texture sampled per output pixel — the
-  // CPU equivalent would mean per-cell font rasterization on every frame,
-  // which is impractical. GPU-only with input pass-through when WebGL2 is
-  // missing.
-  const gpuOutput = applyAsciiGpu(input, params);
-  return gpuOutput ?? input;
-}
-
-export function applyPatternDitherNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  // Pattern Dither is GPU-only and intentionally lives alongside the CPU
-  // Dither node — it covers the embarrassingly-parallel ordered/threshold
-  // patterns at full preview speed for video, while the CPU node owns the
-  // serial error-diffusion catalog plus discrete palette matching.
-  const gpuOutput = applyPatternDitherGpu(input, params);
-  return gpuOutput ?? input;
-}
+// 12 trivial GPU-passthrough wrappers (halftone, led-screen, modulation,
+// pixel-sorting, depth-of-field, vhs, crt, analog, bloom, halation,
+// ascii, pattern-dither) moved to image-ops/stylize-gpu.js and
+// re-exported at the top of this file.
 
 // applyThresholdNode + thresholdChannelValue moved to
 // image-ops/threshold.js and re-exported at the top of this file.
