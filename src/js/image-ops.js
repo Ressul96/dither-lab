@@ -1,5 +1,3 @@
-import { runAlgorithm } from "./dither/index.js";
-import { getPalette } from "./palettes.js";
 import { hexToRgb01, LUMA_BT601, LUMA_BT709, luminanceBt601, luminanceBt709 } from "./color.js";
 import { createProcessingCanvas } from "./canvas.js";
 import {
@@ -38,6 +36,7 @@ import {
   applyMixNode,
 } from "./image-ops/mix.js";
 import { blurImage } from "./image-ops/blur.js";
+import { applyDitherNode } from "./image-ops/dither.js";
 
 // Re-export the pool so external consumers (graph-runtime.js, source.js)
 // keep importing from "./image-ops.js" unchanged. Internal effect
@@ -50,6 +49,7 @@ export { applyCropNode, applyFlipNode, applyInvertNode };
 export { applyPixelateNode, applyScaleNode, applyTransformNode };
 export { applyThresholdNode };
 export { applyMaskApplyNode, applyMaskCombineNode, applyMixNode };
+export { applyDitherNode };
 import {
   areRgbCurvesIdentity,
   buildCurveLut,
@@ -1833,48 +1833,8 @@ function sampleBilinearChannel(data, width, height, x, y, channel) {
 // MIX_MODES catalog lives in image-ops/constants.js (re-exported at
 // the top of this file so graph-shell.js's import path holds).
 
-export function applyDitherNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-
-  const scale = clamp((params.scale ?? 100) / 100, 0.1, 1);
-  const workWidth = Math.max(1, Math.round(input.width * scale));
-  const workHeight = Math.max(1, Math.round(input.height * scale));
-  const work = createBuffer(workWidth, workHeight);
-  const workContext = work.getContext("2d", { alpha: false, willReadFrequently: true });
-  workContext.imageSmoothingEnabled = true;
-  workContext.drawImage(input, 0, 0, workWidth, workHeight);
-  const blurredWork =
-    (params.blurRadius ?? 0) > 0 ? blurImage(work, Number(params.blurRadius ?? 0)) : work;
-
-  const blurredContext = blurredWork.getContext("2d", { alpha: false, willReadFrequently: true });
-  const imageData = blurredContext.getImageData(0, 0, workWidth, workHeight);
-  const palette = getPalette(params.palette ?? "monochrome");
-  runAlgorithm(params.algorithm ?? "floyd-steinberg", imageData, params, palette);
-  blurredContext.putImageData(imageData, 0, 0);
-
-  if (workWidth === input.width && workHeight === input.height) {
-    if (blurredWork !== work) releaseBuffer(work);
-    return blurredWork;
-  }
-
-  const output = createBuffer(input.width, input.height);
-  const outputContext = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  outputContext.imageSmoothingEnabled = false;
-  outputContext.drawImage(
-    blurredWork,
-    0,
-    0,
-    workWidth,
-    workHeight,
-    0,
-    0,
-    output.width,
-    output.height
-  );
-  if (blurredWork !== work) releaseBuffer(work);
-  releaseBuffer(blurredWork);
-  return output;
-}
+// applyDitherNode moved to image-ops/dither.js (CPU palette-aware
+// dither orchestrator). Re-exported at the top of this file.
 
 // blurImage + boxBlur (+ blurHorizontal/blurVertical) moved to
 // image-ops/blur.js. Imported at the top so the 4 callers in this file
