@@ -2089,6 +2089,12 @@ const SHADER_PASSES = Object.freeze({
 
 let renderer = null;
 
+export function disposeGpuEffects() {
+  const activeRenderer = renderer;
+  renderer = null;
+  activeRenderer?.dispose?.();
+}
+
 export function applyShaderPass(passId, input, params, context) {
   if (!input?.width || !input?.height) return null;
   const pass = SHADER_PASSES[passId];
@@ -2215,7 +2221,10 @@ export function applyThresholdGpu(input, params) {
 }
 
 function getRenderer() {
-  if (renderer !== null) return renderer;
+  if (renderer !== null) {
+    if (!renderer.isDisposed?.()) return renderer;
+    renderer = null;
+  }
   renderer = createRenderer();
   return renderer;
 }
@@ -2263,9 +2272,67 @@ function createRenderer() {
   // by ensureMipChain on demand.
   const mipChain = [];
 
-  return {
+  let disposed = false;
+
+  function dispose(options = {}) {
+    if (disposed) return;
+    disposed = true;
+
+    if (renderer === api) renderer = null;
+    if (typeof canvas.removeEventListener === "function") {
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
+      canvas.removeEventListener("webglcontextrestored", handleContextRestored);
+    }
+
+    const contextLost = Boolean(options.contextLost)
+      || (typeof gl.isContextLost === "function" && gl.isContextLost());
+    if (!contextLost) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      gl.bindVertexArray(null);
+      gl.useProgram(null);
+
+      deleteFramebuffer(gl, pingPongA);
+      deleteFramebuffer(gl, pingPongB);
+      for (const fb of mipChain) deleteFramebuffer(gl, fb);
+      for (const tex of extraTextures.values()) gl.deleteTexture(tex);
+      for (const program of programs.values()) gl.deleteProgram(program.handle);
+      gl.deleteTexture(texture);
+      gl.deleteBuffer(positionBuffer);
+      gl.deleteVertexArray(vao);
+      gl.deleteShader(vertexShader);
+    }
+
+    pingPongA = null;
+    pingPongB = null;
+    mipChain.length = 0;
+    extraTextures.clear();
+    programs.clear();
+  }
+
+  function isRendererUnavailable() {
+    if (disposed) return true;
+    if (typeof gl.isContextLost === "function" && gl.isContextLost()) {
+      dispose({ contextLost: true });
+      return true;
+    }
+    return false;
+  }
+
+  function handleContextLost(event) {
+    event.preventDefault();
+    dispose({ contextLost: true });
+  }
+
+  function handleContextRestored() {
+    if (renderer === api) renderer = null;
+  }
+
+  const api = {
     render(fragmentSource, input, uniforms, textures) {
       if (!input?.width || !input?.height) return null;
+      if (isRendererUnavailable()) return null;
       const program = getProgram(gl, programs, vertexShader, fragmentSource);
       if (!program) return null;
 
@@ -2334,6 +2401,7 @@ function createRenderer() {
       const w = Math.max(1, Math.round(Number(width) || 0));
       const h = Math.max(1, Math.round(Number(height) || 0));
       if (!w || !h) return null;
+      if (isRendererUnavailable()) return null;
 
       const program = getProgram(gl, programs, vertexShader, fragmentSource);
       if (!program) return null;
@@ -2388,6 +2456,7 @@ function createRenderer() {
     renderChain(passes, input) {
       if (!input?.width || !input?.height) return null;
       if (!Array.isArray(passes) || passes.length === 0) return null;
+      if (isRendererUnavailable()) return null;
 
       const width = input.width;
       const height = input.height;
@@ -2470,6 +2539,7 @@ function createRenderer() {
     // at TEXTURE1, and `options.additive` enables ONE/ONE blending so the
     // mip upsample-and-accumulate step can reuse this entry point.
     renderPass(fragmentSource, sourceTexture, targetWidth, targetHeight, targetFb, options = {}) {
+      if (isRendererUnavailable()) return false;
       const program = getProgram(gl, programs, vertexShader, fragmentSource);
       if (!program) return false;
 
@@ -2527,6 +2597,7 @@ function createRenderer() {
       return true;
     },
     clearFramebuffer(targetFb, color = [0, 0, 0, 0]) {
+      if (isRendererUnavailable()) return;
       gl.bindFramebuffer(gl.FRAMEBUFFER, targetFb ? targetFb.fbo : null);
       if (targetFb) gl.viewport(0, 0, targetFb.width, targetFb.height);
       gl.clearColor(color[0], color[1], color[2], color[3]);
@@ -2537,6 +2608,7 @@ function createRenderer() {
     // entries sized as base, base/2, base/4, ... Re-uses framebuffers across
     // calls; failed entries return null so the caller can bail.
     ensureMipChain(baseWidth, baseHeight, levels) {
+      if (isRendererUnavailable()) return null;
       for (let i = 0; i < levels; i++) {
         const w = Math.max(1, baseWidth >> i);
         const h = Math.max(1, baseHeight >> i);
@@ -2555,6 +2627,7 @@ function createRenderer() {
     // of the renderer so shaders keep a single UV convention.
     uploadInput(input) {
       if (!input?.width || !input?.height) return null;
+      if (isRendererUnavailable()) return null;
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
@@ -2568,6 +2641,7 @@ function createRenderer() {
     // Copy the canvas backing store into a fresh 2D output canvas so the
     // rest of the graph runtime keeps working with HTMLCanvasElements.
     captureOutput(width, height) {
+      if (isRendererUnavailable()) return null;
       const output = createProcessingCanvas(width, height);
       const ctx = output.getContext("2d", { alpha: false, willReadFrequently: false });
       if (!ctx) return null;
@@ -2575,12 +2649,24 @@ function createRenderer() {
       return output;
     },
     resizeBackingCanvas(width, height) {
+      if (isRendererUnavailable()) return;
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
       }
     },
+    dispose,
+    isDisposed() {
+      return disposed;
+    },
   };
+
+  if (typeof canvas.addEventListener === "function") {
+    canvas.addEventListener("webglcontextlost", handleContextLost);
+    canvas.addEventListener("webglcontextrestored", handleContextRestored);
+  }
+
+  return api;
 }
 
 function createFramebuffer(gl, width, height) {
@@ -2614,6 +2700,12 @@ function resizeFramebuffer(gl, fb, width, height) {
   fb.width = width;
   fb.height = height;
   return fb;
+}
+
+function deleteFramebuffer(gl, fb) {
+  if (!fb) return;
+  gl.deleteTexture(fb.texture);
+  gl.deleteFramebuffer(fb.fbo);
 }
 
 // Opt-in multi-pass chain runner. Each pass is `{ fragmentSource, uniforms }`;

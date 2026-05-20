@@ -47,6 +47,10 @@
         applyThresholdNode,
         releaseBuffer,
       } from "../src/js/image-ops.js";
+      import {
+        applyPixelateGpu,
+        disposeGpuEffects,
+      } from "../src/js/gpu-effects.js";
 
       const WIDTH = 240;
       const HEIGHT = 160;
@@ -85,6 +89,11 @@
           name: "Threshold red source mask",
           run: (input) => applyThresholdNode(input, { threshold: 45, softness: 15, channel: "r", invert: "off", mode: "source", opacity: 100 }),
           minDiff: 5,
+        },
+        {
+          name: "GPU dispose reuse",
+          run: (input) => runGpuDisposeReuse(input),
+          minDiff: 3,
         },
       ];
 
@@ -152,6 +161,19 @@
           count += 3;
         }
         return sum / count;
+      }
+
+      function runGpuDisposeReuse(input) {
+        let first = null;
+        try {
+          first = applyPixelateGpu(input, { size: 12, sizeY: 0, shape: "square", smoothing: 0, opacity: 100 });
+          if (!first?.width || !first?.height) return null;
+          disposeGpuEffects();
+          return applyPixelateGpu(input, { size: 12, sizeY: 0, shape: "square", smoothing: 0, opacity: 100 });
+        } finally {
+          if (first && first !== input) releaseBuffer(first);
+          disposeGpuEffects();
+        }
       }
 
       async function main() {
