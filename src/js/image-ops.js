@@ -17,6 +17,14 @@ import {
   applyFlipNode,
   applyInvertNode,
 } from "./image-ops/geometry.js";
+import {
+  clamp,
+  clamp01,
+  luminance01,
+  luminance8,
+  mixByte,
+  smoothstep,
+} from "./image-ops/pixel-math.js";
 
 // Re-export the pool so external consumers (graph-runtime.js, source.js)
 // keep importing from "./image-ops.js" unchanged. Internal effect
@@ -2424,30 +2432,9 @@ function blurVertical(source, target, width, height, radius) {
   }
 }
 
-function luminance8(r, g, b) {
-  return luminanceBt709(r, g, b);
-}
-
-function luminance01(r, g, b) {
-  return luminanceBt709(r, g, b);
-}
-
-function clamp01(value) {
-  return clamp(value, 0, 1);
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function mixByte(a, b, amount) {
-  return Math.round(a * (1 - amount) + b * amount);
-}
-
-function smoothstep(edge0, edge1, value) {
-  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
-  return t * t * (3 - 2 * t);
-}
+// clamp, clamp01, mixByte, smoothstep, luminance8, luminance01 moved to
+// image-ops/pixel-math.js. Imported at the top of this file so existing
+// callsites inside image-ops resolve unchanged.
 
 function toLinear(value) {
   return Math.pow(clamp01(value), 2.2);
