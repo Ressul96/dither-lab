@@ -52,6 +52,7 @@ import {
   updateCustomPalette,
 } from "../palettes.js";
 import { getCurrentSourceFrameCanvas, setFps } from "../source.js";
+import { listenWithDispose, registerDispose } from "./lifecycle.js";
 import {
   TIMELINE_BINDING_NODE_PROPERTY,
   commitBindingValueToTimeline,
@@ -178,9 +179,10 @@ export function initGraphShell() {
   if (typeof ResizeObserver === "function") {
     resizeObserver = new ResizeObserver(() => applyGraphViewport());
     resizeObserver.observe(editorEl);
+    registerDispose(() => resizeObserver?.disconnect());
   }
 
-  window.addEventListener("resize", applyGraphViewport);
+  listenWithDispose(window, "resize", applyGraphViewport);
 
   subscribe("graph", () => {
     const { graphView } = getState();
@@ -922,7 +924,12 @@ function wireKeyboard() {
   if (keyboardWired) return;
   keyboardWired = true;
 
-  window.addEventListener("keydown", (event) => {
+  // Window-scoped keyboard shortcuts: graph-shell owns Cmd+D (duplicate),
+  // G (group), M (bypass), X/Delete (remove), A (select all), F (frame),
+  // T (solo), R (rename), Space (pan), Escape (cancel marquee), plus the
+  // Alt/Cmd/Ctrl modifier-cursor toggles. listenWithDispose lets a multi-
+  // window or test harness re-init the shell without duplicate handlers.
+  listenWithDispose(window, "keydown", (event) => {
     const target = event.target;
     if (
       target &&
@@ -1015,7 +1022,7 @@ function wireKeyboard() {
     }
   });
 
-  window.addEventListener("keyup", (event) => {
+  listenWithDispose(window, "keyup", (event) => {
     if (event.key === "Alt" && graphCutCursorActive) {
       graphCutCursorActive = false;
       syncGraphInteractionModeClasses();
@@ -1035,7 +1042,7 @@ function wireKeyboard() {
     }
   });
 
-  window.addEventListener("blur", () => {
+  listenWithDispose(window, "blur", () => {
     graphSpacePanActive = false;
     graphCutCursorActive = false;
     syncGraphInteractionModeClasses();
