@@ -7,11 +7,18 @@ import {
   createBuffer,
   releaseBuffer,
 } from "./image-ops/buffer-pool.js";
+import {
+  MASK_MODES,
+  MASK_SOURCES,
+  MIX_MODES,
+} from "./image-ops/constants.js";
 
 // Re-export the pool so external consumers (graph-runtime.js, source.js)
 // keep importing from "./image-ops.js" unchanged. Internal effect
-// functions below use the imported names directly.
+// functions below use the imported names directly. The mask/mix catalogs
+// flow through here too so graph-shell.js's existing import path holds.
 export { acquireBuffer, releaseBuffer };
+export { MASK_MODES, MASK_SOURCES, MIX_MODES };
 import {
   areRgbCurvesIdentity,
   buildCurveLut,
@@ -2000,25 +2007,10 @@ export function applyMaskCombineNode(maskA, maskB, params) {
 // box blur. Opacity blends back to the original image.
 // Public catalog of mask channel sources. UI dropdown reads from this so the
 // runtime sampler below and the inspector stay in lockstep.
-export const MASK_SOURCES = Object.freeze([
-  { value: "luma", label: "Luma" },
-  { value: "alpha", label: "Alpha" },
-  { value: "r", label: "Red" },
-  { value: "g", label: "Green" },
-  { value: "b", label: "Blue" },
-]);
-
-// Mask blend modes. `multiply` keeps the legacy luma-fade behaviour
-// (continuous mask gradient); `stencil` is a hard binary cutoff at 0.5 that
-// makes the mask read like a clip path — useful for crisp shapes from
-// procedural inputs (text, halftone) where smooth fading isn't desired.
-export const MASK_MODES = Object.freeze([
-  { value: "multiply", label: "Multiply" },
-  { value: "stencil", label: "Stencil" },
-]);
-
 // Sample one channel from a mask pixel into 0..1. Falls through to luma so
 // legacy projects without an explicit `source` keep their current look.
+// (MASK_SOURCES + MASK_MODES catalogs live in image-ops/constants.js and
+// are re-exported above.)
 function sampleMaskChannel(data, i, source) {
   switch (source) {
     case "alpha":
@@ -2270,25 +2262,8 @@ export function applyMixNode(inputA, inputB, params) {
 // it; the mapper folds it into the Canvas `lighter` op. Everything else maps
 // directly onto Canvas 2D globalCompositeOperation, which is GPU-composited by
 // the browser — no separate WebGL pair needed.
-export const MIX_MODES = Object.freeze([
-  { value: "normal", label: "Normal" },
-  { value: "darken", label: "Darken" },
-  { value: "multiply", label: "Multiply" },
-  { value: "color-burn", label: "Color Burn" },
-  { value: "lighten", label: "Lighten" },
-  { value: "screen", label: "Screen" },
-  { value: "color-dodge", label: "Color Dodge" },
-  { value: "add", label: "Add (lighter)" },
-  { value: "overlay", label: "Overlay" },
-  { value: "soft-light", label: "Soft Light" },
-  { value: "hard-light", label: "Hard Light" },
-  { value: "difference", label: "Difference" },
-  { value: "exclusion", label: "Exclusion" },
-  { value: "hue", label: "Hue" },
-  { value: "saturation", label: "Saturation" },
-  { value: "color", label: "Color" },
-  { value: "luminosity", label: "Luminosity" },
-]);
+// MIX_MODES catalog lives in image-ops/constants.js and is re-exported at
+// the top of this file so graph-shell.js's existing import path holds.
 
 function mapCompositeMode(mode) {
   switch (mode) {
