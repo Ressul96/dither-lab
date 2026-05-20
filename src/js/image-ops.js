@@ -48,6 +48,7 @@ import { sampleBilinearChannel, sampleNearestInto } from "./image-ops/sampling.j
 import { applyChromaticAberrationNode } from "./image-ops/chroma-aberration.js";
 import { applyToneMapNode } from "./image-ops/tone-map.js";
 import { applyHsvNode } from "./image-ops/hsv.js";
+import { applyLayerAdjustmentsNode } from "./image-ops/layer-adjustments.js";
 import {
   applyAnalogNode,
   applyAsciiNode,
@@ -81,6 +82,7 @@ export { applyNoiseNode };
 export { applyChromaticAberrationNode };
 export { applyToneMapNode };
 export { applyHsvNode };
+export { applyLayerAdjustmentsNode };
 export {
   applyAnalogNode,
   applyAsciiNode,
@@ -721,41 +723,9 @@ function sceneGradeColorMapStops(params) {
   ];
 }
 
-export function applyLayerAdjustmentsNode(baseInput, output, layer = {}) {
-  if (!output?.width || !output?.height) return output ?? null;
-
-  const opacity = clamp(Number(layer.opacity ?? 100) / 100, 0, 1);
-  const hue = Number(layer.hue ?? 0);
-  const saturation = clamp(Number(layer.saturation ?? 100) / 100, 0, 2);
-  const hasColorAdjust = hue !== 0 || saturation !== 1;
-  const hasOpacityAdjust = opacity < 0.999;
-  if (!hasColorAdjust && !hasOpacityAdjust) return output;
-
-  let adjusted = output;
-  if (hasColorAdjust) {
-    adjusted = applyHsvNode(output, {
-      hue,
-      saturation: saturation * 100,
-      value: 100,
-    });
-  }
-
-  if (!hasOpacityAdjust) return adjusted;
-
-  const blended = createBuffer(output.width, output.height);
-  const ctx = blended.getContext("2d", { alpha: false, willReadFrequently: true });
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, blended.width, blended.height);
-  if (baseInput?.width && baseInput?.height) {
-    ctx.drawImage(baseInput, 0, 0, blended.width, blended.height);
-  }
-  ctx.globalAlpha = opacity;
-  ctx.drawImage(adjusted, 0, 0, blended.width, blended.height);
-  ctx.globalAlpha = 1;
-
-  if (adjusted !== output) releaseBuffer(adjusted);
-  return blended;
-}
+// applyLayerAdjustmentsNode moved to image-ops/layer-adjustments.js
+// (per-node opacity / hue / saturation override pass driven by the
+// graph runtime). Re-exported at the top of this file.
 
 // Pixelate — collapse NxN blocks of source pixels into a single color so the
 // downstream chain (especially dither) operates on a chunky low-resolution
