@@ -9,7 +9,7 @@ import {
 import { clearSource, openSourcePath, pausePlayback, seek, setFps } from "./source.js";
 import { applyCustomPalettes, serializeCustomPalettes } from "./palettes.js";
 import { createDefaultTimeline, serializeTimeline } from "./timeline.js";
-import { selectedPath } from "./tauri-compat.js";
+import { selectedPath, tauriRemoveFile, tauriRenameFn } from "./tauri-compat.js";
 
 let currentProjectPath = "";
 const SUPPORTED_PROJECT_VERSIONS = new Set([1]);
@@ -100,7 +100,7 @@ async function writeProjectFile(path) {
   const project = buildProjectPayload();
   const payload = JSON.stringify(project, null, 2);
   const tmpPath = `${path}.tmp`;
-  const rename = tauri.fs.rename ?? tauri.fs.renameFile;
+  const rename = tauriRenameFn();
   if (typeof rename !== "function") {
     throw new Error("Project save requires filesystem rename support for atomic writes.");
   }
@@ -111,14 +111,11 @@ async function writeProjectFile(path) {
     await rename(tmpPath, path);
   } catch (error) {
     // Some targets reject rename-over-existing; fall back to remove + rename.
-    if (typeof tauri.fs.remove === "function") {
-      try {
-        await tauri.fs.remove(path);
-      } catch {}
-      await rename(tmpPath, path);
-    } else {
-      throw error;
-    }
+    // The remove is best-effort — if the target file doesn't exist (first
+    // save) or remove fails for another reason, the second rename either
+    // succeeds anyway or surfaces the original error.
+    await tauriRemoveFile(path);
+    await rename(tmpPath, path);
   }
 
   return project;

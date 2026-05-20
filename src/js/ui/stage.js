@@ -4,6 +4,7 @@ import { clearSource, formatTime, graphContainsDither, openSource, samplePixel }
 import { timeToFrame, timelineFrameRate } from "../timeline.js";
 import { initViewerOverlay } from "./viewer-overlay.js";
 import { initViewerGizmos } from "./viewer-gizmos.js";
+import { listenWithDispose, registerDispose } from "./lifecycle.js";
 
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 
@@ -50,9 +51,10 @@ export function initStage() {
     const observer = new ResizeObserver(sync);
     observer.observe(stageCanvas);
     observer.observe(canvas);
+    registerDispose(() => observer.disconnect());
   }
 
-  window.addEventListener("resize", sync);
+  listenWithDispose(window, "resize", sync);
   subscribe("view", sync);
   subscribe("source", sync);
   // Playback transitions also flip the badge between "1:1 export-accurate"
@@ -233,7 +235,7 @@ function wireZoomToggle(zoomToggle, outputs) {
 }
 
 function wireZoomShortcuts(outputs) {
-  document.addEventListener("keydown", (e) => {
+  listenWithDispose(document, "keydown", (e) => {
     if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
     const target = e.target;
     if (
@@ -455,10 +457,12 @@ function wireContextMenu(stage) {
     menu.style.top = e.clientY + "px";
     menu.classList.remove("hidden");
   });
-  document.addEventListener("click", (e) => {
+  // document-scoped close listeners need explicit teardown — otherwise a
+  // re-init of stage layers double-binds and the menu hides itself twice.
+  listenWithDispose(document, "click", (e) => {
     if (!menu.contains(e.target)) menu.classList.add("hidden");
   });
-  document.addEventListener("keydown", (e) => {
+  listenWithDispose(document, "keydown", (e) => {
     if (e.key === "Escape") menu.classList.add("hidden");
   });
 }

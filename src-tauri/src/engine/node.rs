@@ -1,3 +1,9 @@
+//! v2-node-graph scaffolding.
+//!
+//! Trait and DTOs for the future node-processor abstraction. Will collapse
+//! into a single `EngineError` enum alongside [`crate::engine::error`] once
+//! Phase 2 lands. See `docs/spec/v2-node-graph.md`.
+
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::{Display, Formatter};

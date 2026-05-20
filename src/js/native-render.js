@@ -1,11 +1,17 @@
 import { pruneHiddenGraph } from "./graph-runtime.js";
 import { tauriErrorKind, tauriErrorMessage } from "./tauri-compat.js";
 
+// blur is intentionally omitted: the Rust path runs a two-pass box blur
+// while the JS path (used by every export) runs WebGL/`ctx.filter` Gaussian.
+// Keeping blur in the native list would let preview show a box-blurred frame
+// while export wrote a Gaussian-blurred one, violating the project's
+// preview/export parity guarantee. A real separable Gaussian on the Rust
+// side is a future Phase F item — until then, blur stays on the JS path so
+// both surfaces agree pixel-for-pixel.
 const NATIVE_SUPPORTED_TYPES = new Set([
   "source",
   "adjust",
   "posterize",
-  "blur",
   "pixelate",
   "threshold",
   "mix",

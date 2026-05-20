@@ -30,6 +30,17 @@ pub struct VideoExportConfig {
     pub preset: String,
     #[serde(default)]
     pub pix_fmt: Option<String>,
+    // Optional audio passthrough. When `audio_source_path` is set the
+    // ffmpeg pipeline opens it as a second input, trims to the requested
+    // window, and re-encodes to AAC so the resulting MP4/MOV always has
+    // a portable audio stream. Setting only the path (no trim) muxes the
+    // full source audio.
+    #[serde(default)]
+    pub audio_source_path: Option<String>,
+    #[serde(default)]
+    pub audio_start_seconds: f64,
+    #[serde(default)]
+    pub audio_duration_seconds: f64,
 }
 
 fn default_codec() -> String {
@@ -162,6 +173,7 @@ pub fn ffmpeg_start_encode(
         .arg("-hide_banner")
         .arg("-loglevel")
         .arg("error")
+        // Input 0: raw RGBA frames piped from JS.
         .arg("-f")
         .arg("rawvideo")
         .arg("-pix_fmt")
@@ -171,7 +183,27 @@ pub fn ffmpeg_start_encode(
         .arg("-r")
         .arg(&fps_arg)
         .arg("-i")
-        .arg("-")
+        .arg("-");
+
+    // Input 1 (optional): audio source. Trim flags go *before* `-i` so
+    // ffmpeg does a fast input-side seek instead of decoding the whole
+    // file. Audio re-encodes to AAC because `-c:a copy` is fragile across
+    // container/codec combos (e.g. PCM-in-MOV → MP4 cannot copy).
+    let has_audio = config.audio_source_path.as_deref().is_some_and(|p| !p.is_empty());
+    if has_audio {
+        let path = config.audio_source_path.as_deref().unwrap();
+        if config.audio_start_seconds > 0.0 {
+            command.arg("-ss").arg(format!("{:.6}", config.audio_start_seconds));
+        }
+        if config.audio_duration_seconds > 0.0 {
+            command.arg("-t").arg(format!("{:.6}", config.audio_duration_seconds));
+        }
+        command.arg("-i").arg(path);
+    }
+
+    command
+        .arg("-map")
+        .arg("0:v:0")
         .arg("-c:v")
         .arg(&config.codec)
         .arg("-preset")
@@ -179,7 +211,23 @@ pub fn ffmpeg_start_encode(
         .arg("-crf")
         .arg(&crf_arg)
         .arg("-pix_fmt")
-        .arg(&pix_fmt_out)
+        .arg(&pix_fmt_out);
+
+    if has_audio {
+        // `0?` makes the audio stream optional — if the source video has
+        // no audio track ffmpeg silently produces a video-only output
+        // instead of failing the entire export.
+        command
+            .arg("-map")
+            .arg("1:a:0?")
+            .arg("-c:a")
+            .arg("aac")
+            .arg("-b:a")
+            .arg("192k")
+            .arg("-shortest");
+    }
+
+    command
         .arg("-movflags")
         .arg("+faststart")
         .arg(&config.output_path)
@@ -255,12 +303,19 @@ pub fn ffmpeg_write_frame(
 pub fn ffmpeg_finish_encode(
     state: State<'_, VideoExportState>,
 ) -> Result<FfmpegFinishResponse, EngineError> {
-    let mut guard = state.session.lock().map_err(|e| {
-        EngineError::lock_poisoned(format!("Video export session lock poisoned: {e}"))
-    })?;
-    let mut session = guard
-        .take()
-        .ok_or_else(|| EngineError::not_found("No active export session"))?;
+    // Take the session out of the mutex in a tight inner scope so the lock
+    // is released before we wait on ffmpeg. child.wait() blocks until ffmpeg
+    // flushes the trailer (can take seconds on a long encode); holding the
+    // mutex through it would freeze every concurrent Tauri command that
+    // touches the export state (cancel, status, etc.) for the same duration.
+    let mut session = {
+        let mut guard = state.session.lock().map_err(|e| {
+            EngineError::lock_poisoned(format!("Video export session lock poisoned: {e}"))
+        })?;
+        guard
+            .take()
+            .ok_or_else(|| EngineError::not_found("No active export session"))?
+    };
 
     drop(session.stdin.take());
 
@@ -290,11 +345,18 @@ pub fn ffmpeg_finish_encode(
 
 #[tauri::command]
 pub fn ffmpeg_cancel_encode(state: State<'_, VideoExportState>) -> Result<(), EngineError> {
-    let mut guard = state.session.lock().map_err(|e| {
-        EngineError::lock_poisoned(format!("Video export session lock poisoned: {e}"))
-    })?;
-    let Some(mut session) = guard.take() else {
-        return Ok(());
+    // Take the session out under the lock, then release it before we kill +
+    // wait + remove the partial file. kill() is fast but wait() can still
+    // hang briefly on Windows if ffmpeg is mid-flush, and remove_file() is
+    // disk I/O — none of these should serialize against other commands.
+    let mut session = {
+        let mut guard = state.session.lock().map_err(|e| {
+            EngineError::lock_poisoned(format!("Video export session lock poisoned: {e}"))
+        })?;
+        let Some(session) = guard.take() else {
+            return Ok(());
+        };
+        session
     };
 
     drop(session.stdin.take());

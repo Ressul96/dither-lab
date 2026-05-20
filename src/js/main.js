@@ -14,6 +14,7 @@ import { newProject, openProject, saveProject, saveProjectAs } from "./project.j
 import { initExport, openExport } from "./export.js";
 import { initSource, openSource, togglePlay, stepFrame, restart } from "./source.js";
 import { undo, redo, syncHistoryButtons } from "./state.js";
+import { disposeAll } from "./ui/lifecycle.js";
 
 initShell();
 initSource();
@@ -25,6 +26,12 @@ initProjectButtons();
 initHistoryButtons();
 initKeyboard();
 syncHistoryButtons();
+
+// Tear down registered listeners + observers before the window unloads.
+// Disposers registered via ui/lifecycle.js are LIFO-popped here so the
+// process exits without orphaned handlers (matters mostly for hot reload
+// and tests; production exit is process-terminated anyway).
+window.addEventListener("beforeunload", disposeAll);
 
 if (window.__TAURI__) {
   window.__TAURI__.event.listen("menu:action", async ({ payload }) => {

@@ -1,3 +1,8 @@
+//! v2-node-graph scaffolding.
+//!
+//! Typed tracker samples + source bindings for the deferred native tracker
+//! pipeline. Currently unconsumed at runtime. See `docs/spec/v2-node-graph.md`.
+
 use serde::{Deserialize, Serialize};
 
 use super::animation::{AnimatedParameter, Vec2};

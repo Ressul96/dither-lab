@@ -21,6 +21,13 @@ function mulberry32(seed) {
   };
 }
 
+// This is not true blue noise — it's a 2D golden-ratio low-discrepancy
+// sequence (Roberts 2018, R2 sequence). Real blue noise needs a
+// precomputed mask whose Fourier spectrum is concentrated in high
+// frequencies; the R2 sequence is cheaper and visually similar for
+// dither thresholds but its spectrum is different. The UI label
+// reflects this; the registry id stays "blue-noise" for saved-project
+// compatibility.
 function pseudoBlueNoise(x, y) {
   const g = 1.32471795724474602596;
   const a1 = 1 / g;
@@ -121,7 +128,7 @@ export const ALGORITHMS = [
   },
   {
     id: "blue-noise",
-    name: "Blue Noise",
+    name: "Pseudo Blue Noise (R2)",
     family: "threshold-noise",
     type: "cpu",
     supportsSerpentine: false,

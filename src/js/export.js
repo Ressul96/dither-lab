@@ -6,7 +6,13 @@ import {
   hasCurrentDitherFrame,
   seekForExport,
 } from "./source.js";
-import { selectedPath, tauriErrorMessage } from "./tauri-compat.js";
+import {
+  selectedPath,
+  tauriErrorMessage,
+  tauriInvoke,
+  tauriRemoveFile,
+  tauriWriteBinary,
+} from "./tauri-compat.js";
 
 const STILL_FORMATS = Object.freeze([
   { id: "png", label: "PNG", extension: "png", mime: "image/png" },
@@ -260,6 +266,9 @@ function ensureExportSheet() {
         break;
       case "video-custom-fps":
         exportSheetState.video.customFps = clampFps(target.value);
+        break;
+      case "video-include-audio":
+        exportSheetState.video.includeAudio = Boolean(target.checked);
         break;
       default:
         break;
@@ -697,6 +706,19 @@ function renderVideoExportFields(ditherAvailable) {
       </div>
     ` : ""}
 
+    ${usesFfmpeg ? `
+      <div class="field">
+        <label class="field-inline">
+          <input
+            type="checkbox"
+            data-export-field="video-include-audio"
+            ${video.includeAudio ? "checked" : ""}
+          />
+          <span>Include source audio (AAC 192k)</span>
+        </label>
+      </div>
+    ` : ""}
+
     <div class="field">
       <label>Destination</label>
       <div class="export-sheet__path-row">
@@ -1128,6 +1150,10 @@ async function submitSequenceExport() {
 
   const signal = exportAbortController.signal;
   const startTime = getSequenceStartTime(seq.range);
+  // Tracks every path we successfully wrote in this session so a cancel
+  // or mid-run failure can offer to delete the partial run instead of
+  // leaving scattered frames in the target directory.
+  const writtenPaths = [];
   let writtenCount = 0;
   let failure = null;
 
@@ -1156,6 +1182,7 @@ async function submitSequenceExport() {
       renderExportSheet();
       const written = await writeImage(fullPath, bytes);
       if (!written) throw new Error(`Failed to write ${fileName}.`);
+      writtenPaths.push(fullPath);
       writtenCount += 1;
 
       updateExportProgress({ frame: writtenCount, phase: "rendering" });
@@ -1177,13 +1204,34 @@ async function submitSequenceExport() {
       phase: cancelled ? "cancelling" : "finalizing",
     };
 
+    let baseError;
     if (failure && !cancelled) {
-      exportSheetState.error = tauriErrorMessage(failure, "Sequence export failed.");
+      baseError = tauriErrorMessage(failure, "Sequence export failed.");
     } else if (cancelled) {
-      exportSheetState.error = `Cancelled after ${writtenCount} / ${totalFrames} frames.`;
+      baseError = `Cancelled after ${writtenCount} / ${totalFrames} frames.`;
     } else {
-      exportSheetState.error = "";
+      baseError = "";
     }
+
+    // Cleanup offer for an interrupted run. We only ask when there is
+    // something on disk to remove, and we never auto-delete — losing
+    // frames the user wanted to keep would be worse than leaving them.
+    let cleanupSuffix = "";
+    if ((cancelled || failure) && writtenPaths.length > 0) {
+      const shouldClean = await confirmSequenceCleanup(writtenPaths.length, seq.directory);
+      if (shouldClean) {
+        let removed = 0;
+        for (const path of writtenPaths) {
+          if (await tauriRemoveFile(path)) removed += 1;
+        }
+        cleanupSuffix = removed === writtenPaths.length
+          ? ` Removed ${removed} partial file${removed === 1 ? "" : "s"}.`
+          : ` Removed ${removed} of ${writtenPaths.length} partial files.`;
+      } else {
+        cleanupSuffix = ` Kept ${writtenPaths.length} partial file${writtenPaths.length === 1 ? "" : "s"}.`;
+      }
+    }
+    exportSheetState.error = baseError ? `${baseError}${cleanupSuffix}` : "";
 
     syncExportActions(getState().source);
     if (exportSheetState.open) renderExportSheet();
@@ -1383,19 +1431,33 @@ function clampJpegQuality(value) {
   return Math.max(JPEG_QUALITY_MIN, Math.min(JPEG_QUALITY_MAX, numeric));
 }
 
+// Thin local alias so the per-frame write path keeps a stable signature
+// for grep/refactor. tauriWriteBinary handles Tauri SDK version drift.
 async function writeImage(path, bytes) {
+  return tauriWriteBinary(path, bytes);
+}
+
+// Ask the user whether to delete the partial files left behind by a
+// cancelled or failed sequence export. Defaults to "keep" if the dialog
+// API is unavailable — losing partial frames silently would be worse than
+// leaving them and letting the user clean up by hand.
+async function confirmSequenceCleanup(count, directory) {
   const tauri = window.__TAURI__;
+  if (count <= 0) return false;
+  const noun = count === 1 ? "file" : "files";
+  const message = `Remove ${count} partial ${noun} written to ${directory}?`;
   try {
-    if (tauri?.fs?.writeFile) {
-      await tauri.fs.writeFile(path, bytes);
-      return true;
-    }
-    if (tauri?.fs?.writeBinaryFile) {
-      await tauri.fs.writeBinaryFile(path, bytes);
-      return true;
+    if (tauri?.dialog?.confirm) {
+      const result = await tauri.dialog.confirm(message, {
+        title: "Cleanup partial export?",
+        okLabel: "Remove",
+        cancelLabel: "Keep",
+        kind: "warning",
+      });
+      return Boolean(result);
     }
   } catch (error) {
-    console.warn("[export] native write failed, using browser download fallback", error);
+    console.warn("[export] cleanup confirm dialog failed", error);
   }
   return false;
 }
@@ -1446,6 +1508,10 @@ function createDefaultExportState() {
       range: "trimmed",
       fpsMode: "source",
       customFps: 30,
+      // Audio passthrough. Default on so exports keep the source's audio
+      // — silent exports were the long-standing complaint. The toggle is
+      // ignored when the source is an image sequence or has no path.
+      includeAudio: true,
     },
     ffmpeg: {
       checked: false,
@@ -1678,11 +1744,6 @@ function getVideoStartTime(range) {
   return getSequenceStartTime(range);
 }
 
-function tauriInvoke() {
-  const tauri = window.__TAURI__;
-  return tauri?.core?.invoke || tauri?.invoke || null;
-}
-
 async function ensureFfmpegAvailability(options = {}) {
   const ffmpeg = exportSheetState.ffmpeg;
   if (!options.force && ffmpeg.checked) return ffmpeg.available;
@@ -1901,6 +1962,18 @@ async function submitFfmpegVideoExport() {
 
     updateExportProgress({ phase: "preparing" });
     renderExportSheet();
+    // Audio is muxed straight from the source file on the ffmpeg side.
+    // Passing 0 for start/duration in Full Video mode lets the Rust path
+    // skip the `-ss`/`-t` flags, so audio runs as long as the video does
+    // (the `-shortest` flag clips any tail). For image sources or other
+    // media without an audio track, `-map 1:a:0?` makes the audio stream
+    // optional — ffmpeg falls back to a silent video instead of failing.
+    const wantsAudio = Boolean(
+      video.includeAudio && source.path && source.duration > 0
+    );
+    const audioSourcePath = wantsAudio ? source.path : null;
+    const audioStartSeconds = wantsAudio && video.range === "trimmed" ? startTime : 0;
+    const audioDurationSeconds = wantsAudio && video.range === "trimmed" ? rangeSeconds : 0;
     await invoke("ffmpeg_start_encode", {
       config: {
         outputPath: exportSheetState.video.outputPath,
@@ -1910,6 +1983,9 @@ async function submitFfmpegVideoExport() {
         codec: video.codec,
         quality: video.crf,
         preset: video.preset,
+        audioSourcePath,
+        audioStartSeconds,
+        audioDurationSeconds,
       },
     });
     sessionStarted = true;
@@ -2042,6 +2118,10 @@ async function submitWebCodecsVideoExport(codec) {
   let height = 0;
 
   beginExportSession();
+  // Pre-compute the IVF timebase once so both the encoder's timestamp packing
+  // and the final file header agree on units. Using fps directly here would
+  // round 23.976 → 24 and stretch playback by ~0.1%.
+  const timebase = ivfTimebase(fps);
   try {
     const probeCanvas = buildStillExportCanvas();
     if (!probeCanvas?.width || !probeCanvas?.height) {
@@ -2057,7 +2137,7 @@ async function submitWebCodecsVideoExport(codec) {
         chunk.copyTo(data);
         encodedFrames.push({
           data,
-          timestamp: Math.max(0, Math.round((Number(chunk.timestamp) || 0) * fps / 1_000_000)),
+          timestamp: microsecondsToIvfTick(chunk.timestamp, timebase),
         });
       },
       error: (error) => {
@@ -2122,7 +2202,7 @@ async function submitWebCodecsVideoExport(codec) {
         frames: encodedFrames,
         width,
         height,
-        fps,
+        timebase,
         fourcc: codec.fourcc,
       });
       const path = exportSheetState.video.outputPath || suggestedVideoExportName();
@@ -2174,7 +2254,33 @@ function estimateWebCodecsBitrate(width, height, fps) {
   return Math.round(Math.max(500_000, Math.min(18_000_000, pixelsPerSecond * 0.08)));
 }
 
-function createIvfFile({ frames, width, height, fps, fourcc }) {
+// IVF stores timebase as denominator + numerator (in that order in the
+// header). For NTSC fractional rates (23.976, 29.97, 59.94) round-to-int
+// would yield 24/30/60 and stretch the file's duration by ~0.1%, audibly
+// desyncing post-export audio overlays. Map the common families to their
+// canonical 1001-denominator pairs; fall back to a 1000× scale for other
+// fractional inputs and to a unit numerator for integer rates.
+function ivfTimebase(fps) {
+  const value = Number(fps);
+  if (!Number.isFinite(value) || value <= 0) return { num: 1, den: 1 };
+  if (Math.abs(value - 23.976) < 0.01) return { num: 1001, den: 24000 };
+  if (Math.abs(value - 29.97) < 0.01) return { num: 1001, den: 30000 };
+  if (Math.abs(value - 59.94) < 0.01) return { num: 1001, den: 60000 };
+  if (Math.abs(value - Math.round(value)) < 0.001) {
+    return { num: 1, den: Math.max(1, Math.round(value)) };
+  }
+  return { num: 1000, den: Math.max(1, Math.round(value * 1000)) };
+}
+
+function microsecondsToIvfTick(microseconds, timebase) {
+  const us = Number(microseconds) || 0;
+  if (us <= 0) return 0;
+  // tick = seconds * (den / num) = (us / 1e6) * (den / num).
+  // Use Math.round to keep the cumulative drift below half a tick.
+  return Math.max(0, Math.round((us * timebase.den) / (timebase.num * 1_000_000)));
+}
+
+function createIvfFile({ frames, width, height, timebase, fourcc }) {
   const payloadBytes = frames.reduce((total, frame) => total + frame.data.byteLength, 0);
   const bytes = new Uint8Array(32 + frames.length * 12 + payloadBytes);
   const view = new DataView(bytes.buffer);
@@ -2184,8 +2290,8 @@ function createIvfFile({ frames, width, height, fps, fourcc }) {
   writeAscii(bytes, 8, fourcc);
   view.setUint16(12, width, true);
   view.setUint16(14, height, true);
-  view.setUint32(16, Math.max(1, Math.round(fps)), true);
-  view.setUint32(20, 1, true);
+  view.setUint32(16, Math.max(1, timebase.den), true);
+  view.setUint32(20, Math.max(1, timebase.num), true);
   view.setUint32(24, frames.length, true);
   view.setUint32(28, 0, true);
 

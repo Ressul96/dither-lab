@@ -781,7 +781,7 @@ export async function seekForExport(seconds) {
   const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
 
   if (Math.abs(before - target) <= 0.0005) {
-    await renderCurrentFrame();
+    await renderCurrentFrame({ forExport: true });
     return true;
   }
 
@@ -853,7 +853,7 @@ export async function seekForExport(seconds) {
     }
   });
 
-  if (ok) await renderCurrentFrame();
+  if (ok) await renderCurrentFrame({ forExport: true });
   return ok;
 }
 
@@ -971,7 +971,14 @@ export function samplePixel(u, vCoord) {
 
 // Internals --------------------------------------------------------
 
-async function renderCurrentFrame() {
+async function renderCurrentFrame(options = {}) {
+  // While an export session is active, only seekForExport's awaited calls are
+  // allowed to commit to processedCanvas/ditherCanvas — concurrent preview
+  // renders (param changes, resize, timeline scrub, listener dispatches) can
+  // race the export pipeline's await points and overwrite the canvases the
+  // encoder is about to read, leaking preview frames into the exported video.
+  // The forExport flag is the export pipeline's opt-in to bypass this guard.
+  if (exportSessionActive && !options.forExport) return;
   const { video: v } = ensureEls();
   const graph = ensureBootGraph();
   const proceduralSource = findViewerProceduralSource(graph);

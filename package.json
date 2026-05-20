@@ -1,12 +1,23 @@
 {
   "name": "dither-lab",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
+  "description": "Local-first Tauri desktop app for video, image-sequence, and EXR-sequence dithering.",
+  "homepage": "https://github.com/Ressul96/dither-lab",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ressul96/dither-lab.git"
+  },
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "smoke": "python3 smoke/nocache_server.py"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

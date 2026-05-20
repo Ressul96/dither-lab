@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::borrow::Cow;
 use std::sync::mpsc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use wgpu::util::DeviceExt;
 
 use super::error::EngineError;
@@ -9,14 +9,46 @@ use super::frame::FrameBuffer;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+// Arc<Mutex<...>> so the renderer slot can be shared with a background
+// warm-up thread without forcing Tauri command callers to clone the
+// outer state. Apply paths still lock the mutex briefly to acquire the
+// renderer reference; init happens once, off the command thread.
 #[derive(Default)]
 pub struct GpuRenderState {
-    renderer: Mutex<Option<GpuRenderer>>,
+    renderer: Arc<Mutex<Option<GpuRenderer>>>,
 }
 
 impl GpuRenderState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Spawn a background thread that builds the wgpu adapter, device, and
+    /// effect pipelines so the first native render call finds them ready.
+    /// Without this, the first user-visible render pays a multi-hundred-ms
+    /// `pollster::block_on` stall on the Tauri command thread.
+    ///
+    /// Errors are logged to stderr and the slot is left empty — the apply
+    /// paths still attempt a synchronous lazy init on the next call, so a
+    /// transient warm-up failure does not permanently disable the GPU path.
+    pub fn warm_up(&self) {
+        let slot = Arc::clone(&self.renderer);
+        std::thread::spawn(move || {
+            let renderer = match GpuRenderer::new() {
+                Ok(renderer) => renderer,
+                Err(error) => {
+                    eprintln!("[gpu] warm-up failed: {error}");
+                    return;
+                }
+            };
+            let Ok(mut guard) = slot.lock() else {
+                eprintln!("[gpu] warm-up could not store renderer: lock poisoned");
+                return;
+            };
+            if guard.is_none() {
+                *guard = Some(renderer);
+            }
+        });
     }
 
     pub(crate) fn apply_threshold(

@@ -1,3 +1,11 @@
+//! v2-node-graph scaffolding.
+//!
+//! Typed DTOs for animatable parameters, keyframes, and bezier handles.
+//! Currently unconsumed at runtime — Phase 2 of the native render rewrite
+//! will replace the loosely-typed `serde_json::Value` params in
+//! [`crate::engine::frame`] with these strongly-typed equivalents.
+//! See `docs/spec/v2-node-graph.md` for the full target architecture.
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]

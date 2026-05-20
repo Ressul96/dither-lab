@@ -5745,6 +5745,11 @@ function sliderFillPercent(value, min, max) {
 function renderLayerRangeField(label, key, value, min, max, _readout) {
   const safeKey = escapeHtml(key);
   const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+  // Same fill-percent inline as renderRangeField — without it, the CSS
+  // default `--slider-fill: 50%` paints every layer property slider at
+  // mid-track on first render, contradicting the actual value (Opacity
+  // defaults to 100 but appeared half-full).
+  const fillPct = sliderFillPercent(numericValue, min, max);
   return `
     <div class="field range-field">
       <label>
@@ -5762,6 +5767,7 @@ function renderLayerRangeField(label, key, value, min, max, _readout) {
           value="${numericValue}"
           data-node-property="${safeKey}"
           data-input-kind="range"
+          style="--slider-fill: ${fillPct}%"
         />
         <input
           type="number"

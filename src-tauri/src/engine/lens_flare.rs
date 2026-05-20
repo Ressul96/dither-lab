@@ -1,3 +1,10 @@
+//! v2-node-graph scaffolding (lens-flare path).
+//!
+//! Typed model + passthrough [`LensFlareProcessor`] for the deferred
+//! native lens-flare GPU implementation. `process` currently returns the
+//! input unchanged; the real shader lands in Phase 2.
+//! See `docs/spec/lens-flare-node.md` and `docs/spec/v2-node-graph.md`.
+
 use serde::{Deserialize, Serialize};
 
 use super::animation::{AnimatedParameter, Rgba, Vec2};

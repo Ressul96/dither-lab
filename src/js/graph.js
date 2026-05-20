@@ -1407,7 +1407,10 @@ export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
   });
 
   dispatch("graph", {
-    nodes: [...graph.nodes.map((node) => clone(node)), newNode],
+    // Shallow copy — existing nodes are unchanged here, only `newNode` is
+    // appended. Deep-cloning every node would burn ~O(N) on a hot path
+    // that's reached on every node insertion.
+    nodes: [...graph.nodes, newNode],
     selectedNodeId: nodeId,
     selectedNodeIds: [nodeId],
   });
@@ -1428,7 +1431,10 @@ export function duplicateNodes(nodeIds, options = {}) {
   if (sources.length === 0) return [];
 
   const offset = Number.isFinite(Number(options.offset)) ? Number(options.offset) : 36;
-  const nextNodes = graph.nodes.map((node) => clone(node));
+  // Shallow copy: existing nodes are not mutated below — only freshly
+  // created `createNode(...)` entries (already independent objects with
+  // their own cloned params) are pushed onto the array.
+  const nextNodes = [...graph.nodes];
   const duplicatedIds = [];
   const idMap = new Map();
 
@@ -1842,10 +1848,10 @@ export function addEdge(fromNode, fromSocket, toNode, toSocket) {
     fromDef.type === "value" && isParamSocketName(toSocket)
       ? clampValueNodeForEdges(graph.nodes, nextEdges, fromNode)
       : graph.nodes;
-  const refreshedNodes = refreshGroupMetadataForNodes(
-    nextNodes === graph.nodes ? graph.nodes.map((node) => clone(node)) : nextNodes,
-    nextEdges
-  );
+  // refreshGroupMetadataForNodes always returns a new array via .map(...)
+  // and never mutates its input, so passing graph.nodes directly is safe
+  // and avoids an O(N) JSON deep-clone on the edge-add hot path.
+  const refreshedNodes = refreshGroupMetadataForNodes(nextNodes, nextEdges);
 
   dispatch("graph", { nodes: refreshedNodes, edges: nextEdges });
   return true;
@@ -2028,7 +2034,9 @@ export function toggleNodeSolo(nodeId) {
     const restoredEdges = restoreSoloEdges(graph, activeSolo);
     if (activeSolo.nodeId === nodeId) {
       dispatch("graph", {
-        nodes: refreshGroupMetadataForNodes(graph.nodes.map((node) => clone(node)), restoredEdges),
+        // refreshGroupMetadataForNodes returns a fresh array; passing
+        // graph.nodes directly skips a JSON deep-clone of every node.
+        nodes: refreshGroupMetadataForNodes(graph.nodes, restoredEdges),
         edges: restoredEdges,
         solo: null,
       });
@@ -2065,7 +2073,8 @@ export function toggleNodeSolo(nodeId) {
   if (!nextEdges.some((edge) => edge.id === soloEdge.id)) return false;
 
   dispatch("graph", {
-    nodes: refreshGroupMetadataForNodes(graph.nodes.map((item) => clone(item)), nextEdges),
+    // See addEdge: refreshGroupMetadataForNodes is pure, no deep-clone needed.
+    nodes: refreshGroupMetadataForNodes(graph.nodes, nextEdges),
     edges: nextEdges,
     solo: {
       nodeId: node.id,
@@ -2155,7 +2164,8 @@ export function removeEdgesById(edgeIds) {
   const nextEdges = graph.edges.filter((edge) => !ids.has(edge.id));
   if (nextEdges.length === graph.edges.length) return false;
   dispatch("graph", {
-    nodes: refreshGroupMetadataForNodes(graph.nodes.map((node) => clone(node)), nextEdges),
+    // See addEdge: refreshGroupMetadataForNodes is pure, no deep-clone needed.
+    nodes: refreshGroupMetadataForNodes(graph.nodes, nextEdges),
     edges: nextEdges,
   });
   return true;

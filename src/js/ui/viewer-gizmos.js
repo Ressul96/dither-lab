@@ -9,6 +9,7 @@ import {
   clientToSourcePoint,
   sourceToOverlayPoint,
 } from "./viewer-overlay.js";
+import { listenWithDispose, registerDispose } from "./lifecycle.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -53,10 +54,16 @@ export function initViewerGizmos() {
   subscribe("graph", scheduleGizmoSync);
   subscribe("view", scheduleGizmoSync);
   subscribe("source", scheduleGizmoSync);
-  window.addEventListener("resize", scheduleGizmoSync);
+
+  // Window resize + canvas resize need explicit teardown so re-initialising
+  // the gizmo layer (multi-window, hot reload, test harness) doesn't pile
+  // up duplicate handlers that fire on every legacy registration.
+  listenWithDispose(window, "resize", scheduleGizmoSync);
 
   if (typeof ResizeObserver === "function") {
-    new ResizeObserver(scheduleGizmoSync).observe(outputCanvas);
+    const observer = new ResizeObserver(scheduleGizmoSync);
+    observer.observe(outputCanvas);
+    registerDispose(() => observer.disconnect());
   }
 
   scheduleGizmoSync();

@@ -21,6 +21,10 @@ pub fn run() {
         .setup(|app| {
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
+            // Build the wgpu device + pipelines in the background so the
+            // first native_render_graph call doesn't pay multi-hundred-ms
+            // pollster::block_on latency on the Tauri command thread.
+            app.state::<GpuRenderState>().warm_up();
             Ok(())
         })
         .on_menu_event(on_menu_event)
