@@ -55,6 +55,7 @@ import { applyRgbToBwNode } from "./image-ops/rgb-to-bw.js";
 import { applyPosterizeNode } from "./image-ops/posterize.js";
 import { applyAdjustNode } from "./image-ops/adjust.js";
 import { applyDuotoneNode } from "./image-ops/duotone.js";
+import { applySourceNode } from "./image-ops/source.js";
 import {
   applyAnalogNode,
   applyAsciiNode,
@@ -95,6 +96,7 @@ export { applyRgbToBwNode };
 export { applyPosterizeNode };
 export { applyAdjustNode };
 export { applyDuotoneNode };
+export { applySourceNode };
 export {
   applyAnalogNode,
   applyAsciiNode,
@@ -137,35 +139,9 @@ import {
 // exposure→gamma→brightness→contrast→saturation pipeline). Re-exported
 // at the top of this file so applySourceNode's chain stays unchanged.
 
-export function applySourceNode(input, params = {}) {
-  if (!input?.width || !input?.height) return null;
-
-  let output = input;
-  const pushStep = (next) => {
-    if (!next || next === output) return;
-    if (output !== input) releaseBuffer(output);
-    output = next;
-  };
-
-  pushStep(applyAdjustNode(output, params));
-  pushStep(applyHsvNode(output, {
-    hue: params.hue ?? 0,
-    saturation: params.hsvSaturation ?? 100,
-    value: params.value ?? 100,
-  }));
-
-  const bwMode = String(params.bwMode ?? "off");
-  if (bwMode !== "off") {
-    pushStep(applyRgbToBwNode(output, { mode: bwMode }));
-  }
-
-  const invert = String(params.invert ?? "off") === "on";
-  if (invert) {
-    pushStep(applyInvertNode(output, { channels: params.invertChannels ?? "rgb" }));
-  }
-
-  return output;
-}
+// applySourceNode moved to image-ops/source.js — composit chain of
+// adjust → hsv → rgb-to-bw → invert. All four sub-nodes live in their
+// own modules now, so the source module is just orchestration.
 
 // applyMeshGradientNode + applyGradientNode (+ their CPU bodies and
 // gradientSource* helpers, wrap01) moved to image-ops/gradient.js.
