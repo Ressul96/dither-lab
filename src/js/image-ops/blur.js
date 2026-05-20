@@ -13,6 +13,24 @@ import { acquireBuffer } from "./buffer-pool.js";
 import { clamp } from "./pixel-math.js";
 import { supportsBlurFilter } from "./blur-support.js";
 import { createProcessingCanvas } from "../canvas.js";
+import { applyBlurGpu, GAUSSIAN_BLUR_MAX_RADIUS } from "../gpu-effects.js";
+
+// Blur node — preview/export uses the WebGL separable Gaussian path for
+// any radius the GPU supports (≤ GAUSSIAN_BLUR_MAX_RADIUS), then falls
+// through to blurImage's CPU box-blur fallback for wider radii or
+// WebGL2-disabled hosts. The native render path explicitly excludes
+// `blur` (see native-render.js) so preview always agrees with export
+// pixel-for-pixel on this Gaussian implementation.
+export function applyBlurNode(input, params) {
+  if (!input?.width || !input?.height) return null;
+  const radius = Math.max(0, Number(params.radius ?? 0));
+  if (radius === 0) return input;
+  if (radius <= GAUSSIAN_BLUR_MAX_RADIUS) {
+    const gpuOutput = applyBlurGpu(input, { radius });
+    if (gpuOutput) return gpuOutput;
+  }
+  return blurImage(input, radius);
+}
 
 export function blurImage(input, radius, passes = 2) {
   const normalizedRadius = Math.max(0, Math.round(Number(radius) || 0));

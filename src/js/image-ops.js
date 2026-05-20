@@ -35,7 +35,7 @@ import {
   applyMaskCombineNode,
   applyMixNode,
 } from "./image-ops/mix.js";
-import { blurImage } from "./image-ops/blur.js";
+import { applyBlurNode, blurImage } from "./image-ops/blur.js";
 import { applyDitherNode } from "./image-ops/dither.js";
 import {
   applyGradientMapNode,
@@ -57,6 +57,7 @@ export { applyThresholdNode };
 export { applyMaskApplyNode, applyMaskCombineNode, applyMixNode };
 export { applyDitherNode };
 export { applyGradientMapNode, applyGradientNode, applyMeshGradientNode };
+export { applyBlurNode };
 import {
   areRgbCurvesIdentity,
   buildCurveLut,
@@ -68,7 +69,6 @@ import { buildGradientLut } from "./gl/gradient-lut.js";
 import {
   applyAsciiGpu,
   applyBloomGpu,
-  applyBlurGpu,
   applyChromaticAberrationGpu,
   applyCrtGpu,
   applyDepthOfFieldGpu,
@@ -82,7 +82,6 @@ import {
   applyPosterizeGpu,
   applyStarGlowGpu,
   applyVhsGpu,
-  GAUSSIAN_BLUR_MAX_RADIUS,
 } from "./gpu-effects.js";
 
 // supportsBlurFilter moved to image-ops/blur-support.js so the mix
@@ -220,18 +219,8 @@ export function applyNoiseNode(params = {}, context = {}) {
   return output;
 }
 
-export function applyBlurNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  const radius = Math.max(0, Number(params.radius ?? 0));
-  if (radius === 0) return input;
-  // GPU separable Gaussian: ~10x faster than ctx.filter for moderate radii.
-  // Falls through to blurImage for wider radii or when WebGL2 is unavailable.
-  if (radius <= GAUSSIAN_BLUR_MAX_RADIUS) {
-    const gpuOutput = applyBlurGpu(input, { radius });
-    if (gpuOutput) return gpuOutput;
-  }
-  return blurImage(input, radius);
-}
+// applyBlurNode moved to image-ops/blur.js (sits alongside its
+// blurImage CPU fallback). Re-exported at the top of this file.
 
 // Glare — extract bright pixels, transform into bloom / streaks / fog glow,
 // blend the result over the source. Replaces the simpler Glow node; the
