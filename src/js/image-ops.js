@@ -1,6 +1,6 @@
 import { runAlgorithm } from "./dither/index.js";
 import { getPalette } from "./palettes.js";
-import { hexToRgb01 } from "./color.js";
+import { hexToRgb01, LUMA_BT601, LUMA_BT709, luminanceBt601, luminanceBt709 } from "./color.js";
 import { createProcessingCanvas } from "./canvas.js";
 import {
   areRgbCurvesIdentity,
@@ -616,7 +616,7 @@ function applyPosterizeCpu(input, params) {
     let outG;
     let outB;
     if (lumaMode) {
-      const luma = workR * 0.299 + workG * 0.587 + workB * 0.114;
+      const luma = luminanceBt601(workR, workG, workB);
       const quantizedLuma = Math.floor(luma * levelR + 0.5) / levelR;
       outR = quantizedLuma + (workR - luma);
       outG = quantizedLuma + (workG - luma);
@@ -672,18 +672,18 @@ export function applyRgbToBwNode(input, params) {
   let cb;
   switch (mode) {
     case "bt601":
-      cr = 0.299;
-      cg = 0.587;
-      cb = 0.114;
+      cr = LUMA_BT601.r;
+      cg = LUMA_BT601.g;
+      cb = LUMA_BT601.b;
       break;
     case "average":
       cr = cg = cb = 1 / 3;
       break;
     case "bt709":
     default:
-      cr = 0.2126;
-      cg = 0.7152;
-      cb = 0.0722;
+      cr = LUMA_BT709.r;
+      cg = LUMA_BT709.g;
+      cb = LUMA_BT709.b;
       break;
   }
   const output = createBuffer(input.width, input.height);
@@ -827,7 +827,7 @@ export function applySceneGradeNode(input, params = {}) {
     }
 
     if (colorMapData) {
-      const luma = rf * 0.2126 + gf * 0.7152 + bf * 0.0722;
+      const luma = luminanceBt709(rf, gf, bf);
       const mapped = sampleGradientLut(colorMapData, colorMapWidth, luma);
       rf = mapped[0] / 255;
       gf = mapped[1] / 255;
@@ -1174,7 +1174,7 @@ export function applyLevelsNode(input, params) {
       const r = data[i];
       const g = data[i + 1];
       const b = data[i + 2];
-      const oldLuma = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
+      const oldLuma = luminanceBt601(r, g, b) / 255;
       // Sample the LUT at the integer luma byte (round) so the result
       // matches the RGB-mode pre-bake above.
       const lumaIndex = Math.max(0, Math.min(255, Math.round(oldLuma * 255)));
@@ -1252,7 +1252,7 @@ export function applyDuotoneNode(input, params) {
     const r = lutR[data[i]];
     const g = lutG[data[i + 1]];
     const b = lutB[data[i + 2]];
-    const luma = r * 0.299 + g * 0.587 + b * 0.114;
+    const luma = luminanceBt601(r, g, b);
     const mappedR = shadow[0] + (highlight[0] - shadow[0]) * luma;
     const mappedG = shadow[1] + (highlight[1] - shadow[1]) * luma;
     const mappedB = shadow[2] + (highlight[2] - shadow[2]) * luma;
@@ -1331,7 +1331,7 @@ function gradientMapSignal(r, g, b, mode) {
   if (mode === "r" || mode === "red") return r;
   if (mode === "g" || mode === "green") return g;
   if (mode === "b" || mode === "blue") return b;
-  return r * 0.299 + g * 0.587 + b * 0.114;
+  return luminanceBt601(r, g, b);
 }
 
 function gradientMapCoordinate(signal, repeat, shift) {
@@ -2147,7 +2147,7 @@ function rgbToHsv(r8, g8, b8) {
 }
 
 function rgbLuma(r, g, b) {
-  return r * 0.299 + g * 0.587 + b * 0.114;
+  return luminanceBt601(r, g, b);
 }
 
 function scaleRgbToLuma(r, g, b, targetLuma) {
@@ -2550,11 +2550,11 @@ export function releaseBuffer(canvas) {
 }
 
 function luminance8(r, g, b) {
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return luminanceBt709(r, g, b);
 }
 
 function luminance01(r, g, b) {
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return luminanceBt709(r, g, b);
 }
 
 function clamp01(value) {
@@ -2597,6 +2597,6 @@ function thresholdChannelValue(r, g, b, channel) {
       return Math.max(r, g, b);
     case "luma":
     default:
-      return r * 0.299 + g * 0.587 + b * 0.114;
+      return luminanceBt601(r, g, b);
   }
 }

@@ -6,6 +6,7 @@ import {
   hasCurrentDitherFrame,
   seekForExport,
 } from "./source.js";
+import { selectedPath } from "./tauri-compat.js";
 
 const STILL_FORMATS = Object.freeze([
   { id: "png", label: "PNG", extension: "png", mime: "image/png" },
@@ -1045,13 +1046,6 @@ async function submitExport() {
 }
 
 async function submitStillExport() {
-  const canvas = buildStillExportCanvas();
-  if (!canvas?.width || !canvas?.height) {
-    exportSheetState.error = "Nothing is available to export for the selected target.";
-    renderExportSheet();
-    return null;
-  }
-
   exportInFlight = true;
   exportSheetState.error = "";
   renderExportSheet();
@@ -1059,6 +1053,13 @@ async function submitStillExport() {
 
   let exportedPath = null;
   try {
+    const canvas = buildStillExportCanvas();
+    if (!canvas?.width || !canvas?.height) {
+      exportSheetState.error = "Nothing is available to export for the selected target.";
+      renderExportSheet();
+      return null;
+    }
+
     const path = exportSheetState.destinationChosen
       ? exportSheetState.destinationPath
       : await chooseExportPath();
@@ -1330,11 +1331,12 @@ async function pickExportPath() {
     return suggestedExportPath();
   }
 
-  return tauri.dialog.save({
+  const selected = await tauri.dialog.save({
     title: "Export Current Frame",
     defaultPath: exportSheetState.destinationChosen ? exportSheetState.destinationPath : suggestedExportPath(),
     filters: [{ name: format.label, extensions: [format.extension] }],
   });
+  return selectedPath(selected);
 }
 
 function suggestedExportPath() {
@@ -1550,7 +1552,7 @@ async function chooseExportDirectory() {
   }
 
   if (!selected) return null;
-  const dir = typeof selected === "string" ? selected : selected.path || "";
+  const dir = selectedPath(selected);
   if (!dir) return null;
 
   exportSheetState.sequence.directory = dir;
@@ -1798,7 +1800,7 @@ async function chooseVideoExportPath(options = {}) {
   }
 
   if (!selected) return null;
-  const path = ensurePathExtension(typeof selected === "string" ? selected : selected.path || "", codec.extension);
+  const path = ensurePathExtension(selectedPath(selected), codec.extension);
   if (!path) return null;
   exportSheetState.video.outputPath = path;
   exportSheetState.video.destinationChosen = true;
@@ -1873,15 +1875,6 @@ async function submitFfmpegVideoExport() {
     return null;
   }
 
-  const probeCanvas = buildStillExportCanvas();
-  if (!probeCanvas?.width || !probeCanvas?.height) {
-    exportSheetState.error = "Nothing is available to export for the selected target.";
-    renderExportSheet();
-    return null;
-  }
-  const width = probeCanvas.width;
-  const height = probeCanvas.height;
-
   exportInFlight = true;
   exportAbortController = new AbortController();
   exportSheetState.error = "";
@@ -1894,9 +1887,18 @@ async function submitFfmpegVideoExport() {
   let writtenCount = 0;
   let failure = null;
   let sessionStarted = false;
+  let width = 0;
+  let height = 0;
 
   beginExportSession();
   try {
+    const probeCanvas = buildStillExportCanvas();
+    if (!probeCanvas?.width || !probeCanvas?.height) {
+      throw new Error("Nothing is available to export for the selected target.");
+    }
+    width = probeCanvas.width;
+    height = probeCanvas.height;
+
     updateExportProgress({ phase: "preparing" });
     renderExportSheet();
     await invoke("ffmpeg_start_encode", {
@@ -2022,15 +2024,6 @@ async function submitWebCodecsVideoExport(codec) {
     return null;
   }
 
-  const probeCanvas = buildStillExportCanvas();
-  if (!probeCanvas?.width || !probeCanvas?.height) {
-    exportSheetState.error = "Nothing is available to export for the selected target.";
-    renderExportSheet();
-    return null;
-  }
-  const width = probeCanvas.width;
-  const height = probeCanvas.height;
-
   exportInFlight = true;
   exportAbortController = new AbortController();
   exportSheetState.error = "";
@@ -2045,9 +2038,18 @@ async function submitWebCodecsVideoExport(codec) {
   let failure = null;
   let exportedPath = null;
   let encoder = null;
+  let width = 0;
+  let height = 0;
 
   beginExportSession();
   try {
+    const probeCanvas = buildStillExportCanvas();
+    if (!probeCanvas?.width || !probeCanvas?.height) {
+      throw new Error("Nothing is available to export for the selected target.");
+    }
+    width = probeCanvas.width;
+    height = probeCanvas.height;
+
     let encodeFailure = null;
     encoder = new VideoEncoder({
       output: (chunk) => {

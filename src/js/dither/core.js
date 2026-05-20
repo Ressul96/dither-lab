@@ -1,3 +1,5 @@
+import { luminanceBt709 } from "../color.js";
+
 export function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -7,7 +9,7 @@ export function clamp01(value) {
 }
 
 export function luminance8(r, g, b) {
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return luminanceBt709(r, g, b);
 }
 
 export function quantizeBW(value, threshold, invert) {

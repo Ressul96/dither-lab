@@ -14,6 +14,7 @@ let worker = null;
 let workerFailed = false;
 let nextRequestId = 0;
 const pending = new Map();
+const WORKER_RENDER_FALLBACK = Object.freeze({ fallbackToMainThread: true });
 
 export function isWorkerAvailable() {
   if (workerFailed) return false;
@@ -21,34 +22,43 @@ export function isWorkerAvailable() {
 }
 
 export async function requestWorkerRender({ graph, context, sourceImage }) {
-  if (workerFailed) return null;
+  if (workerFailed) return WORKER_RENDER_FALLBACK;
   ensureWorker();
-  if (!worker) return null;
+  if (!worker) return WORKER_RENDER_FALLBACK;
+
+  // Latest-wins: any in-flight request is now stale, even while this request
+  // prepares its source bitmap. Resolve the older caller with null so it can
+  // skip commit, and let the worker's eventual response be discarded.
+  for (const entry of pending.values()) entry.resolve(null);
+  pending.clear();
 
   // Skip preparing a bitmap when there's nothing to send.
   let sourceBitmap = null;
   if (sourceImage) {
     try {
       sourceBitmap = await createImageBitmap(sourceImage);
-    } catch (_) {
-      sourceBitmap = null;
+    } catch (err) {
+      console.warn("[render-adapter] source bitmap prepare failed, falling back:", err);
+      return WORKER_RENDER_FALLBACK;
     }
   }
-
-  // Latest-wins: any in-flight request is now stale. Resolve its caller
-  // with null so it can skip its commit, and let the worker's eventual
-  // result fall on the floor (onMessage closes the bitmaps).
-  for (const entry of pending.values()) entry.resolve(null);
-  pending.clear();
 
   const requestId = ++nextRequestId;
   return new Promise((resolve) => {
     pending.set(requestId, { resolve });
     const transfer = sourceBitmap ? [sourceBitmap] : [];
-    worker.postMessage(
-      { type: "render", requestId, graph, context, sourceBitmap },
-      transfer,
-    );
+    try {
+      worker.postMessage({ type: "render", requestId, graph, context, sourceBitmap }, transfer);
+    } catch (err) {
+      pending.delete(requestId);
+      if (sourceBitmap) {
+        try {
+          sourceBitmap.close();
+        } catch (_) {}
+      }
+      console.warn("[render-adapter] worker post failed, falling back:", err);
+      resolve(WORKER_RENDER_FALLBACK);
+    }
   });
 }
 
@@ -102,11 +112,18 @@ function onWorkerMessage(event) {
   const msg = event.data;
   if (msg?.type !== "result") return;
   const entry = pending.get(msg.requestId);
-  const payload = msg.error
-    ? null
-    : { viewerBitmap: msg.viewerBitmap ?? null, ditherBitmap: msg.ditherBitmap ?? null };
+  const payload = {
+    viewerBitmap: msg.viewerBitmap ?? null,
+    ditherBitmap: msg.ditherBitmap ?? null,
+  };
   if (entry) {
     pending.delete(msg.requestId);
+    if (msg.error) {
+      closeResultBitmaps(payload);
+      console.warn("[render-adapter] worker render failed, falling back:", msg.error);
+      entry.resolve(WORKER_RENDER_FALLBACK);
+      return;
+    }
     entry.resolve(payload);
   } else {
     // Discarded request — close any bitmaps so the host can free the memory.
@@ -123,6 +140,6 @@ function onWorkerError(err) {
     } catch (_) {}
     worker = null;
   }
-  for (const entry of pending.values()) entry.resolve(null);
+  for (const entry of pending.values()) entry.resolve(WORKER_RENDER_FALLBACK);
   pending.clear();
 }

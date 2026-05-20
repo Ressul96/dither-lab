@@ -1,3 +1,5 @@
+import { luminanceBt709 } from "./color.js";
+
 export const PALETTE_EXTRACTION_SIZES = Object.freeze([2, 4, 8, 16, 32]);
 
 const DEFAULT_EXTRACTION_SIZE = 4;
@@ -78,6 +80,9 @@ function buildHistogram(imageData) {
 
   const { data, width, height } = imageData;
   const totalPixels = width * height;
+  if (!Number.isFinite(totalPixels) || totalPixels <= 0 || data.length < totalPixels * 4) {
+    return [];
+  }
   const stride = Math.max(1, Math.ceil(Math.sqrt(totalPixels / MAX_SAMPLES)));
   const counts = new Map();
 
@@ -289,7 +294,7 @@ function colorDistanceSq(a, b) {
 }
 
 function colorLuma(color) {
-  return 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2];
+  return luminanceBt709(color[0], color[1], color[2]);
 }
 
 function normalizeColors(colors) {

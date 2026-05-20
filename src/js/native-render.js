@@ -16,17 +16,32 @@ const PASS_THROUGH_TYPES = new Set(["source", "viewer-output"]);
 let nativeRenderAvailable = null;
 let nativeRenderWarningShown = false;
 let nativeRenderInfoShown = false;
+let nativeRenderRetryAt = 0;
+
+const NATIVE_RENDER_RETRY_DELAY_MS = 10_000;
 
 export function canUseNativeRender(graph) {
-  if (!window.__TAURI__?.core?.invoke) return false;
+  if (nativeRenderAvailable === false && performance.now() < nativeRenderRetryAt) return false;
+  return Boolean(getNativeRenderableGraph(graph));
+}
+
+export function resetNativeRenderAvailability() {
+  nativeRenderAvailable = null;
+  nativeRenderRetryAt = 0;
+  nativeRenderWarningShown = false;
+}
+
+function getNativeRenderableGraph(graph) {
+  if (!window.__TAURI__?.core?.invoke) return null;
   const scoped = pruneHiddenGraph(graph);
-  if (!scoped?.nodes?.length) return false;
-  if (scoped.edges?.some((edge) => String(edge.toSocket ?? "").startsWith("param:"))) return false;
+  if (!scoped?.nodes?.length) return null;
+  if (scoped.edges?.some((edge) => String(edge.toSocket ?? "").startsWith("param:"))) return null;
   if (scoped.nodes.some((node) => node.type === "source" && !isIdentitySourceParams(node.params))) {
-    return false;
+    return null;
   }
-  if (!scoped.nodes.every((node) => NATIVE_SUPPORTED_TYPES.has(node.type))) return false;
-  return scoped.nodes.some((node) => !PASS_THROUGH_TYPES.has(node.type));
+  if (!scoped.nodes.every((node) => NATIVE_SUPPORTED_TYPES.has(node.type))) return null;
+  if (!scoped.nodes.some((node) => !PASS_THROUGH_TYPES.has(node.type))) return null;
+  return scoped;
 }
 
 function isIdentitySourceParams(params = {}) {
@@ -45,10 +60,10 @@ function isIdentitySourceParams(params = {}) {
 }
 
 export async function evaluateNativeGraphOutputs(graph, sourceCanvas) {
-  if (!canUseNativeRender(graph) || !sourceCanvas?.width || !sourceCanvas?.height) return null;
-  if (nativeRenderAvailable === false) return null;
+  const scoped = getNativeRenderableGraph(graph);
+  if (!scoped || !sourceCanvas?.width || !sourceCanvas?.height) return null;
+  if (nativeRenderAvailable === false && performance.now() < nativeRenderRetryAt) return null;
 
-  const scoped = pruneHiddenGraph(graph);
   const context = sourceCanvas.getContext("2d", { alpha: false, willReadFrequently: true });
   if (!context) return null;
 
@@ -92,9 +107,10 @@ export async function evaluateNativeGraphOutputs(graph, sourceCanvas) {
     };
   } catch (error) {
     nativeRenderAvailable = false;
+    nativeRenderRetryAt = performance.now() + NATIVE_RENDER_RETRY_DELAY_MS;
     if (!nativeRenderWarningShown) {
       nativeRenderWarningShown = true;
-      console.warn("[native-render] disabled after failed invoke", error);
+      console.warn("[native-render] disabled after failed invoke; will retry later", error);
     }
     return null;
   }

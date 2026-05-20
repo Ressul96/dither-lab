@@ -4,11 +4,14 @@
 // is kept in Tauri-managed state so the JS side only has to issue frame writes.
 
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
+use std::thread::{self, JoinHandle};
 use tauri::State;
+
+const STDERR_TAIL_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,8 +59,23 @@ pub struct FfmpegFinishResponse {
 struct ActiveSession {
     child: Child,
     stdin: Option<ChildStdin>,
+    stderr_thread: Option<JoinHandle<String>>,
     output_path: String,
     expected_bytes_per_frame: usize,
+    finished: bool,
+}
+
+impl Drop for ActiveSession {
+    fn drop(&mut self) {
+        drop(self.stdin.take());
+        if !self.finished {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+        if let Some(stderr_thread) = self.stderr_thread.take() {
+            let _ = stderr_thread.join();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -92,10 +110,7 @@ pub fn ffmpeg_check_available() -> FfmpegAvailability {
         Ok(output) => FfmpegAvailability {
             available: false,
             version: None,
-            error: Some(format!(
-                "ffmpeg exited with status {}",
-                output.status
-            )),
+            error: Some(format!("ffmpeg exited with status {}", output.status)),
         },
         Err(error) => FfmpegAvailability {
             available: false,
@@ -172,10 +187,17 @@ pub fn ffmpeg_start_encode(
         .spawn()
         .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
 
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Failed to open ffmpeg stdin".to_string())?;
+    let Some(stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("Failed to open ffmpeg stdin".to_string());
+    };
+
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("Failed to open ffmpeg stderr".to_string());
+    };
 
     let expected = (config.width as usize)
         .checked_mul(config.height as usize)
@@ -185,8 +207,10 @@ pub fn ffmpeg_start_encode(
     *guard = Some(ActiveSession {
         child,
         stdin: Some(stdin),
+        stderr_thread: Some(spawn_stderr_drain(stderr)),
         output_path: config.output_path.clone(),
         expected_bytes_per_frame: expected,
+        finished: false,
     });
 
     Ok(())
@@ -232,15 +256,16 @@ pub fn ffmpeg_finish_encode(
 
     drop(session.stdin.take());
 
-    let output = session
+    let status = session
         .child
-        .wait_with_output()
+        .wait()
         .map_err(|e| format!("Failed to wait for ffmpeg: {}", e))?;
+    session.finished = true;
 
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(-1);
+    let stderr = join_stderr_tail(session.stderr_thread.take());
+    let exit_code = status.code().unwrap_or(-1);
 
-    if !output.status.success() {
+    if !status.success() {
         return Err(format!(
             "ffmpeg exited with status {}: {}",
             exit_code,
@@ -249,7 +274,7 @@ pub fn ffmpeg_finish_encode(
     }
 
     Ok(FfmpegFinishResponse {
-        output_path: session.output_path,
+        output_path: session.output_path.clone(),
         exit_code,
         stderr_tail: tail_lines(&stderr, 20),
     })
@@ -265,6 +290,8 @@ pub fn ffmpeg_cancel_encode(state: State<'_, VideoExportState>) -> Result<(), St
     drop(session.stdin.take());
     let _ = session.child.kill();
     let _ = session.child.wait();
+    session.finished = true;
+    let _ = join_stderr_tail(session.stderr_thread.take());
 
     if !session.output_path.is_empty() {
         let _ = std::fs::remove_file(&session.output_path);
@@ -285,4 +312,31 @@ fn tail_lines(text: &str, max_lines: usize) -> String {
     let collected: Vec<&str> = text.lines().collect();
     let start = collected.len().saturating_sub(max_lines);
     collected[start..].join("\n")
+}
+
+fn spawn_stderr_drain(mut stderr: ChildStderr) -> JoinHandle<String> {
+    thread::spawn(move || {
+        let mut tail = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            match stderr.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    tail.extend_from_slice(&buffer[..n]);
+                    if tail.len() > STDERR_TAIL_BYTES {
+                        let overflow = tail.len() - STDERR_TAIL_BYTES;
+                        tail.drain(0..overflow);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        String::from_utf8_lossy(&tail).to_string()
+    })
+}
+
+fn join_stderr_tail(stderr_thread: Option<JoinHandle<String>>) -> String {
+    stderr_thread
+        .and_then(|thread| thread.join().ok())
+        .unwrap_or_default()
 }

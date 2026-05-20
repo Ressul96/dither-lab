@@ -74,6 +74,7 @@ const state = {
 };
 
 const listeners = new Map();
+const MAX_HISTORY_ENTRIES = 200;
 
 export function getState() {
   return state;
@@ -82,7 +83,7 @@ export function getState() {
 export function subscribe(topic, fn) {
   if (!listeners.has(topic)) listeners.set(topic, new Set());
   listeners.get(topic).add(fn);
-  fn(state[topic]);
+  notifySubscriber(topic, fn, state[topic]);
   return () => listeners.get(topic)?.delete(fn);
 }
 
@@ -91,7 +92,9 @@ export function dispatch(topic, patch) {
   if (!slot) return;
   Object.assign(slot, patch);
   const subs = listeners.get(topic);
-  if (subs) for (const fn of subs) fn(slot);
+  if (subs) {
+    for (const fn of [...subs]) notifySubscriber(topic, fn, slot);
+  }
 }
 
 const undoStack = [];
@@ -99,6 +102,7 @@ const redoStack = [];
 
 export function pushHistory(entry) {
   undoStack.push(entry);
+  if (undoStack.length > MAX_HISTORY_ENTRIES) undoStack.shift();
   redoStack.length = 0;
   syncHistoryButtons();
 }
@@ -124,4 +128,12 @@ export function syncHistoryButtons() {
   const r = document.querySelector('[data-action="redo"]');
   if (u) u.disabled = undoStack.length === 0;
   if (r) r.disabled = redoStack.length === 0;
+}
+
+function notifySubscriber(topic, fn, slot) {
+  try {
+    fn(slot);
+  } catch (error) {
+    console.error(`[state] subscriber for "${topic}" failed`, error);
+  }
 }

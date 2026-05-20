@@ -6,6 +6,17 @@
 
 const HEX_RE = /^#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/;
 
+export const LUMA_BT709 = Object.freeze({ r: 0.2126, g: 0.7152, b: 0.0722 });
+export const LUMA_BT601 = Object.freeze({ r: 0.299, g: 0.587, b: 0.114 });
+
+export function luminanceBt709(r, g, b) {
+  return LUMA_BT709.r * r + LUMA_BT709.g * g + LUMA_BT709.b * b;
+}
+
+export function luminanceBt601(r, g, b) {
+  return LUMA_BT601.r * r + LUMA_BT601.g * g + LUMA_BT601.b * b;
+}
+
 export function normalizeHex(value, fallback = "#000000") {
   if (typeof value !== "string") return normalizeHex(fallback, "#000000");
   const match = HEX_RE.exec(value.trim());

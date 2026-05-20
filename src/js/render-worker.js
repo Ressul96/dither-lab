@@ -21,21 +21,24 @@ self.addEventListener("message", (event) => {
   else if (msg.type === "clearCache") clearGraphCache();
 });
 
+self.addEventListener("messageerror", (event) => {
+  console.warn("[render-worker] messageerror", event);
+});
+
 function handleRender({ requestId, graph, context, sourceBitmap }) {
   let sourceImage = null;
-  if (sourceBitmap) {
-    // Copy onto an OffscreenCanvas so the runtime sees the same canvas-like
-    // surface it does on the main thread. The bitmap is closed afterwards
-    // because evaluateGraphOutputs doesn't need to retain it.
-    sourceImage = new OffscreenCanvas(sourceBitmap.width, sourceBitmap.height);
-    sourceImage.getContext("2d", { alpha: false }).drawImage(sourceBitmap, 0, 0);
-    sourceBitmap.close();
-  }
-
   let viewerBitmap = null;
   let ditherBitmap = null;
   let error = null;
   try {
+    if (sourceBitmap) {
+      // Copy onto an OffscreenCanvas so the runtime sees the same canvas-like
+      // surface it does on the main thread.
+      sourceImage = new OffscreenCanvas(sourceBitmap.width, sourceBitmap.height);
+      const sourceContext = sourceImage.getContext("2d", { alpha: false });
+      if (!sourceContext) throw new Error("worker could not create source 2D context");
+      sourceContext.drawImage(sourceBitmap, 0, 0);
+    }
     const outputs = evaluateGraphOutputs(graph, {
       ...context,
       sourceImage,
@@ -44,6 +47,12 @@ function handleRender({ requestId, graph, context, sourceBitmap }) {
     ditherBitmap = transferCanvasOutput(outputs?.ditherOutput);
   } catch (err) {
     error = err?.message ?? String(err);
+  } finally {
+    if (sourceBitmap) {
+      try {
+        sourceBitmap.close();
+      } catch (_) {}
+    }
   }
 
   const transfer = [];
@@ -51,7 +60,7 @@ function handleRender({ requestId, graph, context, sourceBitmap }) {
   if (ditherBitmap) transfer.push(ditherBitmap);
   self.postMessage(
     { type: "result", requestId, viewerBitmap, ditherBitmap, error },
-    transfer,
+    transfer
   );
 }
 

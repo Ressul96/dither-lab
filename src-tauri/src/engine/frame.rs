@@ -70,11 +70,16 @@ fn render_graph(
     gpu_state: &GpuRenderState,
 ) -> Result<NativeRenderResponse, RenderError> {
     let source = FrameBuffer::new(request.width, request.height, pixels)?;
-    let order = topological_sort(&request.nodes, &request.edges);
+    let order = topological_sort(&request.nodes, &request.edges)?;
+    let nodes_by_id: HashMap<&str, &NativeGraphNode> = request
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
     let mut results: HashMap<String, FrameBuffer> = HashMap::new();
 
     for node_id in order {
-        let Some(node) = request.nodes.iter().find(|item| item.id == node_id) else {
+        let Some(node) = nodes_by_id.get(node_id.as_str()).copied() else {
             continue;
         };
         let output = evaluate_node(node, &request.edges, &results, &source, gpu_state)?;
@@ -155,9 +160,16 @@ fn resolve_input<'a>(
     results.get(&edge.from_node)
 }
 
-fn topological_sort(nodes: &[NativeGraphNode], edges: &[NativeGraphEdge]) -> Vec<String> {
+fn topological_sort(
+    nodes: &[NativeGraphNode],
+    edges: &[NativeGraphEdge],
+) -> Result<Vec<String>, RenderError> {
     let mut incoming: HashMap<String, usize> =
         nodes.iter().map(|node| (node.id.clone(), 0)).collect();
+    if incoming.len() != nodes.len() {
+        return Err(RenderError::new("native graph contains duplicate node ids"));
+    }
+
     let mut outgoing: HashMap<String, Vec<String>> = nodes
         .iter()
         .map(|node| (node.id.clone(), Vec::new()))
@@ -191,7 +203,11 @@ fn topological_sort(nodes: &[NativeGraphNode], edges: &[NativeGraphEdge]) -> Vec
         }
     }
 
-    order
+    if order.len() != nodes.len() {
+        return Err(RenderError::new("native graph contains a cycle"));
+    }
+
+    Ok(order)
 }
 
 fn apply_adjust(input: &FrameBuffer, params: &Value) -> FrameBuffer {
@@ -850,6 +866,31 @@ mod tests {
                 255, 255, 255, 255,
             ]
         );
+    }
+
+    #[test]
+    fn render_graph_rejects_cycles() {
+        let request = NativeRenderRequest {
+            width: 1,
+            height: 1,
+            nodes: vec![
+                node("source", "source", json!({})),
+                node("adjust-a", "adjust", json!({})),
+                node("adjust-b", "adjust", json!({})),
+                node("viewer", "viewer-output", json!({})),
+            ],
+            edges: vec![
+                edge("source", "image", "adjust-a", "image"),
+                edge("adjust-a", "image", "adjust-b", "image"),
+                edge("adjust-b", "image", "adjust-a", "image"),
+                edge("adjust-b", "image", "viewer", "image"),
+            ],
+        };
+        let pixels = vec![0, 0, 0, 255];
+
+        let error = render_graph(request, pixels, &GpuRenderState::new()).unwrap_err();
+
+        assert_eq!(error.to_string(), "native graph contains a cycle");
     }
 
     fn node(id: &str, node_type: &str, params: Value) -> NativeGraphNode {

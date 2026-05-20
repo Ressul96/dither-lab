@@ -24,11 +24,18 @@
 import { hexToRgb01 } from "../color.js";
 
 const DEFAULT_WIDTH = 256;
+const MAX_WIDTH = 4096;
 const ENDPOINT_FALLBACK = [255, 255, 255]; // white when stops are empty
 
 function clamp01(x) {
   if (!Number.isFinite(x)) return 0;
   return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
+function normalizeWidth(width) {
+  const numeric = Math.round(Number(width ?? DEFAULT_WIDTH));
+  if (!Number.isFinite(numeric)) return DEFAULT_WIDTH;
+  return Math.max(2, Math.min(MAX_WIDTH, numeric));
 }
 
 function hexToRgb255(hex, fallback = ENDPOINT_FALLBACK) {
@@ -109,7 +116,7 @@ function createLutCanvas(width) {
 }
 
 export function getGradientLutKey(stops, options = {}) {
-  const width = Math.max(2, options.width ?? DEFAULT_WIDTH);
+  const width = normalizeWidth(options.width);
   const normalized = normalizeStops(stops);
   const parts = normalized.map(
     (s) => `${s.pos.toFixed(4)}:${s.rgb[0]},${s.rgb[1]},${s.rgb[2]}`
@@ -118,7 +125,7 @@ export function getGradientLutKey(stops, options = {}) {
 }
 
 export function buildGradientLut(stops, options = {}) {
-  const width = Math.max(2, options.width ?? DEFAULT_WIDTH);
+  const width = normalizeWidth(options.width);
   const normalized = normalizeStops(stops);
   const data = paintLut(width, normalized);
 

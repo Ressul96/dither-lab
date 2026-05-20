@@ -14,6 +14,7 @@ import {
   timeToFrame,
   timelineFrameRate,
 } from "./timeline.js";
+import { selectedPath } from "./tauri-compat.js";
 
 const FRAME_CACHE_TARGET_BYTES = 150_000_000;
 const FRAME_CACHE_MIN = 8;
@@ -117,6 +118,12 @@ class ImageMediaMock extends EventTarget {
     
     this._currentTime += dt * this.playbackRate;
     if (this._currentTime >= this.duration) {
+      if (this.loop) {
+        this._currentTime = this.duration > 0 ? this._currentTime % this.duration : 0;
+        this.dispatchEvent(new Event("timeupdate"));
+        this._tickRaf = requestAnimationFrame(() => this._tick());
+        return;
+      }
       this._currentTime = this.duration;
       this.ended = true;
       this.paused = true;
@@ -148,7 +155,7 @@ function scheduleRender() {
   requestAnimationFrame(() => {
     if (!renderQueued) return;
     renderQueued = false;
-    renderCurrentFrame();
+    requestRenderCurrentFrame();
   });
 }
 
@@ -170,7 +177,8 @@ export async function openSource() {
   }
   if (!selected) return;
 
-  const path = typeof selected === "string" ? selected : selected.path;
+  const path = selectedPath(selected);
+  if (!path) return;
   await openSourcePath(path);
 }
 
@@ -268,7 +276,7 @@ async function loadMedia(src, path, isImage, options = {}) {
     trimEnd: v.duration,
     loopEnabled: true,
   });
-  renderCurrentFrame();
+  requestRenderCurrentFrame();
   if (autoplay) {
     await startPlayback(v, { forceRestart: true });
   }
@@ -739,7 +747,7 @@ export function seek(seconds) {
     if (Math.abs(before - target) > 0.0005) {
       v.currentTime = target;
     } else {
-      renderCurrentFrame();
+      requestRenderCurrentFrame();
     }
   } catch {}
   syncPlaybackState(v, { currentTime: target });
@@ -917,7 +925,7 @@ export function getCurrentExportFrameCanvas(target = "viewer-output") {
   // During export, seekForExport already awaited a fresh render — calling
   // it again would be redundant work and silently fire-and-forget (this
   // function is sync), risking that callers read a stale canvas.
-  if (!exportSessionActive) renderCurrentFrame();
+  if (!exportSessionActive) requestRenderCurrentFrame();
   if (target === "dither-only") {
     return hasDitherOutput ? ditherCanvas ?? null : null;
   }
@@ -927,14 +935,14 @@ export function getCurrentExportFrameCanvas(target = "viewer-output") {
 export function hasCurrentDitherFrame() {
   const { video: v } = ensureEls();
   if (!v || v.readyState < 2) return false;
-  if (!exportSessionActive) renderCurrentFrame();
+  if (!exportSessionActive) requestRenderCurrentFrame();
   return hasDitherOutput && Boolean(ditherCanvas?.width && ditherCanvas?.height);
 }
 
 export function getCurrentSourceFrameCanvas() {
   const { video: v } = ensureEls();
   if (!v || v.readyState < 2) return null;
-  if (!exportSessionActive) renderCurrentFrame();
+  if (!exportSessionActive) requestRenderCurrentFrame();
   return sourceCanvas ?? null;
 }
 
@@ -1051,13 +1059,18 @@ async function renderCurrentFrame() {
       },
       sourceImage: sourceForEval,
     });
-    if (!result) return; // stale or worker failed — leave the last good frame on screen
-    commitProcessedFrame(result.viewerBitmap);
-    commitDitherFrame(result.ditherBitmap);
-    if (result.viewerBitmap) result.viewerBitmap.close();
-    if (result.ditherBitmap) result.ditherBitmap.close();
-    presentPreview();
-    return;
+    if (!result) return; // stale request — leave the last good frame on screen
+    if (isStaleRender(currentRenderVersion, currentSourceToken)) {
+      closeWorkerRenderResult(result);
+      return;
+    }
+    if (!result.fallbackToMainThread) {
+      commitProcessedFrame(result.viewerBitmap);
+      commitDitherFrame(result.ditherBitmap);
+      closeWorkerRenderResult(result);
+      presentPreview();
+      return;
+    }
   }
 
   const graphOutputs = evaluateGraphOutputs(graph, {
@@ -1073,6 +1086,30 @@ async function renderCurrentFrame() {
   recyclePreviewOutput(graphOutputs.ditherOutput);
   presentPreview();
   queueNativePreview(nativeRenderGraph, currentRenderVersion, currentSourceToken);
+}
+
+function requestRenderCurrentFrame() {
+  void renderCurrentFrame().catch((error) => {
+    console.error("[source] render failed", error);
+  });
+}
+
+function isStaleRender(currentRenderVersion, currentSourceToken) {
+  return currentRenderVersion !== renderVersion || currentSourceToken !== sourceToken;
+}
+
+function closeWorkerRenderResult(result) {
+  if (!result) return;
+  if (result.viewerBitmap) {
+    try {
+      result.viewerBitmap.close();
+    } catch {}
+  }
+  if (result.ditherBitmap) {
+    try {
+      result.ditherBitmap.close();
+    } catch {}
+  }
 }
 
 function shouldUseWorkerForPreview(mode, video) {
@@ -1449,7 +1486,7 @@ function startDrawLoop() {
         // Clear the scheduler flag so any queued render in this frame is
         // suppressed — tick already covered this paint.
         renderQueued = false;
-        renderCurrentFrame();
+        requestRenderCurrentFrame();
       }
     }
     if (!v.paused && !v.ended) {
@@ -1479,7 +1516,7 @@ function enforceTrimPlayback(v) {
       v.currentTime = trimStart;
     } catch {}
     syncPlaybackState(v, { currentTime: trimStart, playing: true });
-    renderCurrentFrame();
+    requestRenderCurrentFrame();
     return true;
   }
 
@@ -1488,7 +1525,7 @@ function enforceTrimPlayback(v) {
   } catch {}
   v.pause();
   syncPlaybackState(v, { currentTime: trimEnd, playing: false });
-  renderCurrentFrame();
+  requestRenderCurrentFrame();
   return true;
 }
 

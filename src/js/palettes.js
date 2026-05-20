@@ -1,5 +1,8 @@
+import { luminanceBt709 } from "./color.js";
+
 const LUT_STEP = 16;
 const CUSTOM_PREFIX = "custom:";
+const MAX_PALETTE_COLORS = 256;
 
 function buildGrayscale(steps) {
   return Array.from({ length: steps }, (_, i) => {
@@ -250,8 +253,10 @@ export function getPaletteOptionsGrouped() {
 export function registerPalette(palette) {
   if (!palette?.id || !Array.isArray(palette.colors) || palette.colors.length === 0) return;
   const existing = REGISTRY.get(palette.id);
+  const colors = normalizeColorList(palette.colors);
+  if (colors.length === 0) return;
   if (existing) LUT_CACHE.delete(existing);
-  REGISTRY.set(palette.id, palette);
+  REGISTRY.set(palette.id, { ...palette, colors });
   LUT_CACHE.delete(palette);
   notify();
 }
@@ -281,12 +286,10 @@ export function makeCustomPaletteId(seed) {
 }
 
 export function createCustomPalette(name, colors) {
-  const safeColors = Array.isArray(colors) && colors.length > 0
-    ? colors.map(normalizeColor)
-    : [
-        [0, 0, 0],
-        [255, 255, 255],
-      ];
+  const safeColors = normalizeColorList(colors, [
+    [0, 0, 0],
+    [255, 255, 255],
+  ]);
   const safeName = (name ?? "").trim() || "Untitled Palette";
   const palette = {
     id: makeCustomPaletteId(safeName),
@@ -315,7 +318,7 @@ export function updateCustomPalette(id, patch) {
     id,
     name: patch?.name !== undefined ? (patch.name || existing.name) : existing.name,
     colors: Array.isArray(patch?.colors) && patch.colors.length > 0
-      ? patch.colors.map(normalizeColor)
+      ? normalizeColorList(patch.colors)
       : existing.colors,
   };
   LUT_CACHE.delete(existing);
@@ -341,10 +344,12 @@ export function applyCustomPalettes(entries) {
     for (const entry of entries) {
       if (!entry?.id || !Array.isArray(entry.colors) || entry.colors.length === 0) continue;
       if (BUILT_IN_IDS.has(entry.id)) continue;
+      const colors = normalizeColorList(entry.colors);
+      if (colors.length === 0) continue;
       REGISTRY.set(entry.id, {
         id: entry.id,
         name: entry.name || "Untitled Palette",
-        colors: entry.colors.map(normalizeColor),
+        colors,
       });
     }
   }
@@ -370,6 +375,11 @@ function normalizeColor(color) {
   if (!Array.isArray(color)) return [0, 0, 0];
   const clamp255 = (v) => Math.max(0, Math.min(255, Math.round(Number(v) || 0)));
   return [clamp255(color[0]), clamp255(color[1]), clamp255(color[2])];
+}
+
+function normalizeColorList(colors, fallback = []) {
+  if (!Array.isArray(colors) || colors.length === 0) return fallback.map(normalizeColor);
+  return colors.slice(0, MAX_PALETTE_COLORS).map(normalizeColor);
 }
 
 export function getPaletteLUT(palette) {
@@ -412,7 +422,7 @@ export function getPaletteExtremes(palette) {
   let minLuma = Infinity;
   let maxLuma = -Infinity;
   for (const color of palette.colors) {
-    const luma = 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2];
+    const luma = luminanceBt709(color[0], color[1], color[2]);
     if (luma < minLuma) {
       minLuma = luma;
       darkest = color;

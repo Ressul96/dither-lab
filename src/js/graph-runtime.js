@@ -190,7 +190,7 @@ export function evaluateGraphOutputs(graph, context) {
       const paramVersions = paramSocketsFor(node).map((socket) =>
         inputVersionKey(node, index, versions, socket)
       );
-      const timeSalt = TIME_AWARE_TYPES.has(node.type)
+      const timeSalt = nodeNeedsTimeSalt(node, effectiveParams)
         ? `;t=${frameSalt(context?.timeSeconds, context?.fps)}`
         : "";
       const paramsHash = `${hashParams(effectiveParams)}${hashLayerAdjustments(node)}bypass=${node.bypassed ? 1 : 0}${timeSalt};`;
@@ -395,6 +395,12 @@ function frameSalt(timeSeconds, fps) {
   return String(Math.round(seconds * frameRate));
 }
 
+function nodeNeedsTimeSalt(node, params) {
+  if (TIME_AWARE_TYPES.has(node.type)) return true;
+  if (node.type === "noise") return Number(params?.animSpeed ?? 0) > 0;
+  return false;
+}
+
 function hashParams(params) {
   if (!params || typeof params !== "object") return "";
   const keys = Object.keys(params).sort();
@@ -442,6 +448,7 @@ function releaseIntermediateBuffers(results, keep, context) {
 function applyLayerAdjustments(node, output, index, results, context) {
   if (!output || typeof output !== "object" || typeof output.width !== "number") return output;
   if (node.type === "source" || node.type === "viewer-output" || node.type === "group") return output;
+  if (!hasLayerAdjustments(node)) return output;
 
   const baseInput = resolveLayerBaseInput(node, index, results);
   return applyLayerAdjustmentsNode(baseInput, output, {
@@ -449,6 +456,13 @@ function applyLayerAdjustments(node, output, index, results, context) {
     hue: node.hue,
     saturation: node.saturation,
   });
+}
+
+function hasLayerAdjustments(node) {
+  const opacity = Number(node.opacity ?? 100);
+  const hue = Number(node.hue ?? 0);
+  const saturation = Number(node.saturation ?? 100);
+  return opacity < 99.9 || hue !== 0 || saturation !== 100;
 }
 
 function resolveLayerBaseInput(node, index, results) {

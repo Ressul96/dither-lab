@@ -1,4 +1,5 @@
 const ALGORITHMS = new Map();
+const warnedMissingAlgorithms = new Set();
 const FAMILY_ORDER = ["error-diffusion", "ordered", "threshold-noise", "pattern"];
 const FAMILY_LABELS = {
   "error-diffusion": "Error Diffusion",
@@ -12,6 +13,9 @@ const FAMILY_LABELS = {
 
 export function registerAlgorithm(algo) {
   if (!algo?.id || typeof algo.run !== "function") return;
+  if (ALGORITHMS.has(algo.id)) {
+    console.warn(`[dither] duplicate algorithm id registered: ${algo.id}`);
+  }
   ALGORITHMS.set(algo.id, algo);
 }
 
@@ -24,8 +28,15 @@ export function listAlgorithms() {
 }
 
 export function runAlgorithm(id, imageData, params, palette) {
-  const algo = ALGORITHMS.get(id) ?? ALGORITHMS.get("floyd-steinberg");
-  if (!algo) return imageData;
+  const algo = ALGORITHMS.get(id);
+  if (!algo) {
+    const key = String(id ?? "");
+    if (!warnedMissingAlgorithms.has(key)) {
+      warnedMissingAlgorithms.add(key);
+      console.warn(`[dither] unknown algorithm id: ${key || "(empty)"}`);
+    }
+    return imageData;
+  }
   algo.run(imageData, params, palette);
   return imageData;
 }

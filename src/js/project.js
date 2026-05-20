@@ -9,10 +9,12 @@ import {
 import { clearSource, openSourcePath, pausePlayback, seek, setFps } from "./source.js";
 import { applyCustomPalettes, serializeCustomPalettes } from "./palettes.js";
 import { createDefaultTimeline, serializeTimeline } from "./timeline.js";
+import { selectedPath } from "./tauri-compat.js";
 
 let currentProjectPath = "";
+const SUPPORTED_PROJECT_VERSIONS = new Set([1]);
 
-export async function newProject() {
+export function newProject() {
   currentProjectPath = "";
   clearSource();
   applyCustomPalettes([]);
@@ -44,12 +46,13 @@ export async function saveProjectAs() {
     return null;
   }
 
-  const path = await tauri.dialog.save({
+  const selected = await tauri.dialog.save({
     title: "Save Project",
     defaultPath: currentProjectPath || suggestedProjectPath(),
     filters: [{ name: "Dither Lab Project", extensions: ["ditherlab"] }],
   });
 
+  const path = selectedPath(selected);
   if (!path) return null;
   currentProjectPath = path;
   return writeProjectFile(path);
@@ -71,7 +74,8 @@ export async function openProject() {
 
   if (!selected) return null;
 
-  const path = typeof selected === "string" ? selected : selected.path;
+  const path = selectedPath(selected);
+  if (!path) return null;
   const raw = await tauri.fs.readTextFile(path);
   let project;
   try {
@@ -80,6 +84,7 @@ export async function openProject() {
     console.error("[project] project file is not valid JSON", error);
     throw new Error("Project file is corrupt or not valid JSON.");
   }
+  validateProject(project);
   await applyProject(project);
   currentProjectPath = path;
   return project;
@@ -95,32 +100,24 @@ async function writeProjectFile(path) {
   const project = buildProjectPayload();
   const payload = JSON.stringify(project, null, 2);
   const tmpPath = `${path}.tmp`;
+  const rename = tauri.fs.rename ?? tauri.fs.renameFile;
+  if (typeof rename !== "function") {
+    throw new Error("Project save requires filesystem rename support for atomic writes.");
+  }
 
   await tauri.fs.writeTextFile(tmpPath, payload);
 
-  const rename = tauri.fs.rename ?? tauri.fs.renameFile;
-  if (typeof rename === "function") {
-    try {
-      await rename(tmpPath, path);
-    } catch (error) {
-      // Some targets reject rename-over-existing; fall back to remove + rename.
-      if (typeof tauri.fs.remove === "function") {
-        try {
-          await tauri.fs.remove(path);
-        } catch {}
-        await rename(tmpPath, path);
-      } else {
-        throw error;
-      }
-    }
-  } else {
-    // No rename available; do the safest single write we can.
-    console.warn("[project] fs.rename unavailable; falling back to direct write");
-    await tauri.fs.writeTextFile(path, payload);
+  try {
+    await rename(tmpPath, path);
+  } catch (error) {
+    // Some targets reject rename-over-existing; fall back to remove + rename.
     if (typeof tauri.fs.remove === "function") {
       try {
-        await tauri.fs.remove(tmpPath);
+        await tauri.fs.remove(path);
       } catch {}
+      await rename(tmpPath, path);
+    } else {
+      throw error;
     }
   }
 
@@ -156,6 +153,7 @@ function buildProjectPayload() {
 }
 
 async function applyProject(project) {
+  validateProject(project);
   if (project?.source?.path) {
     try {
       await openSourcePath(project.source.path, { autoplay: false });
@@ -189,8 +187,6 @@ async function applyProject(project) {
     panY: project?.graphView?.panY ?? DEFAULT_GRAPH_VIEW.panY,
     currentParentId: project?.graphView?.currentParentId ?? DEFAULT_GRAPH_VIEW.currentParentId,
   };
-  dispatch("graphView", requestedGraphView);
-
   applyCustomPalettes(project?.customPalettes ?? []);
   dispatch(
     "timeline",
@@ -201,6 +197,9 @@ async function applyProject(project) {
   );
   const graph = replaceGraph(project?.graph);
   dispatch("graphView", {
+    zoom: requestedGraphView.zoom,
+    panX: requestedGraphView.panX,
+    panY: requestedGraphView.panY,
     currentParentId: resolveGraphParentId(graph, requestedGraphView.currentParentId),
   });
   if (getState().source.loaded) {
@@ -215,4 +214,13 @@ async function applyProject(project) {
 function suggestedProjectPath() {
   const sourceName = getState().source.path.split(/[/\\]/).pop() || "untitled";
   return `${sourceName.replace(/\.[^.]+$/, "")}.ditherlab`;
+}
+
+function validateProject(project) {
+  if (!project || typeof project !== "object") {
+    throw new Error("Project file is corrupt or not a Dither Lab project.");
+  }
+  if (!SUPPORTED_PROJECT_VERSIONS.has(project.version)) {
+    throw new Error(`Unsupported Dither Lab project version: ${project.version ?? "missing"}.`);
+  }
 }
