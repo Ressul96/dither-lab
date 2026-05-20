@@ -48,6 +48,7 @@ import {
   updateTimelineKeyframe,
   updateTimelineTrack,
 } from "../timeline.js";
+import { escapeHtml } from "./utils.js";
 
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 const KEYFRAME_DRAG_THRESHOLD = 3;
@@ -2912,15 +2913,6 @@ function updatePlayheadTooltip(time, fps = 30) {
 function getEffectiveTimelineZoom(timeline) {
   const zoom = Number(timeline?.zoom);
   return Math.max(0.25, Number.isFinite(zoom) ? zoom : 1);
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 function clamp(n, lo, hi) {

@@ -75,6 +75,7 @@ import {
   readRgbCurvePoints,
   sanitizeCurvePoints,
 } from "../curve-lut.js";
+import { escapeHtml } from "./utils.js";
 
 const NODE_WIDTH = 220;
 const NODE_HEIGHT = 108;
@@ -7190,13 +7191,4 @@ function formatFpsReadout(value, sourceFps) {
   const numeric = Math.max(1, Math.round(Number(value) || 0));
   const sourceNumeric = Math.max(1, Math.round(Number(sourceFps) || 0));
   return numeric === sourceNumeric ? `Source (${sourceNumeric})` : String(numeric);
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
