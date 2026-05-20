@@ -255,11 +255,8 @@ function applyGradientCpu(params = {}) {
         aspectY
       );
       const t = gradientMapCoordinate(raw, repeat, shift);
-      const color = sampleGradientLut(lut.data, lut.width, t);
       const offset = (y * width + x) * 4;
-      data[offset] = Math.round(color[0]);
-      data[offset + 1] = Math.round(color[1]);
-      data[offset + 2] = Math.round(color[2]);
+      sampleGradientLutInto(lut.data, lut.width, t, data, offset);
       data[offset + 3] = 255;
     }
   }
@@ -711,17 +708,17 @@ export function applyHsvNode(input, params) {
   ctx.drawImage(input, 0, 0);
   const imageData = ctx.getImageData(0, 0, output.width, output.height);
   const data = imageData.data;
+  const hsv = [0, 0, 0];
 
   for (let i = 0; i < data.length; i += 4) {
-    const [h, s, v] = rgbToHsv(data[i], data[i + 1], data[i + 2]);
-    const [r, g, b] = hsvToRgb(
-      ((h + hue / 360) % 1 + 1) % 1,
-      clamp01(s * saturation),
-      clamp01(v * value)
+    rgbToHsvInto(data[i], data[i + 1], data[i + 2], hsv);
+    hsvToRgbInto(
+      ((hsv[0] + hue / 360) % 1 + 1) % 1,
+      clamp01(hsv[1] * saturation),
+      clamp01(hsv[2] * value),
+      data,
+      i
     );
-    data[i] = r;
-    data[i + 1] = g;
-    data[i + 2] = b;
   }
 
   ctx.putImageData(imageData, 0, 0);
@@ -753,15 +750,9 @@ export function applyRgbCurvesNode(input, params) {
     const curvedB = finalLuts.blue[srcB];
 
     if (applyMode === "luma") {
-      const scaled = scaleRgbToLuma(srcR, srcG, srcB, rgbLuma(curvedR, curvedG, curvedB));
-      data[i] = scaled[0];
-      data[i + 1] = scaled[1];
-      data[i + 2] = scaled[2];
+      scaleRgbToLumaInto(srcR, srcG, srcB, rgbLuma(curvedR, curvedG, curvedB), data, i);
     } else if (applyMode === "color") {
-      const scaled = scaleRgbToLuma(curvedR, curvedG, curvedB, rgbLuma(srcR, srcG, srcB));
-      data[i] = scaled[0];
-      data[i + 1] = scaled[1];
-      data[i + 2] = scaled[2];
+      scaleRgbToLumaInto(curvedR, curvedG, curvedB, rgbLuma(srcR, srcG, srcB), data, i);
     } else {
       data[i] = curvedR;
       data[i + 1] = curvedG;
@@ -810,6 +801,7 @@ export function applySceneGradeNode(input, params = {}) {
   ctx.drawImage(input, 0, 0);
   const imageData = ctx.getImageData(0, 0, output.width, output.height);
   const data = imageData.data;
+  const mapped = [0, 0, 0];
 
   for (let i = 0; i < data.length; i += 4) {
     let r = hasCurves ? finalLuts.red[data[i]] : data[i];
@@ -828,7 +820,7 @@ export function applySceneGradeNode(input, params = {}) {
 
     if (colorMapData) {
       const luma = luminanceBt709(rf, gf, bf);
-      const mapped = sampleGradientLut(colorMapData, colorMapWidth, luma);
+      sampleGradientLutInto(colorMapData, colorMapWidth, luma, mapped, 0);
       rf = mapped[0] / 255;
       gf = mapped[1] / 255;
       bf = mapped[2] / 255;
@@ -1300,6 +1292,7 @@ function applyGradientMapCpu(input, params = {}) {
   ctx.drawImage(input, 0, 0);
   const imageData = ctx.getImageData(0, 0, output.width, output.height);
   const data = imageData.data;
+  const mapped = [0, 0, 0];
 
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i] / 255;
@@ -1307,7 +1300,7 @@ function applyGradientMapCpu(input, params = {}) {
     const b = data[i + 2] / 255;
     const signal = gradientMapSignal(r, g, b, mode);
     const t = gradientMapCoordinate(signal, repeat, shift);
-    const mapped = sampleGradientLut(lutData, lutWidth, t);
+    sampleGradientLutInto(lutData, lutWidth, t, mapped, 0);
     data[i] = mixByte(data[i], mapped[0], opacity);
     data[i + 1] = mixByte(data[i + 1], mapped[1], opacity);
     data[i + 2] = mixByte(data[i + 2], mapped[2], opacity);
@@ -1342,18 +1335,16 @@ function gradientMapCoordinate(signal, repeat, shift) {
   return raw - Math.floor(raw);
 }
 
-function sampleGradientLut(data, width, t) {
+function sampleGradientLutInto(data, width, t, target, offset = 0) {
   const x = clamp01(t) * (width - 1);
   const i0 = Math.floor(x);
   const i1 = Math.min(width - 1, i0 + 1);
   const f = x - i0;
   const a = i0 * 4;
   const b = i1 * 4;
-  return [
-    data[a] + (data[b] - data[a]) * f,
-    data[a + 1] + (data[b + 1] - data[a + 1]) * f,
-    data[a + 2] + (data[b + 2] - data[a + 2]) * f,
-  ];
+  target[offset] = data[a] + (data[b] - data[a]) * f;
+  target[offset + 1] = data[a + 1] + (data[b + 1] - data[a + 1]) * f;
+  target[offset + 2] = data[a + 2] + (data[b + 2] - data[a + 2]) * f;
 }
 
 export function applyToneMapNode(input, params) {
@@ -1782,6 +1773,7 @@ export function applyDisplaceNode(input, mapInput, params) {
   const mapLayout = mapData
     ? createDisplaceMapLayout(width, height, mapWidth, mapHeight, params)
     : null;
+  const mapSample = [0, 0, 0];
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -1790,9 +1782,10 @@ export function applyDisplaceNode(input, mapInput, params) {
       let dy;
       let vectorX = 0;
       let vectorY = 0;
-      let mapSample = null;
+      let hasMapSample = false;
       if (mapData) {
-        mapSample = sampleDisplaceMap(mapData, mapWidth, mapHeight, x, y, mapLayout);
+        sampleDisplaceMapInto(mapData, mapWidth, mapHeight, x, y, mapLayout, mapSample);
+        hasMapSample = true;
         if (mapMode === "luma") {
           const luma = clamp(Math.round(rgbLuma(mapSample[0], mapSample[1], mapSample[2])), 0, 255);
           const shaped = mapCurve[luma];
@@ -1809,7 +1802,7 @@ export function applyDisplaceNode(input, mapInput, params) {
         dy = Math.sin((x / width) * frequency * Math.PI * 2 + phase) * yAmount * strength;
       }
 
-      if (mapSample && debugMap !== "off") {
+      if (hasMapSample && debugMap !== "off") {
         if (debugMap === "vectors") {
           out[i] = clamp(Math.round(128 + vectorX * 127), 0, 255);
           out[i + 1] = clamp(Math.round(128 + vectorY * 127), 0, 255);
@@ -1880,15 +1873,14 @@ function createDisplaceMapLayout(width, height, mapWidth, mapHeight, params) {
   return { fit: "stretch", outputWidth: width, outputHeight: height };
 }
 
-function sampleDisplaceMap(data, width, height, x, y, layout) {
-  const [mx, my] = mapSamplePosition(width, height, x, y, layout);
-  const x0 = Math.floor(mx);
-  const y0 = Math.floor(my);
+function sampleDisplaceMapInto(data, width, height, x, y, layout, target) {
+  mapSamplePositionInto(width, height, x, y, layout, target);
+  const x0 = Math.floor(target[0]);
+  const y0 = Math.floor(target[1]);
   const x1 = Math.min(x0 + 1, width - 1);
   const y1 = Math.min(y0 + 1, height - 1);
-  const fx = mx - x0;
-  const fy = my - y0;
-  const out = [0, 0, 0];
+  const fx = target[0] - x0;
+  const fy = target[1] - y0;
 
   for (let channel = 0; channel < 3; channel++) {
     const i00 = (y0 * width + x0) * 4 + channel;
@@ -1897,30 +1889,27 @@ function sampleDisplaceMap(data, width, height, x, y, layout) {
     const i11 = (y1 * width + x1) * 4 + channel;
     const top = data[i00] * (1 - fx) + data[i10] * fx;
     const bottom = data[i01] * (1 - fx) + data[i11] * fx;
-    out[channel] = Math.round(top * (1 - fy) + bottom * fy);
+    target[channel] = Math.round(top * (1 - fy) + bottom * fy);
   }
-
-  return out;
 }
 
-function mapSamplePosition(mapWidth, mapHeight, x, y, layout) {
+function mapSamplePositionInto(mapWidth, mapHeight, x, y, layout, target) {
   if (layout.fit === "tile") {
     const u = positiveModulo((x - layout.offsetX) / Math.max(1, layout.tileW), 1);
     const v = positiveModulo((y - layout.offsetY) / Math.max(1, layout.tileH), 1);
-    return [u * Math.max(0, mapWidth - 1), v * Math.max(0, mapHeight - 1)];
+    target[0] = u * Math.max(0, mapWidth - 1);
+    target[1] = v * Math.max(0, mapHeight - 1);
+    return;
   }
 
   if (layout.fit === "fit" || layout.fit === "fill") {
-    return [
-      clamp((x - layout.offsetX) / Math.max(0.0001, layout.scale), 0, Math.max(0, mapWidth - 1)),
-      clamp((y - layout.offsetY) / Math.max(0.0001, layout.scale), 0, Math.max(0, mapHeight - 1)),
-    ];
+    target[0] = clamp((x - layout.offsetX) / Math.max(0.0001, layout.scale), 0, Math.max(0, mapWidth - 1));
+    target[1] = clamp((y - layout.offsetY) / Math.max(0.0001, layout.scale), 0, Math.max(0, mapHeight - 1));
+    return;
   }
 
-  return [
-    mapWidth <= 1 ? 0 : (x / Math.max(1, (layout.outputWidth ?? 1) - 1)) * (mapWidth - 1),
-    mapHeight <= 1 ? 0 : (y / Math.max(1, (layout.outputHeight ?? 1) - 1)) * (mapHeight - 1),
-  ];
+  target[0] = mapWidth <= 1 ? 0 : (x / Math.max(1, (layout.outputWidth ?? 1) - 1)) * (mapWidth - 1);
+  target[1] = mapHeight <= 1 ? 0 : (y / Math.max(1, (layout.outputHeight ?? 1) - 1)) * (mapHeight - 1);
 }
 
 function positiveModulo(value, divisor) {
@@ -2126,7 +2115,7 @@ function applyVignetteInPlace(data, width, height, centerXPct, centerYPct, amoun
   }
 }
 
-function rgbToHsv(r8, g8, b8) {
+function rgbToHsvInto(r8, g8, b8, target) {
   const r = r8 / 255;
   const g = g8 / 255;
   const b = b8 / 255;
@@ -2143,28 +2132,31 @@ function rgbToHsv(r8, g8, b8) {
     if (h < 0) h += 1;
   }
 
-  return [h, max === 0 ? 0 : delta / max, max];
+  target[0] = h;
+  target[1] = max === 0 ? 0 : delta / max;
+  target[2] = max;
 }
 
 function rgbLuma(r, g, b) {
   return luminanceBt601(r, g, b);
 }
 
-function scaleRgbToLuma(r, g, b, targetLuma) {
+function scaleRgbToLumaInto(r, g, b, targetLuma, target, offset) {
   const currentLuma = rgbLuma(r, g, b);
   if (currentLuma <= 0.001) {
     const neutral = clamp(Math.round(targetLuma), 0, 255);
-    return [neutral, neutral, neutral];
+    target[offset] = neutral;
+    target[offset + 1] = neutral;
+    target[offset + 2] = neutral;
+    return;
   }
   const scale = targetLuma / currentLuma;
-  return [
-    clamp(Math.round(r * scale), 0, 255),
-    clamp(Math.round(g * scale), 0, 255),
-    clamp(Math.round(b * scale), 0, 255),
-  ];
+  target[offset] = clamp(Math.round(r * scale), 0, 255);
+  target[offset + 1] = clamp(Math.round(g * scale), 0, 255);
+  target[offset + 2] = clamp(Math.round(b * scale), 0, 255);
 }
 
-function hsvToRgb(h, s, v) {
+function hsvToRgbInto(h, s, v, target, offset) {
   const c = v * s;
   const sector = h * 6;
   const x = c * (1 - Math.abs((sector % 2) - 1));
@@ -2193,11 +2185,9 @@ function hsvToRgb(h, s, v) {
     b = x;
   }
 
-  return [
-    Math.round((r + m) * 255),
-    Math.round((g + m) * 255),
-    Math.round((b + m) * 255),
-  ];
+  target[offset] = Math.round((r + m) * 255);
+  target[offset + 1] = Math.round((g + m) * 255);
+  target[offset + 2] = Math.round((b + m) * 255);
 }
 
 function sampleNearestInto(data, width, height, x, y, target, offset) {
