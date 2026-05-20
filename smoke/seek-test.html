@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Dither Lab Smoke — seekForExport</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; padding: 16px; background: #101012; color: #ddd; font: 12px/1.4 system-ui, sans-serif; }
+      h1 { margin: 0 0 4px; font-size: 14px; }
+      #status { margin: 0 0 12px; color: #9aa; }
+      #status.fail { color: #f66; }
+      #status.ok { color: #6c6; }
+      #video { display: block; margin: 12px 0; max-width: 360px; background: #000; }
+      table { border-collapse: collapse; font-size: 11px; }
+      th, td { padding: 3px 8px; border: 1px solid #2a2a30; text-align: right; }
+      th { background: #1a1a1e; text-align: center; }
+      tr.ok td { color: #cfc; }
+      tr.fail td { color: #fcc; background: #2a1010; }
+    </style>
+  </head>
+  <body>
+    <h1>seekForExport Smoke</h1>
+    <p id="status">loading…</p>
+    <video id="video" muted preload="auto" src="test-source.mp4"></video>
+    <div id="results"></div>
+
+    <script type="module">
+      const v = document.getElementById("video");
+      const status = document.getElementById("status");
+      const results = document.getElementById("results");
+
+      async function waitForReady() {
+        if (v.readyState >= 2) return;
+        await new Promise((resolve, reject) => {
+          v.addEventListener("loadeddata", resolve, { once: true });
+          v.addEventListener("error", () => reject(new Error("video load error")), { once: true });
+        });
+      }
+
+      async function renderCurrentFrame() {
+        // No-op for this isolation test (we're testing seek semantics, not render).
+      }
+
+      // Mirror of src/js/source.js seekForExport, with diagnostics surfaced as
+      // a structured object instead of a console.warn-only side channel.
+      async function seekForExport(seconds) {
+        if (!v?.src) return { ok: false, reason: "no-src" };
+        const duration = Number.isFinite(v.duration) ? v.duration : 0;
+        const target = Math.max(0, Math.min(duration, Number(seconds) || 0));
+        const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+
+        if (Math.abs(before - target) <= 0.0005) {
+          await renderCurrentFrame();
+          return { ok: true, reason: "noop", target, before, elapsed: 0 };
+        }
+
+        const supportsVFC =
+          typeof v.requestVideoFrameCallback === "function" &&
+          v instanceof HTMLVideoElement;
+
+        const t0 = performance.now();
+        const result = await new Promise((resolve) => {
+          let settled = false;
+          const cleanup = () => {
+            v.removeEventListener("seeked", onSeeked);
+            v.removeEventListener("error", onError);
+            clearTimeout(timer);
+          };
+          const succeed = (reason) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve({ ok: true, reason, target, before });
+          };
+          const fail = (reason) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve({
+              ok: false,
+              reason,
+              target,
+              before,
+              readyState: v.readyState,
+              videoError: v.error && { code: v.error.code, message: v.error.message },
+            });
+          };
+
+          const waitForPaint = () => {
+            if (!supportsVFC) {
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => succeed("rAF-fallback"))
+              );
+              return;
+            }
+            let painted = false;
+            v.requestVideoFrameCallback(() => {
+              if (!painted) {
+                painted = true;
+                succeed("rVFC");
+              }
+            });
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                if (!painted) {
+                  painted = true;
+                  succeed("rAF-fallback");
+                }
+              })
+            );
+          };
+
+          const onSeeked = () => waitForPaint();
+          const onError = () => {
+            if (v.error && v.error.code) fail("video-error");
+          };
+          const timer = setTimeout(() => fail("timeout"), 5000);
+
+          v.addEventListener("seeked", onSeeked);
+          v.addEventListener("error", onError);
+
+          try {
+            v.currentTime = target;
+          } catch (e) {
+            fail("set-currentTime-throw:" + (e?.message || e));
+          }
+        });
+
+        const elapsed = performance.now() - t0;
+        if (result.ok) await renderCurrentFrame();
+        return { ...result, elapsed };
+      }
+
+      async function runTest() {
+        try {
+          await waitForReady();
+        } catch (e) {
+          status.textContent = "Video load failed: " + e.message;
+          status.className = "fail";
+          console.error("[smoke] video load failed", e);
+          return;
+        }
+
+        const meta = {
+          duration: v.duration,
+          videoWidth: v.videoWidth,
+          videoHeight: v.videoHeight,
+          readyState: v.readyState,
+          supportsVFC: typeof v.requestVideoFrameCallback === "function",
+        };
+        console.info("[smoke] video ready", meta);
+        status.textContent = `Video ready (${meta.duration.toFixed(2)}s, ${meta.videoWidth}x${meta.videoHeight}, rVFC=${meta.supportsVFC}). Running…`;
+
+        const fps = 30;
+        const totalFrames = Math.min(120, Math.floor(v.duration * fps));
+        const rows = [];
+
+        for (let i = 0; i < totalFrames; i++) {
+          const t = i / fps;
+          const result = await seekForExport(t);
+          rows.push({ i: i + 1, t, ...result });
+          if (!result.ok) {
+            console.warn("[smoke] seekForExport FAILED", { frame: i + 1, ...result });
+            break;
+          }
+        }
+
+        const failed = rows.find((r) => !r.ok);
+        const succeededCount = rows.filter((r) => r.ok).length;
+        const summary = failed
+          ? `FAIL at frame ${failed.i} (t=${failed.t.toFixed(3)}s): ${failed.reason}`
+          : `OK — ${succeededCount} / ${totalFrames} frames succeeded`;
+        status.textContent = summary;
+        status.className = failed ? "fail" : "ok";
+
+        const reasonCounts = {};
+        for (const r of rows) {
+          const key = r.ok ? `ok:${r.reason}` : `fail:${r.reason}`;
+          reasonCounts[key] = (reasonCounts[key] || 0) + 1;
+        }
+        const elapsedOk = rows.filter((r) => r.ok && r.elapsed > 0).map((r) => r.elapsed);
+        const elapsedStats = elapsedOk.length
+          ? {
+              min: Math.min(...elapsedOk).toFixed(2),
+              max: Math.max(...elapsedOk).toFixed(2),
+              avg: (elapsedOk.reduce((a, b) => a + b, 0) / elapsedOk.length).toFixed(2),
+            }
+          : null;
+
+        console.info("[smoke] SUMMARY", { summary, reasonCounts, elapsedStats });
+
+        let html = `<table><tr><th>#</th><th>t (s)</th><th>before</th><th>ok</th><th>reason</th><th>elapsed (ms)</th></tr>`;
+        for (const r of rows) {
+          html += `<tr class="${r.ok ? "ok" : "fail"}"><td>${r.i}</td><td>${r.t.toFixed(4)}</td><td>${(r.before || 0).toFixed(4)}</td><td>${r.ok ? "✓" : "✗"}</td><td style="text-align:left">${r.reason}</td><td>${(r.elapsed || 0).toFixed(2)}</td></tr>`;
+        }
+        html += `</table>`;
+        results.innerHTML = html;
+      }
+
+      runTest().catch((e) => {
+        status.textContent = "Test crashed: " + e.message;
+        status.className = "fail";
+        console.error("[smoke] test crashed", e);
+      });
+    </script>
+  </body>
+</html>
