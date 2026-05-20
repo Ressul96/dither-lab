@@ -1080,7 +1080,7 @@ function renderPropertyCard(target, context) {
   return `
     <li
       class="property-card ${isActive ? "is-active" : ""} ${isExpanded ? "is-expanded" : ""} ${isDisabled ? "is-disabled" : ""} ${target.hasTrack ? "" : "is-virtual"}"
-      style="--track-color:${escapeHtml(target.color)}"
+      style="--track-color:${escapeHtml(safeCssColor(target.color))}"
       data-track-id="${escapeHtml(target.id)}"
       aria-selected="${isActive ? "true" : "false"}"
     >
@@ -1175,7 +1175,7 @@ function renderAnimationLane(target, duration, fps, selected, graph) {
   const laneHtml = `
     <div
       class="animation-lane-row ${selectedHere ? "is-active" : ""} ${track.enabled === false ? "is-disabled" : ""}"
-      style="--track-color:${escapeHtml(target.color ?? getTimelineBindingColor(track.binding, meta.node))}"
+      style="--track-color:${escapeHtml(safeCssColor(target.color ?? getTimelineBindingColor(track.binding, meta.node)))}"
     >
       <div
         class="animation-track-lane"
@@ -1312,7 +1312,7 @@ function renderGraphOverlayLegend(tracks, graph) {
         const meta = getTrackDisplayMeta(track, graph);
         return `
           <span>
-            <i style="background:${graphCurveColor(track, graph, index)}"></i>
+            <i style="background:${escapeHtml(safeCssColor(graphCurveColor(track, graph, index)))}"></i>
             ${escapeHtml(meta.paramLabel)}
           </span>
         `;
@@ -1347,7 +1347,7 @@ function renderGraphPath(track, model, options = {}) {
     }
   }
   const overlayClass = options.overlay ? " is-overlay" : "";
-  const color = options.color ? ` style="--curve-color:${options.color}"` : "";
+  const color = options.color ? ` style="--curve-color:${escapeHtml(safeCssColor(options.color))}"` : "";
   return `<path class="timeline-graph-curve${overlayClass}" d="${d}"${color} />`;
 }
 
@@ -1654,6 +1654,15 @@ function getLayerTrackDefaultValue(key) {
 
 function isColorParamValue(value) {
   return typeof value === "string" && /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value.trim());
+}
+
+function safeCssColor(value, fallback = DEFAULT_PARAM_TRACK_COLOR) {
+  const text = String(value ?? "").trim();
+  if (/^#[0-9a-f]{3}$/i.test(text)) {
+    return `#${[...text.slice(1)].map((char) => char + char).join("")}`.toUpperCase();
+  }
+  if (/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(text)) return text.toUpperCase();
+  return fallback;
 }
 
 function normalizeFamilyName(value) {
