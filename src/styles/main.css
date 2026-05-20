@@ -1050,7 +1050,7 @@ body.resizing-y * {
   --graph-grid-offset-y: 0;
   position: relative;
   height: 100%;
-  min-height: 220px;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-surface);
@@ -2492,7 +2492,9 @@ body.cutting-edges * {
   position: relative;
   display: flex;
   flex-direction: column;
-  height: 48px;
+  /* 33px toolbar (26 min-height + 6 padding + 1 border-bottom) + 21px ruler.
+     48px would clip the ruler's bottom 6px under overflow:hidden. */
+  height: 54px;
   border-bottom: 1px solid var(--border-subtle);
   overflow: hidden;
 }
@@ -2664,14 +2666,13 @@ body.cutting-edges * {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 0 12px;
   width: var(--timeline-content-width);
   box-sizing: border-box;
 }
 
 .render-range-overlay {
   position: absolute;
-  inset: 0 12px;
+  inset: 0;
   pointer-events: none;
   z-index: 1;
 }
