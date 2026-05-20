@@ -43,6 +43,7 @@ import {
   applyMeshGradientNode,
   sampleGradientLutInto,
 } from "./image-ops/gradient.js";
+import { applyNoiseNode } from "./image-ops/noise-source.js";
 
 // Re-export the pool so external consumers (graph-runtime.js, source.js)
 // keep importing from "./image-ops.js" unchanged. Internal effect
@@ -58,6 +59,7 @@ export { applyMaskApplyNode, applyMaskCombineNode, applyMixNode };
 export { applyDitherNode };
 export { applyGradientMapNode, applyGradientNode, applyMeshGradientNode };
 export { applyBlurNode };
+export { applyNoiseNode };
 import {
   areRgbCurvesIdentity,
   buildCurveLut,
@@ -76,7 +78,6 @@ import {
   applyHalftoneGpu,
   applyLedScreenGpu,
   applyModulationGpu,
-  applyNoiseSourceGpu,
   applyPatternDitherGpu,
   applyPixelSortingGpu,
   applyPosterizeGpu,
@@ -202,22 +203,9 @@ export function applySourceNode(input, params = {}) {
 // Re-exported at the top of this file. applyNoiseNode stays here for
 // now since it's a different category (procedural noise source).
 
-// F18.2 procedural noise source. GPU-only for now; if WebGL2 setup fails we
-// return a solid grey canvas at the requested size so the rest of the graph
-// still has an image to operate on. A CPU FBM fallback could be added later
-// for headless environments without WebGL2.
-export function applyNoiseNode(params = {}, context = {}) {
-  const gpuOutput = applyNoiseSourceGpu(params, context);
-  if (gpuOutput) return gpuOutput;
-  const width = clamp(Math.round(Number(params?.width ?? 1920)), 256, 4096);
-  const height = clamp(Math.round(Number(params?.height ?? 1080)), 256, 4096);
-  const output = createBuffer(width, height);
-  const ctx = output.getContext("2d", { alpha: false });
-  if (!ctx) return null;
-  ctx.fillStyle = "#808080";
-  ctx.fillRect(0, 0, width, height);
-  return output;
-}
+// applyNoiseNode moved to image-ops/noise-source.js — its own module
+// because the FBM CPU fallback (today a grey-card stub) will grow
+// when real noise generation lands.
 
 // applyBlurNode moved to image-ops/blur.js (sits alongside its
 // blurImage CPU fallback). Re-exported at the top of this file.
