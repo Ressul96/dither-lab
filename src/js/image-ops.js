@@ -51,6 +51,7 @@ import { applyHsvNode } from "./image-ops/hsv.js";
 import { applyLayerAdjustmentsNode } from "./image-ops/layer-adjustments.js";
 import { applyLensDistortNode } from "./image-ops/lens-distort.js";
 import { applyDisplaceNode } from "./image-ops/displace.js";
+import { applyRgbToBwNode } from "./image-ops/rgb-to-bw.js";
 import {
   applyAnalogNode,
   applyAsciiNode,
@@ -87,6 +88,7 @@ export { applyHsvNode };
 export { applyLayerAdjustmentsNode };
 export { applyLensDistortNode };
 export { applyDisplaceNode };
+export { applyRgbToBwNode };
 export {
   applyAnalogNode,
   applyAsciiNode,
@@ -567,42 +569,10 @@ function applyPosterizeCpu(input, params) {
 // applyInvertNode moved to image-ops/geometry.js and re-exported at the
 // top of this file. Kept here only as a breadcrumb for grep/contributors.
 
-// RGB → BW — collapse to luminance using the user-selected coefficients.
-// Bt.709 is the modern default; Bt.601 stays close to legacy NTSC source.
-export function applyRgbToBwNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  const mode = String(params.mode ?? "bt709");
-  let cr;
-  let cg;
-  let cb;
-  switch (mode) {
-    case "bt601":
-      cr = LUMA_BT601.r;
-      cg = LUMA_BT601.g;
-      cb = LUMA_BT601.b;
-      break;
-    case "average":
-      cr = cg = cb = 1 / 3;
-      break;
-    case "bt709":
-    default:
-      cr = LUMA_BT709.r;
-      cg = LUMA_BT709.g;
-      cb = LUMA_BT709.b;
-      break;
-  }
-  const output = createBuffer(input.width, input.height);
-  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  ctx.drawImage(input, 0, 0);
-  const imageData = ctx.getImageData(0, 0, output.width, output.height);
-  const data = imageData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const luma = Math.round(cr * data[i] + cg * data[i + 1] + cb * data[i + 2]);
-    data[i] = data[i + 1] = data[i + 2] = luma;
-  }
-  ctx.putImageData(imageData, 0, 0);
-  return output;
-}
+// applyRgbToBwNode moved to image-ops/rgb-to-bw.js (luma collapse with
+// selectable BT.709/BT.601/average coefficients). Re-exported at the
+// top of this file so applySourceNode's bwMode chain + graph-runtime
+// stay unchanged.
 
 // applyHsvNode moved to image-ops/hsv.js. Re-exported at the top of
 // this file so applyAdjustNode / applySourceNode chains keep working.
