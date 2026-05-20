@@ -31,6 +31,7 @@ import {
   applyTransformNode,
 } from "./image-ops/transform.js";
 import { applyThresholdNode } from "./image-ops/threshold.js";
+import { supportsBlurFilter } from "./image-ops/blur-support.js";
 
 // Re-export the pool so external consumers (graph-runtime.js, source.js)
 // keep importing from "./image-ops.js" unchanged. Internal effect
@@ -73,7 +74,8 @@ import {
   GAUSSIAN_BLUR_MAX_RADIUS,
 } from "./gpu-effects.js";
 
-let supportsCanvasBlurFilter = null;
+// supportsBlurFilter moved to image-ops/blur-support.js so the mix
+// module can share the cached feature detect without circular import.
 
 // Adjust — canonical color-grade order: exposure (linear-light) → gamma →
 // brightness offset → contrast pivot → saturation around luma. The previous
@@ -2109,29 +2111,9 @@ function blurImage(input, radius, passes = 2) {
   return output;
 }
 
-function supportsBlurFilter() {
-  if (supportsCanvasBlurFilter != null) return supportsCanvasBlurFilter;
-
-  const source = createBuffer(16, 16);
-  const sourceCtx = source.getContext("2d", { willReadFrequently: true });
-  sourceCtx.fillStyle = "#000";
-  sourceCtx.fillRect(0, 0, 16, 16);
-  sourceCtx.fillStyle = "#fff";
-  sourceCtx.fillRect(7, 7, 2, 2);
-
-  const output = createBuffer(16, 16);
-  const outputCtx = output.getContext("2d", { willReadFrequently: true });
-  outputCtx.filter = "blur(3px)";
-  outputCtx.drawImage(source, 0, 0);
-  outputCtx.filter = "none";
-
-  const center = outputCtx.getImageData(8, 8, 1, 1).data[0];
-  const outer = outputCtx.getImageData(3, 8, 1, 1).data[0];
-  supportsCanvasBlurFilter = center > outer && outer > 0;
-  releaseBuffer(source);
-  releaseBuffer(output);
-  return supportsCanvasBlurFilter;
-}
+// supportsBlurFilter moved to image-ops/blur-support.js. Imported at
+// the top of this file so the existing call sites (blur node + mask
+// apply feather path) resolve unchanged.
 
 function boxBlur(source, width, height, radius, passes) {
   let input = new Uint8ClampedArray(source);
