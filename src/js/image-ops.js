@@ -3,6 +3,16 @@ import { getPalette } from "./palettes.js";
 import { hexToRgb01, LUMA_BT601, LUMA_BT709, luminanceBt601, luminanceBt709 } from "./color.js";
 import { createProcessingCanvas } from "./canvas.js";
 import {
+  acquireBuffer,
+  createBuffer,
+  releaseBuffer,
+} from "./image-ops/buffer-pool.js";
+
+// Re-export the pool so external consumers (graph-runtime.js, source.js)
+// keep importing from "./image-ops.js" unchanged. Internal effect
+// functions below use the imported names directly.
+export { acquireBuffer, releaseBuffer };
+import {
   areRgbCurvesIdentity,
   buildCurveLut,
   buildFinalRgbCurvesLuts,
@@ -2494,49 +2504,6 @@ function blurVertical(source, target, width, height, radius) {
       sumA += source[addIndex + 3] - source[removeIndex + 3];
     }
   }
-}
-
-const bufferPool = new Map();
-const POOL_LIMIT_PER_SHAPE = 8;
-
-function createBuffer(width, height) {
-  return acquireBuffer(width, height);
-}
-
-export function acquireBuffer(width, height) {
-  const key = `${width}x${height}`;
-  const stack = bufferPool.get(key);
-  if (stack && stack.length > 0) {
-    const reused = stack.pop();
-    const ctx = reused.getContext("2d", { willReadFrequently: true });
-    if (ctx) {
-      // OffscreenCanvas 2D context exposes the same drawing surface API, but
-      // `filter` is not in the spec — guard the assignment so a Worker host
-      // that doesn't implement it doesn't throw.
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = "source-over";
-      if ("filter" in ctx) ctx.filter = "none";
-      ctx.imageSmoothingEnabled = true;
-      ctx.clearRect(0, 0, width, height);
-    }
-    return reused;
-  }
-  // Route fresh allocations through the canvas factory so a future Worker
-  // host transparently gets OffscreenCanvas; on the main thread this still
-  // returns a DOM canvas, identical to the old `document.createElement` path.
-  return createProcessingCanvas(width, height);
-}
-
-export function releaseBuffer(canvas) {
-  if (!canvas?.width || !canvas?.height) return;
-  const key = `${canvas.width}x${canvas.height}`;
-  let stack = bufferPool.get(key);
-  if (!stack) {
-    stack = [];
-    bufferPool.set(key, stack);
-  }
-  if (stack.length < POOL_LIMIT_PER_SHAPE) stack.push(canvas);
 }
 
 function luminance8(r, g, b) {
