@@ -13,6 +13,7 @@ import {
   tauriRemoveFile,
   tauriWriteBinary,
 } from "./tauri-compat.js";
+import { listenWithDispose } from "./ui/lifecycle.js";
 
 const STILL_FORMATS = Object.freeze([
   { id: "png", label: "PNG", extension: "png", mime: "image/png" },
@@ -287,7 +288,10 @@ function ensureExportSheet() {
     if (readout) readout.textContent = String(value);
   });
 
-  window.addEventListener("keydown", (event) => {
+  // Window-scoped Escape closes the export sheet from anywhere except a
+  // focused field. Registered via lifecycle so a re-init of the export
+  // module doesn't end up with two handlers racing to close the sheet.
+  listenWithDispose(window, "keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!exportSheetState.open) return;
     event.preventDefault();

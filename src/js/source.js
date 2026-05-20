@@ -15,6 +15,7 @@ import {
   timelineFrameRate,
 } from "./timeline.js";
 import { selectedPath } from "./tauri-compat.js";
+import { listenWithDispose } from "./ui/lifecycle.js";
 
 const FRAME_CACHE_TARGET_BYTES = 150_000_000;
 const FRAME_CACHE_MIN = 8;
@@ -367,7 +368,12 @@ function wireSourceDropTarget() {
     await openSourcePath(nextPath);
   };
 
-  window.addEventListener(
+  // Window-scoped drag/drop suppression: prevent the browser from
+  // navigating to the dropped file when the user releases outside the
+  // stage canvas. listenWithDispose keeps cleanup symmetric so a re-init
+  // doesn't accumulate duplicate preventDefault handlers.
+  listenWithDispose(
+    window,
     "dragover",
     (event) => {
       if (!hasFilePayload(event.dataTransfer)) return;
@@ -376,7 +382,8 @@ function wireSourceDropTarget() {
     { passive: false }
   );
 
-  window.addEventListener(
+  listenWithDispose(
+    window,
     "drop",
     (event) => {
       if (!hasFilePayload(event.dataTransfer)) return;
