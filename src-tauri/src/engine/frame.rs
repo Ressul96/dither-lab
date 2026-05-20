@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use tauri::State;
 
+use super::error::EngineError;
 use super::gpu::GpuRenderState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,15 +61,15 @@ pub fn native_render_graph(
     request: NativeRenderRequest,
     pixels: Vec<u8>,
     gpu_state: State<'_, GpuRenderState>,
-) -> Result<NativeRenderResponse, String> {
-    render_graph(request, pixels, &gpu_state).map_err(|error| error.to_string())
+) -> Result<NativeRenderResponse, EngineError> {
+    render_graph(request, pixels, &gpu_state)
 }
 
 fn render_graph(
     request: NativeRenderRequest,
     pixels: Vec<u8>,
     gpu_state: &GpuRenderState,
-) -> Result<NativeRenderResponse, RenderError> {
+) -> Result<NativeRenderResponse, EngineError> {
     let source = FrameBuffer::new(request.width, request.height, pixels)?;
     let order = topological_sort(&request.nodes, &request.edges)?;
     let nodes_by_id: HashMap<&str, &NativeGraphNode> = request
@@ -92,11 +93,11 @@ fn render_graph(
         .nodes
         .iter()
         .find(|node| node.node_type == "viewer-output")
-        .ok_or_else(|| RenderError::new("native graph has no viewer-output node"))?;
+        .ok_or_else(|| EngineError::not_found("native graph has no viewer-output node"))?;
     let viewer_output = results
         .get(&viewer.id)
         .cloned()
-        .ok_or_else(|| RenderError::new("native graph produced no viewer output"))?;
+        .ok_or_else(|| EngineError::native_render("native graph produced no viewer output"))?;
 
     Ok(NativeRenderResponse {
         viewer_output: viewer_output.into_native_frame(),
@@ -110,7 +111,7 @@ fn evaluate_node(
     results: &HashMap<String, FrameBuffer>,
     source: &FrameBuffer,
     gpu_state: &GpuRenderState,
-) -> Result<Option<FrameBuffer>, RenderError> {
+) -> Result<Option<FrameBuffer>, EngineError> {
     match node.node_type.as_str() {
         "source" => Ok(Some(source.clone())),
         "adjust" => Ok(resolve_input(node, "image", edges, results)
@@ -142,7 +143,7 @@ fn evaluate_node(
             &node.params,
         )),
         "viewer-output" => Ok(resolve_input(node, "image", edges, results).cloned()),
-        other => Err(RenderError::new(format!(
+        other => Err(EngineError::unsupported_node(format!(
             "native renderer does not support node type '{other}'"
         ))),
     }
@@ -163,11 +164,13 @@ fn resolve_input<'a>(
 fn topological_sort(
     nodes: &[NativeGraphNode],
     edges: &[NativeGraphEdge],
-) -> Result<Vec<String>, RenderError> {
+) -> Result<Vec<String>, EngineError> {
     let mut incoming: HashMap<String, usize> =
         nodes.iter().map(|node| (node.id.clone(), 0)).collect();
     if incoming.len() != nodes.len() {
-        return Err(RenderError::new("native graph contains duplicate node ids"));
+        return Err(EngineError::duplicate_node(
+            "native graph contains duplicate node ids",
+        ));
     }
 
     let mut outgoing: HashMap<String, Vec<String>> = nodes
@@ -204,7 +207,7 @@ fn topological_sort(
     }
 
     if order.len() != nodes.len() {
-        return Err(RenderError::new("native graph contains a cycle"));
+        return Err(EngineError::graph_cycle("native graph contains a cycle"));
     }
 
     Ok(order)
@@ -728,15 +731,15 @@ fn to_u8(value: f64) -> u8 {
 }
 
 impl FrameBuffer {
-    fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, RenderError> {
+    fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, EngineError> {
         let width = width as usize;
         let height = height as usize;
         let expected = width
             .checked_mul(height)
             .and_then(|count| count.checked_mul(4))
-            .ok_or_else(|| RenderError::new("native frame dimensions overflow"))?;
+            .ok_or_else(|| EngineError::invalid_input("native frame dimensions overflow"))?;
         if pixels.len() != expected {
-            return Err(RenderError::new(format!(
+            return Err(EngineError::invalid_input(format!(
                 "native frame expected {expected} RGBA bytes, got {}",
                 pixels.len()
             )));
@@ -771,28 +774,10 @@ impl FrameBuffer {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RenderError {
-    message: String,
-}
-
-impl RenderError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl std::fmt::Display for RenderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::error::EngineErrorKind;
     use serde_json::json;
 
     #[test]
@@ -890,6 +875,7 @@ mod tests {
 
         let error = render_graph(request, pixels, &GpuRenderState::new()).unwrap_err();
 
+        assert_eq!(error.kind, EngineErrorKind::GraphCycle);
         assert_eq!(error.to_string(), "native graph contains a cycle");
     }
 

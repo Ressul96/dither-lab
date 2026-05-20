@@ -6,7 +6,7 @@ import {
   hasCurrentDitherFrame,
   seekForExport,
 } from "./source.js";
-import { selectedPath } from "./tauri-compat.js";
+import { selectedPath, tauriErrorMessage } from "./tauri-compat.js";
 
 const STILL_FORMATS = Object.freeze([
   { id: "png", label: "PNG", extension: "png", mime: "image/png" },
@@ -1073,7 +1073,7 @@ async function submitStillExport() {
     }
     exportedPath = path;
   } catch (error) {
-    exportSheetState.error = error?.message || "Export failed.";
+    exportSheetState.error = tauriErrorMessage(error, "Export failed.");
     renderExportSheet();
   } finally {
     exportInFlight = false;
@@ -1178,7 +1178,7 @@ async function submitSequenceExport() {
     };
 
     if (failure && !cancelled) {
-      exportSheetState.error = failure.message || "Sequence export failed.";
+      exportSheetState.error = tauriErrorMessage(failure, "Sequence export failed.");
     } else if (cancelled) {
       exportSheetState.error = `Cancelled after ${writtenCount} / ${totalFrames} frames.`;
     } else {
@@ -1546,7 +1546,7 @@ async function chooseExportDirectory() {
       defaultPath: seq.directoryChosen ? seq.directory : undefined,
     });
   } catch (error) {
-    exportSheetState.error = error?.message || "Folder picker failed.";
+    exportSheetState.error = tauriErrorMessage(error, "Folder picker failed.");
     renderExportSheet();
     return null;
   }
@@ -1718,7 +1718,7 @@ async function ensureFfmpegAvailability(options = {}) {
       checked: true,
       available: false,
       version: "",
-      error: error?.message || String(error),
+      error: tauriErrorMessage(error, "FFmpeg check failed."),
       checking: false,
     };
   }
@@ -1760,7 +1760,7 @@ async function ensureWebCodecsAvailability(options = {}) {
     exportSheetState.webCodecs = {
       checked: true,
       available: false,
-      error: error?.message || String(error),
+      error: tauriErrorMessage(error, "WebCodecs availability check failed."),
       checking: false,
     };
   }
@@ -1794,7 +1794,7 @@ async function chooseVideoExportPath(options = {}) {
       filters: [{ name: codec.label, extensions: [codec.extension] }],
     });
   } catch (error) {
-    exportSheetState.error = error?.message || "File picker failed.";
+    exportSheetState.error = tauriErrorMessage(error, "File picker failed.");
     renderExportSheet();
     return null;
   }
@@ -1970,7 +1970,7 @@ async function submitFfmpegVideoExport() {
     };
 
     if (failure && !cancelled) {
-      exportSheetState.error = failure.message || "Video export failed.";
+      exportSheetState.error = tauriErrorMessage(failure, "Video export failed.");
     } else if (cancelled) {
       exportSheetState.error = `Cancelled after ${writtenCount} / ${totalFrames} frames.`;
     } else {
@@ -2152,7 +2152,7 @@ async function submitWebCodecsVideoExport(codec) {
     };
 
     if (failure && !cancelled) {
-      exportSheetState.error = failure.message || "WebCodecs video export failed.";
+      exportSheetState.error = tauriErrorMessage(failure, "WebCodecs video export failed.");
     } else if (cancelled) {
       exportSheetState.error = `Cancelled after ${writtenCount} / ${totalFrames} frames.`;
     } else {

@@ -1,4 +1,5 @@
 import { pruneHiddenGraph } from "./graph-runtime.js";
+import { tauriErrorKind, tauriErrorMessage } from "./tauri-compat.js";
 
 const NATIVE_SUPPORTED_TYPES = new Set([
   "source",
@@ -110,7 +111,10 @@ export async function evaluateNativeGraphOutputs(graph, sourceCanvas) {
     nativeRenderRetryAt = performance.now() + NATIVE_RENDER_RETRY_DELAY_MS;
     if (!nativeRenderWarningShown) {
       nativeRenderWarningShown = true;
-      console.warn("[native-render] disabled after failed invoke; will retry later", error);
+      console.warn("[native-render] disabled after failed invoke; will retry later", {
+        kind: tauriErrorKind(error),
+        message: tauriErrorMessage(error),
+      });
     }
     return null;
   }

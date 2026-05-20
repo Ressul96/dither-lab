@@ -4,6 +4,7 @@ use std::sync::mpsc;
 use std::sync::Mutex;
 use wgpu::util::DeviceExt;
 
+use super::error::EngineError;
 use super::frame::FrameBuffer;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -22,14 +23,16 @@ impl GpuRenderState {
         &self,
         input: &FrameBuffer,
         params: &Value,
-    ) -> Result<FrameBuffer, String> {
-        let mut guard = self.renderer.lock().map_err(|error| error.to_string())?;
+    ) -> Result<FrameBuffer, EngineError> {
+        let mut guard = self.renderer.lock().map_err(|error| {
+            EngineError::lock_poisoned(format!("GPU renderer lock poisoned: {error}"))
+        })?;
         if guard.is_none() {
             *guard = Some(GpuRenderer::new()?);
         }
         guard
             .as_mut()
-            .ok_or_else(|| "GPU renderer failed to initialize".to_string())?
+            .ok_or_else(|| EngineError::gpu("GPU renderer failed to initialize"))?
             .apply_threshold(input, params)
     }
 
@@ -37,14 +40,16 @@ impl GpuRenderState {
         &self,
         input: &FrameBuffer,
         params: &Value,
-    ) -> Result<FrameBuffer, String> {
-        let mut guard = self.renderer.lock().map_err(|error| error.to_string())?;
+    ) -> Result<FrameBuffer, EngineError> {
+        let mut guard = self.renderer.lock().map_err(|error| {
+            EngineError::lock_poisoned(format!("GPU renderer lock poisoned: {error}"))
+        })?;
         if guard.is_none() {
             *guard = Some(GpuRenderer::new()?);
         }
         guard
             .as_mut()
-            .ok_or_else(|| "GPU renderer failed to initialize".to_string())?
+            .ok_or_else(|| EngineError::gpu("GPU renderer failed to initialize"))?
             .apply_pixelate(input, params)
     }
 
@@ -52,14 +57,16 @@ impl GpuRenderState {
         &self,
         input: &FrameBuffer,
         params: &Value,
-    ) -> Result<FrameBuffer, String> {
-        let mut guard = self.renderer.lock().map_err(|error| error.to_string())?;
+    ) -> Result<FrameBuffer, EngineError> {
+        let mut guard = self.renderer.lock().map_err(|error| {
+            EngineError::lock_poisoned(format!("GPU renderer lock poisoned: {error}"))
+        })?;
         if guard.is_none() {
             *guard = Some(GpuRenderer::new()?);
         }
         guard
             .as_mut()
-            .ok_or_else(|| "GPU renderer failed to initialize".to_string())?
+            .ok_or_else(|| EngineError::gpu("GPU renderer failed to initialize"))?
             .apply_posterize(input, params)
     }
 }
@@ -75,14 +82,16 @@ struct GpuRenderer {
 }
 
 impl GpuRenderer {
-    fn new() -> Result<Self, String> {
+    fn new() -> Result<Self, EngineError> {
         let instance = wgpu::Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: None,
         }))
-        .map_err(|error| format!("Failed to request GPU adapter: {error}"))?;
+        .map_err(|error| {
+            EngineError::gpu_unavailable(format!("Failed to request GPU adapter: {error}"))
+        })?;
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Dither Lab GPU device"),
@@ -91,7 +100,9 @@ impl GpuRenderer {
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
         }))
-        .map_err(|error| format!("Failed to request GPU device: {error}"))?;
+        .map_err(|error| {
+            EngineError::gpu_unavailable(format!("Failed to request GPU device: {error}"))
+        })?;
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Dither Lab linear sampler"),
@@ -187,7 +198,11 @@ impl GpuRenderer {
         })
     }
 
-    fn apply_pixelate(&self, input: &FrameBuffer, params: &Value) -> Result<FrameBuffer, String> {
+    fn apply_pixelate(
+        &self,
+        input: &FrameBuffer,
+        params: &Value,
+    ) -> Result<FrameBuffer, EngineError> {
         self.render_fullscreen_effect(
             input,
             &pixelate_uniform_bytes(params),
@@ -196,7 +211,11 @@ impl GpuRenderer {
         )
     }
 
-    fn apply_posterize(&self, input: &FrameBuffer, params: &Value) -> Result<FrameBuffer, String> {
+    fn apply_posterize(
+        &self,
+        input: &FrameBuffer,
+        params: &Value,
+    ) -> Result<FrameBuffer, EngineError> {
         self.render_fullscreen_effect(
             input,
             &posterize_uniform_bytes(params),
@@ -205,7 +224,11 @@ impl GpuRenderer {
         )
     }
 
-    fn apply_threshold(&self, input: &FrameBuffer, params: &Value) -> Result<FrameBuffer, String> {
+    fn apply_threshold(
+        &self,
+        input: &FrameBuffer,
+        params: &Value,
+    ) -> Result<FrameBuffer, EngineError> {
         self.render_fullscreen_effect(
             input,
             &threshold_uniform_bytes(params),
@@ -220,11 +243,13 @@ impl GpuRenderer {
         uniform_bytes: &[u8],
         pipeline: &wgpu::RenderPipeline,
         label: &str,
-    ) -> Result<FrameBuffer, String> {
+    ) -> Result<FrameBuffer, EngineError> {
         let width = input.width as u32;
         let height = input.height as u32;
         if width == 0 || height == 0 {
-            return Err(format!("GPU {label} input has empty dimensions"));
+            return Err(EngineError::invalid_input(format!(
+                "GPU {label} input has empty dimensions"
+            )));
         }
 
         let size = wgpu::Extent3d {
@@ -363,10 +388,10 @@ impl GpuRenderer {
                 submission_index: Some(submission),
                 timeout: None,
             })
-            .map_err(|error| format!("GPU poll failed: {error}"))?;
+            .map_err(|error| EngineError::gpu(format!("GPU poll failed: {error}")))?;
         rx.recv()
-            .map_err(|error| format!("GPU map callback failed: {error}"))?
-            .map_err(|error| format!("GPU readback map failed: {error}"))?;
+            .map_err(|error| EngineError::gpu(format!("GPU map callback failed: {error}")))?
+            .map_err(|error| EngineError::gpu(format!("GPU readback map failed: {error}")))?;
 
         let mapped = buffer_slice.get_mapped_range();
         let mut pixels = vec![0; input.pixels.len()];
@@ -542,6 +567,7 @@ fn align_to(value: u32, alignment: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::error::EngineErrorKind;
     use serde_json::json;
 
     #[test]
@@ -568,7 +594,7 @@ mod tests {
 
         let output = match state.apply_threshold(&input, &params) {
             Ok(output) => output,
-            Err(error) if error.contains("GPU adapter") || error.contains("GPU device") => return,
+            Err(error) if error.kind == EngineErrorKind::GpuUnavailable => return,
             Err(error) => panic!("GPU threshold failed: {error}"),
         };
 
@@ -612,7 +638,7 @@ mod tests {
 
         let output = match state.apply_pixelate(&input, &params) {
             Ok(output) => output,
-            Err(error) if error.contains("GPU adapter") || error.contains("GPU device") => return,
+            Err(error) if error.kind == EngineErrorKind::GpuUnavailable => return,
             Err(error) => panic!("GPU pixelate failed: {error}"),
         };
 
@@ -644,7 +670,7 @@ mod tests {
 
         let output = match state.apply_posterize(&input, &params) {
             Ok(output) => output,
-            Err(error) if error.contains("GPU adapter") || error.contains("GPU device") => return,
+            Err(error) if error.kind == EngineErrorKind::GpuUnavailable => return,
             Err(error) => panic!("GPU posterize failed: {error}"),
         };
 

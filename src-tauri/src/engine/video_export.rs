@@ -11,6 +11,8 @@ use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use tauri::State;
 
+use super::error::EngineError;
+
 const STDERR_TAIL_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,26 +126,28 @@ pub fn ffmpeg_check_available() -> FfmpegAvailability {
 pub fn ffmpeg_start_encode(
     config: VideoExportConfig,
     state: State<'_, VideoExportState>,
-) -> Result<(), String> {
-    let mut guard = state.session.lock().map_err(|e| e.to_string())?;
+) -> Result<(), EngineError> {
+    let mut guard = state.session.lock().map_err(|e| {
+        EngineError::lock_poisoned(format!("Video export session lock poisoned: {e}"))
+    })?;
     if guard.is_some() {
-        return Err("An export session is already active".into());
+        return Err(EngineError::conflict("An export session is already active"));
     }
 
     if config.width == 0 || config.height == 0 {
-        return Err("Invalid frame dimensions".into());
+        return Err(EngineError::invalid_input("Invalid frame dimensions"));
     }
     if !config.fps.is_finite() || config.fps <= 0.0 {
-        return Err("Invalid fps".into());
+        return Err(EngineError::invalid_input("Invalid fps"));
     }
 
     let output_path = PathBuf::from(&config.output_path);
     if let Some(parent) = output_path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
-            return Err(format!(
+            return Err(EngineError::invalid_input(format!(
                 "Output directory does not exist: {}",
                 parent.display()
-            ));
+            )));
         }
     }
 
@@ -185,24 +189,24 @@ pub fn ffmpeg_start_encode(
 
     let mut child = command
         .spawn()
-        .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
+        .map_err(|e| EngineError::process(format!("Failed to spawn ffmpeg: {e}")))?;
 
     let Some(stdin) = child.stdin.take() else {
         let _ = child.kill();
         let _ = child.wait();
-        return Err("Failed to open ffmpeg stdin".to_string());
+        return Err(EngineError::process("Failed to open ffmpeg stdin"));
     };
 
     let Some(stderr) = child.stderr.take() else {
         let _ = child.kill();
         let _ = child.wait();
-        return Err("Failed to open ffmpeg stderr".to_string());
+        return Err(EngineError::process("Failed to open ffmpeg stderr"));
     };
 
     let expected = (config.width as usize)
         .checked_mul(config.height as usize)
         .and_then(|v| v.checked_mul(4))
-        .ok_or_else(|| "Frame dimensions overflow".to_string())?;
+        .ok_or_else(|| EngineError::invalid_input("Frame dimensions overflow"))?;
 
     *guard = Some(ActiveSession {
         child,
@@ -220,57 +224,61 @@ pub fn ffmpeg_start_encode(
 pub fn ffmpeg_write_frame(
     pixels: Vec<u8>,
     state: State<'_, VideoExportState>,
-) -> Result<(), String> {
-    let mut guard = state.session.lock().map_err(|e| e.to_string())?;
+) -> Result<(), EngineError> {
+    let mut guard = state.session.lock().map_err(|e| {
+        EngineError::lock_poisoned(format!("Video export session lock poisoned: {e}"))
+    })?;
     let session = guard
         .as_mut()
-        .ok_or_else(|| "No active export session".to_string())?;
+        .ok_or_else(|| EngineError::not_found("No active export session"))?;
 
     if pixels.len() != session.expected_bytes_per_frame {
-        return Err(format!(
+        return Err(EngineError::invalid_input(format!(
             "Frame payload size mismatch: got {} bytes, expected {}",
             pixels.len(),
             session.expected_bytes_per_frame
-        ));
+        )));
     }
 
     let stdin = session
         .stdin
         .as_mut()
-        .ok_or_else(|| "Export session already closed".to_string())?;
+        .ok_or_else(|| EngineError::conflict("Export session already closed"))?;
 
     stdin
         .write_all(&pixels)
-        .map_err(|e| format!("Failed to write frame to ffmpeg: {}", e))?;
+        .map_err(|e| EngineError::io(format!("Failed to write frame to ffmpeg: {e}")))?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn ffmpeg_finish_encode(
     state: State<'_, VideoExportState>,
-) -> Result<FfmpegFinishResponse, String> {
-    let mut guard = state.session.lock().map_err(|e| e.to_string())?;
+) -> Result<FfmpegFinishResponse, EngineError> {
+    let mut guard = state.session.lock().map_err(|e| {
+        EngineError::lock_poisoned(format!("Video export session lock poisoned: {e}"))
+    })?;
     let mut session = guard
         .take()
-        .ok_or_else(|| "No active export session".to_string())?;
+        .ok_or_else(|| EngineError::not_found("No active export session"))?;
 
     drop(session.stdin.take());
 
     let status = session
         .child
         .wait()
-        .map_err(|e| format!("Failed to wait for ffmpeg: {}", e))?;
+        .map_err(|e| EngineError::process(format!("Failed to wait for ffmpeg: {e}")))?;
     session.finished = true;
 
     let stderr = join_stderr_tail(session.stderr_thread.take());
     let exit_code = status.code().unwrap_or(-1);
 
     if !status.success() {
-        return Err(format!(
+        return Err(EngineError::process(format!(
             "ffmpeg exited with status {}: {}",
             exit_code,
             tail_lines(&stderr, 20)
-        ));
+        )));
     }
 
     Ok(FfmpegFinishResponse {
@@ -281,8 +289,10 @@ pub fn ffmpeg_finish_encode(
 }
 
 #[tauri::command]
-pub fn ffmpeg_cancel_encode(state: State<'_, VideoExportState>) -> Result<(), String> {
-    let mut guard = state.session.lock().map_err(|e| e.to_string())?;
+pub fn ffmpeg_cancel_encode(state: State<'_, VideoExportState>) -> Result<(), EngineError> {
+    let mut guard = state.session.lock().map_err(|e| {
+        EngineError::lock_poisoned(format!("Video export session lock poisoned: {e}"))
+    })?;
     let Some(mut session) = guard.take() else {
         return Ok(());
     };
