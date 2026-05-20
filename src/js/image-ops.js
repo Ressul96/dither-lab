@@ -46,6 +46,7 @@ import {
 import { applyNoiseNode } from "./image-ops/noise-source.js";
 import { sampleBilinearChannel, sampleNearestInto } from "./image-ops/sampling.js";
 import { applyChromaticAberrationNode } from "./image-ops/chroma-aberration.js";
+import { applyToneMapNode } from "./image-ops/tone-map.js";
 import {
   applyAnalogNode,
   applyAsciiNode,
@@ -77,6 +78,7 @@ export { applyGradientMapNode, applyGradientNode, applyMeshGradientNode };
 export { applyBlurNode };
 export { applyNoiseNode };
 export { applyChromaticAberrationNode };
+export { applyToneMapNode };
 export {
   applyAnalogNode,
   applyAsciiNode,
@@ -963,31 +965,8 @@ export function applyDuotoneNode(input, params) {
 // image-ops/gradient.js. sampleGradientLutInto is re-imported above so
 // the scene-grade node (still in this file) can keep using it.
 
-export function applyToneMapNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  const intensity = clamp(Number(params.intensity ?? 100) / 100, 0.1, 10);
-  const whitepoint = clamp(Number(params.whitepoint ?? 100) / 100, 0.1, 10);
-  if (intensity === 1 && whitepoint === 1) return input;
-  const wpSq = whitepoint * whitepoint;
-  const output = createBuffer(input.width, input.height);
-  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  ctx.drawImage(input, 0, 0);
-  const imageData = ctx.getImageData(0, 0, output.width, output.height);
-  const data = imageData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const r = (data[i] / 255) * intensity;
-    const g = (data[i + 1] / 255) * intensity;
-    const b = (data[i + 2] / 255) * intensity;
-    const tr = (r * (1 + r / wpSq)) / (1 + r);
-    const tg = (g * (1 + g / wpSq)) / (1 + g);
-    const tb = (b * (1 + b / wpSq)) / (1 + b);
-    data[i] = Math.round(clamp01(tr) * 255);
-    data[i + 1] = Math.round(clamp01(tg) * 255);
-    data[i + 2] = Math.round(clamp01(tb) * 255);
-  }
-  ctx.putImageData(imageData, 0, 0);
-  return output;
-}
+// applyToneMapNode moved to image-ops/tone-map.js (extended Reinhard
+// with intensity + whitepoint). Re-exported at the top of this file.
 
 // Lens Distortion — radial barrel/pincushion warp with optional chromatic
 // aberration. Replaces the old sine-wave Distort node, which wasn't really
