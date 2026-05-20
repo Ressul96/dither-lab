@@ -53,6 +53,8 @@ import { applyLensDistortNode } from "./image-ops/lens-distort.js";
 import { applyDisplaceNode } from "./image-ops/displace.js";
 import { applyRgbToBwNode } from "./image-ops/rgb-to-bw.js";
 import { applyPosterizeNode } from "./image-ops/posterize.js";
+import { applyAdjustNode } from "./image-ops/adjust.js";
+import { applyDuotoneNode } from "./image-ops/duotone.js";
 import {
   applyAnalogNode,
   applyAsciiNode,
@@ -91,6 +93,8 @@ export { applyLensDistortNode };
 export { applyDisplaceNode };
 export { applyRgbToBwNode };
 export { applyPosterizeNode };
+export { applyAdjustNode };
+export { applyDuotoneNode };
 export {
   applyAnalogNode,
   applyAsciiNode,
@@ -129,77 +133,9 @@ import {
 // at the end, so intermediate over-range values can still be brought back
 // into [0,1] by a later op (e.g. exposure pushes white past 1 then contrast
 // pulls it back rather than clipping mid-chain).
-export function applyAdjustNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-
-  const brightness = clamp((params.brightness ?? 0) / 100, -1, 1);
-  const contrast = clamp((params.contrast ?? 100) / 100, 0, 2);
-  const saturation = clamp((params.saturation ?? 100) / 100, 0, 2);
-  const gamma = Math.max(0.1, (params.gamma ?? 100) / 100);
-  const exposure = clamp((params.exposure ?? 0) / 100, -4, 4);
-  const exposureMultiplier = 2 ** exposure;
-
-  const identity =
-    brightness === 0 &&
-    contrast === 1 &&
-    saturation === 1 &&
-    gamma === 1 &&
-    exposure === 0;
-  if (identity) return input;
-
-  const output = createBuffer(input.width, input.height);
-  const context = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  context.drawImage(input, 0, 0);
-
-  const imageData = context.getImageData(0, 0, output.width, output.height);
-  const data = imageData.data;
-
-  for (let index = 0; index < data.length; index += 4) {
-    let r = data[index] / 255;
-    let g = data[index + 1] / 255;
-    let b = data[index + 2] / 255;
-
-    // 1. Exposure first — multiplies linear-ish values, so highlights stretch
-    //    before downstream tonal ops decide what to do with them.
-    r *= exposureMultiplier;
-    g *= exposureMultiplier;
-    b *= exposureMultiplier;
-
-    // 2. Gamma — perceptual lift (gamma > 1 lightens midtones).
-    if (gamma !== 1) {
-      r = Math.pow(Math.max(0, r), 1 / gamma);
-      g = Math.pow(Math.max(0, g), 1 / gamma);
-      b = Math.pow(Math.max(0, b), 1 / gamma);
-    }
-
-    // 3. Brightness — flat offset.
-    r += brightness;
-    g += brightness;
-    b += brightness;
-
-    // 4. Contrast — pivot around mid-grey.
-    if (contrast !== 1) {
-      r = (r - 0.5) * contrast + 0.5;
-      g = (g - 0.5) * contrast + 0.5;
-      b = (b - 0.5) * contrast + 0.5;
-    }
-
-    // 5. Saturation — pull each channel toward / away from luma.
-    if (saturation !== 1) {
-      const luma = luminance01(r, g, b);
-      r = luma + (r - luma) * saturation;
-      g = luma + (g - luma) * saturation;
-      b = luma + (b - luma) * saturation;
-    }
-
-    data[index] = Math.round(clamp01(r) * 255);
-    data[index + 1] = Math.round(clamp01(g) * 255);
-    data[index + 2] = Math.round(clamp01(b) * 255);
-  }
-
-  context.putImageData(imageData, 0, 0);
-  return output;
-}
+// applyAdjustNode moved to image-ops/adjust.js (canonical
+// exposure→gamma→brightness→contrast→saturation pipeline). Re-exported
+// at the top of this file so applySourceNode's chain stays unchanged.
 
 export function applySourceNode(input, params = {}) {
   if (!input?.width || !input?.height) return null;
@@ -766,61 +702,8 @@ export function applyLevelsNode(input, params) {
 // the luma calculation: a high redGamma makes red areas read as brighter
 // (push toward highlight color), low redGamma pushes them toward shadow.
 // CPU reference per duotone_entegrasyon.md §3.
-export function applyDuotoneNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-
-  const opacity = clamp(Number(params.opacity ?? 100) / 100, 0, 1);
-  if (opacity <= 0) return input;
-
-  const shadow = hexToRgb01(params.shadowColor ?? "#101010", [0.063, 0.063, 0.063]);
-  const highlight = hexToRgb01(params.highlightColor ?? "#f4b642", [0.957, 0.714, 0.259]);
-  const invR = 1 / clamp(Number(params.redGamma ?? 100) / 100, 0.1, 5);
-  const invG = 1 / clamp(Number(params.greenGamma ?? 100) / 100, 0.1, 5);
-  const invB = 1 / clamp(Number(params.blueGamma ?? 100) / 100, 0.1, 5);
-
-  const output = createBuffer(input.width, input.height);
-  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  ctx.drawImage(input, 0, 0);
-  const imageData = ctx.getImageData(0, 0, output.width, output.height);
-  const data = imageData.data;
-
-  // Pre-bake per-channel gamma curves into 256-entry LUTs so the inner
-  // loop is just three array reads + a luma dot + a 3-channel mix.
-  const lutR = new Float32Array(256);
-  const lutG = new Float32Array(256);
-  const lutB = new Float32Array(256);
-  for (let i = 0; i < 256; i++) {
-    const v = i / 255;
-    lutR[i] = Math.pow(v, invR);
-    lutG[i] = Math.pow(v, invG);
-    lutB[i] = Math.pow(v, invB);
-  }
-
-  for (let i = 0; i < data.length; i += 4) {
-    const r = lutR[data[i]];
-    const g = lutG[data[i + 1]];
-    const b = lutB[data[i + 2]];
-    const luma = luminanceBt601(r, g, b);
-    const mappedR = shadow[0] + (highlight[0] - shadow[0]) * luma;
-    const mappedG = shadow[1] + (highlight[1] - shadow[1]) * luma;
-    const mappedB = shadow[2] + (highlight[2] - shadow[2]) * luma;
-    const outR = Math.round(clamp01(mappedR) * 255);
-    const outG = Math.round(clamp01(mappedG) * 255);
-    const outB = Math.round(clamp01(mappedB) * 255);
-    if (opacity < 1) {
-      data[i] = Math.round(data[i] + (outR - data[i]) * opacity);
-      data[i + 1] = Math.round(data[i + 1] + (outG - data[i + 1]) * opacity);
-      data[i + 2] = Math.round(data[i + 2] + (outB - data[i + 2]) * opacity);
-    } else {
-      data[i] = outR;
-      data[i + 1] = outG;
-      data[i + 2] = outB;
-    }
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-  return output;
-}
+// applyDuotoneNode moved to image-ops/duotone.js (per-channel gamma
+// LUT + luma → shadow/highlight gradient remap). Re-exported above.
 
 // Gradient Map — maps a scalar signal (luma by default) through the shared
 // gradient LUT. GPU owns the hot path; CPU fallback keeps WebGL2-disabled
