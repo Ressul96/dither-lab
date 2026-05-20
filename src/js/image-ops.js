@@ -30,6 +30,7 @@ import {
   applyScaleNode,
   applyTransformNode,
 } from "./image-ops/transform.js";
+import { applyThresholdNode } from "./image-ops/threshold.js";
 
 // Re-export the pool so external consumers (graph-runtime.js, source.js)
 // keep importing from "./image-ops.js" unchanged. Internal effect
@@ -40,6 +41,7 @@ export { acquireBuffer, releaseBuffer };
 export { MASK_MODES, MASK_SOURCES, MIX_MODES };
 export { applyCropNode, applyFlipNode, applyInvertNode };
 export { applyPixelateNode, applyScaleNode, applyTransformNode };
+export { applyThresholdNode };
 import {
   areRgbCurvesIdentity,
   buildCurveLut,
@@ -67,7 +69,6 @@ import {
   applyPixelSortingGpu,
   applyPosterizeGpu,
   applyStarGlowGpu,
-  applyThresholdGpu,
   applyVhsGpu,
   GAUSSIAN_BLUR_MAX_RADIUS,
 } from "./gpu-effects.js";
@@ -1424,54 +1425,8 @@ export function applyPatternDitherNode(input, params) {
   return gpuOutput ?? input;
 }
 
-export function applyThresholdNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  // Threshold is a brand-new standalone node (the existing Dither node
-  // exposes a "Simple Threshold" algorithm but only as part of its larger
-  // palette/error-diffusion config). GPU-only with input pass-through —
-  // a single-channel mask comparison is cheap enough that the CPU fallback
-  // can keep WebGL2-disabled browsers visually consistent.
-  const gpuOutput = applyThresholdGpu(input, params);
-  return gpuOutput ?? applyThresholdCpu(input, params);
-}
-
-function applyThresholdCpu(input, params) {
-  const threshold = clamp(Number(params.threshold ?? 50) / 100, 0, 1);
-  const softness = clamp(Number(params.softness ?? 0) / 100, 0, 0.5);
-  const channel = String(params.channel ?? "luma").toLowerCase();
-  const invert = String(params.invert ?? "off").toLowerCase() === "on";
-  const sourceMode = String(params.mode ?? "bw").toLowerCase() === "source";
-  const opacity = clamp(Number(params.opacity ?? 100) / 100, 0, 1);
-  if (opacity <= 0) return input;
-
-  const output = createBuffer(input.width, input.height);
-  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  ctx.drawImage(input, 0, 0);
-  const imageData = ctx.getImageData(0, 0, output.width, output.height);
-  const data = imageData.data;
-  const low = Math.max(threshold - softness, 0);
-  const high = threshold + softness + 0.001;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const srcR = data[i];
-    const srcG = data[i + 1];
-    const srcB = data[i + 2];
-    const value = thresholdChannelValue(srcR / 255, srcG / 255, srcB / 255, channel);
-    let mask = smoothstep(low, high, value);
-    if (invert) mask = 1 - mask;
-
-    const outR = sourceMode ? srcR * mask : mask * 255;
-    const outG = sourceMode ? srcG * mask : mask * 255;
-    const outB = sourceMode ? srcB * mask : mask * 255;
-    data[i] = mixByte(srcR, outR, opacity);
-    data[i + 1] = mixByte(srcG, outG, opacity);
-    data[i + 2] = mixByte(srcB, outB, opacity);
-    data[i + 3] = 255;
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-  return output;
-}
+// applyThresholdNode + thresholdChannelValue moved to
+// image-ops/threshold.js and re-exported at the top of this file.
 
 export function applyChromaticAberrationNode(input, params) {
   if (!input?.width || !input?.height) return null;
@@ -2284,21 +2239,5 @@ function toSrgb(value) {
   return Math.pow(clamp01(value), 1 / 2.2);
 }
 
-function thresholdChannelValue(r, g, b, channel) {
-  switch (channel) {
-    case "r":
-    case "red":
-      return r;
-    case "g":
-    case "green":
-      return g;
-    case "b":
-    case "blue":
-      return b;
-    case "max":
-      return Math.max(r, g, b);
-    case "luma":
-    default:
-      return luminanceBt601(r, g, b);
-  }
-}
+// thresholdChannelValue moved to image-ops/threshold.js (single
+// consumer, no other module needs it).
