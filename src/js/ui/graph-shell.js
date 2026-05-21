@@ -132,6 +132,7 @@ import {
   insertPaletteNodeAtDefault,
   nodePositionFromPoint,
 } from "./graph-node-placement.js";
+import { canBypassGraphNode } from "./graph-node-policy.js";
 import {
   GRAPH_WORLD_SIZE,
   computeChildrenBbox,
@@ -1189,7 +1190,7 @@ function renderNode(node, selectedNodeIds, soloNodeId = null) {
   const bypassed = node.bypassed ? " is-bypassed" : "";
   const solo = soloNodeId === node.id ? " is-solo" : "";
   const family = familySlug(definition?.family);
-  const canBypass = node.type !== "source" && node.type !== "viewer-output" && node.type !== "group";
+  const canBypass = canBypassGraphNode(node);
   const bypassIcon = node.bypassed ? eyeClosedSvg() : eyeOpenSvg();
   const title = graphRenameNodeId === node.id
     ? `<input class="graph-node-title-input" data-node-rename-input="${escapeHtml(node.id)}" value="${escapeHtml(node.label)}" maxlength="48" spellcheck="false" />`
@@ -1478,7 +1479,7 @@ function renderNodeSpecifics(node) {
 }
 
 function renderNodeActions(node) {
-  if (!node || node.type === "source" || node.type === "viewer-output" || node.type === "group") {
+  if (!canBypassGraphNode(node)) {
     return "";
   }
   return `
@@ -1506,7 +1507,7 @@ function renderLayerControls(node) {
 }
 
 function isLayerAdjustableNode(node) {
-  return Boolean(node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
+  return canBypassGraphNode(node);
 }
 
 function renderMultiSelectionInspector(selectedNodeIds) {
@@ -5476,10 +5477,6 @@ function updateInlineReadout(control) {
   if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(value) || max === min) return;
   const pct = clamp((value - min) / (max - min), 0, 1) * 100;
   control.style.setProperty("--slider-fill", `${pct}%`);
-}
-
-function canBypassGraphNode(node) {
-  return Boolean(node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
 }
 
 function clamp(value, min, max) {

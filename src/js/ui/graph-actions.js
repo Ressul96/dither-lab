@@ -24,6 +24,7 @@ import {
   getVisibleGraphNodeIds,
   getVisibleGraphNodes,
 } from "./graph-view-scope.js";
+import { canBypassGraphNode } from "./graph-node-policy.js";
 
 let editorEl = null;
 
@@ -121,10 +122,6 @@ export function ungroupCurrentSelection() {
   }
   const currentParent = resolveGraphParentId(graph, graphView.currentParentId);
   return currentParent !== ROOT_PARENT_ID ? ungroupNode(currentParent) : false;
-}
-
-function canBypassGraphNode(node) {
-  return Boolean(node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
 }
 
 function clamp(value, min, max) {

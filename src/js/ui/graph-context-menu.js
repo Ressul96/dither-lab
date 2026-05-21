@@ -13,6 +13,7 @@ import {
   ungroupNode,
 } from "../graph.js";
 import { setCurrentGraphParent } from "./graph-breadcrumb.js";
+import { canBypassGraphNode } from "./graph-node-policy.js";
 import { escapeHtml } from "./utils.js";
 
 let graphMenuEl = null;
@@ -272,15 +273,11 @@ function handleGraphNodeMenuAction(control) {
 }
 
 function canDuplicateGraphNode(node) {
-  return Boolean(node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
+  return canBypassGraphNode(node);
 }
 
 function canDeleteGraphNode(node) {
   return Boolean(node && node.type !== "source" && node.type !== "viewer-output");
-}
-
-function canBypassGraphNode(node) {
-  return Boolean(node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
 }
 
 function getGroupSelectionInfo(selectedNodeIds = getSelectedNodeIds()) {
