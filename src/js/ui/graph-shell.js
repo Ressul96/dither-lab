@@ -105,7 +105,7 @@ import {
   toSceneX,
   toSceneY,
 } from "./graph-geometry.js";
-import { initNodePaletteSearch } from "./palette-ui.js";
+import { initNodePaletteSearch, initPaletteDragAndDrop } from "./palette-ui.js";
 
 const CURVE_CANVAS_SIZE = 240;
 const CURVE_HANDLE_RADIUS = 6;
@@ -123,14 +123,12 @@ let resizeObserver;
 let renderedInspectorNodeId = null;
 let inspectorEditing = false;
 let keyboardWired = false;
-let draggedPaletteType = "";
 let paletteExtractionSize = 4;
 let graphMenuEl = null;
 let graphMenuState = null;
 let renderedGraphParentId = "";
 let insertHighlightEdgeId = "";
 let graphAutoCentered = false;
-let paletteDragPreviewEl = null;
 let colorPickerState = null;
 let gradientRampState = null;
 let graphSpacePanActive = false;
@@ -178,7 +176,21 @@ export function initGraphShell() {
   inspectorEl.addEventListener("contextmenu", onInspectorContextMenu);
   subscribePalettes(onPaletteRegistryChange);
   initNodePaletteSearch();
-  initPaletteDragAndDrop();
+  initPaletteDragAndDrop({
+    editorEl,
+    stageEl,
+    nodesEl,
+    clearInsertHighlight,
+    clientToWorld,
+    createNodeFromPalette,
+    findInsertableEdgeAt,
+    findInsertTargetAt,
+    insertNodeOnEdge,
+    insertPaletteNodeAtDefault,
+    nodePositionFromPoint,
+    renderSocketRows,
+    setInsertHighlight,
+  });
   initViewportInteractions();
   initGraphContextMenu();
   initGraphBreadcrumb(editorEl);
@@ -236,212 +248,6 @@ export function initGraphShell() {
   requestAnimationFrame(() => {
     maybeAutoCenterGraph();
   });
-}
-
-function initPaletteDragAndDrop() {
-  for (const item of document.querySelectorAll("[data-palette-node]")) {
-    item.setAttribute("draggable", "false");
-    item.addEventListener("pointerdown", (event) => {
-      startPalettePointerDrag(event, item);
-    });
-
-    item.addEventListener("dragstart", (e) => {
-      const type = item.dataset.paletteNode;
-      if (!type) return;
-      draggedPaletteType = type;
-      if (!e.dataTransfer) return;
-      e.dataTransfer.effectAllowed = "copy";
-      e.dataTransfer.setData("application/x-node-type", type);
-      e.dataTransfer.setData("text/plain", `ditherlab-node:${type}`);
-    });
-
-    item.addEventListener("dragend", () => {
-      draggedPaletteType = "";
-      removePaletteDragPreview();
-      clearInsertHighlight();
-    });
-  }
-
-  editorEl.addEventListener("dragover", (e) => {
-    const type = resolvePaletteNodeType(e.dataTransfer);
-    if (!type) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-    updatePaletteDragPreview(type, e.clientX, e.clientY);
-    const edge = findInsertableEdgeAt(e.clientX, e.clientY);
-    setInsertHighlight(edge?.edgeId ?? "");
-  });
-
-  editorEl.addEventListener("drop", (e) => {
-    const type = resolvePaletteNodeType(e.dataTransfer);
-    draggedPaletteType = "";
-    const edge = findInsertTargetAt(e.clientX, e.clientY);
-    removePaletteDragPreview();
-    clearInsertHighlight();
-    if (!type) return;
-    e.preventDefault();
-    if (edge?.edgeId) {
-      const inserted = insertNodeOnEdge(edge.edgeId, type, {
-        position: nodePositionFromPoint(clientToWorld(e.clientX, e.clientY)),
-      });
-      if (!inserted) createNodeFromPalette(type, clientToWorld(e.clientX, e.clientY));
-      return;
-    }
-    createNodeFromPalette(type, clientToWorld(e.clientX, e.clientY));
-  });
-
-  editorEl.addEventListener("dragleave", (event) => {
-    if (event.relatedTarget && editorEl.contains(event.relatedTarget)) return;
-    removePaletteDragPreview();
-    clearInsertHighlight();
-  });
-
-  stageEl?.addEventListener("dragover", (e) => {
-    if (!resolvePaletteNodeType(e.dataTransfer)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-    removePaletteDragPreview();
-    clearInsertHighlight();
-  });
-
-  stageEl?.addEventListener("drop", (e) => {
-    const type = resolvePaletteNodeType(e.dataTransfer);
-    draggedPaletteType = "";
-    removePaletteDragPreview();
-    clearInsertHighlight();
-    if (!type) return;
-    e.preventDefault();
-    insertPaletteNodeAtDefault(type);
-  });
-}
-
-function startPalettePointerDrag(event, item) {
-  if (event.button !== 0) return;
-  const type = item.dataset.paletteNode;
-  if (!type) return;
-
-  event.preventDefault();
-
-  const startX = event.clientX;
-  const startY = event.clientY;
-  let dragging = false;
-
-  try {
-    item.setPointerCapture(event.pointerId);
-  } catch {}
-
-  const onMove = (ev) => {
-    const moved = Math.hypot(ev.clientX - startX, ev.clientY - startY);
-    if (!dragging && moved < 6) return;
-
-    if (!dragging) {
-      dragging = true;
-      item.classList.add("is-dragging");
-    }
-
-    if (isPointOverEditor(ev.clientX, ev.clientY)) {
-      updatePaletteDragPreview(type, ev.clientX, ev.clientY);
-      const edge = findInsertableEdgeAt(ev.clientX, ev.clientY);
-      setInsertHighlight(edge?.edgeId ?? "");
-    } else {
-      removePaletteDragPreview();
-      clearInsertHighlight();
-    }
-  };
-
-  const onUp = (ev) => {
-    item.removeEventListener("pointermove", onMove);
-    item.removeEventListener("pointerup", onUp);
-    item.removeEventListener("pointercancel", onUp);
-
-    item.classList.remove("is-dragging");
-    removePaletteDragPreview();
-
-    try {
-      item.releasePointerCapture(event.pointerId);
-    } catch {}
-
-    const droppedOnEditor = isPointOverEditor(ev.clientX, ev.clientY);
-    const droppedOnStage = isPointOverStage(ev.clientX, ev.clientY);
-
-    if (!dragging) {
-      clearInsertHighlight();
-      insertPaletteNodeAtDefault(type);
-      return;
-    }
-
-    if (droppedOnEditor) {
-      const edge = findInsertTargetAt(ev.clientX, ev.clientY);
-      clearInsertHighlight();
-      if (edge?.edgeId) {
-        const inserted = insertNodeOnEdge(edge.edgeId, type, {
-          position: nodePositionFromPoint(clientToWorld(ev.clientX, ev.clientY)),
-        });
-        if (!inserted) createNodeFromPalette(type, clientToWorld(ev.clientX, ev.clientY));
-      } else {
-        createNodeFromPalette(type, clientToWorld(ev.clientX, ev.clientY));
-      }
-      return;
-    }
-
-    clearInsertHighlight();
-    if (droppedOnStage) {
-      insertPaletteNodeAtDefault(type);
-    }
-  };
-
-  item.addEventListener("pointermove", onMove);
-  item.addEventListener("pointerup", onUp);
-  item.addEventListener("pointercancel", onUp);
-}
-
-function updatePaletteDragPreview(type, clientX, clientY) {
-  if (!nodesEl || !isPointOverEditor(clientX, clientY)) {
-    removePaletteDragPreview();
-    return;
-  }
-
-  if (!paletteDragPreviewEl || paletteDragPreviewEl.dataset.previewType !== type) {
-    removePaletteDragPreview();
-    paletteDragPreviewEl = createPaletteDragPreview(type);
-    if (!paletteDragPreviewEl) return;
-    nodesEl.appendChild(paletteDragPreviewEl);
-  }
-
-  const point = clientToWorld(clientX, clientY);
-  paletteDragPreviewEl.style.left = `${toSceneX(point.x - NODE_WIDTH / 2)}px`;
-  paletteDragPreviewEl.style.top = `${toSceneY(point.y - NODE_HEIGHT / 2)}px`;
-}
-
-function createPaletteDragPreview(type) {
-  const definition = getNodeDefinition(type);
-  if (!definition) return null;
-  const previewNode = {
-    id: "drag-preview",
-    type,
-    label: definition.label,
-    inputs: definition.inputs,
-    outputs: definition.outputs,
-  };
-
-  const preview = document.createElement("div");
-  preview.className = "graph-node graph-node--drag-preview";
-  preview.dataset.previewType = type;
-  preview.innerHTML = `
-    <div class="graph-node-head">
-      <span class="graph-node-title">${escapeHtml(definition.label)}</span>
-      <span class="graph-node-family">${escapeHtml(definition.family ?? "Node")}</span>
-    </div>
-    <div class="graph-node-rows">
-      ${renderSocketRows(previewNode)}
-    </div>
-  `;
-  return preview;
-}
-
-function removePaletteDragPreview() {
-  paletteDragPreviewEl?.remove();
-  paletteDragPreviewEl = null;
 }
 
 function initViewportInteractions() {
@@ -6946,28 +6752,6 @@ function maybeAutoCenterGraph() {
     panX: rect.width / 2 - toSceneX(centerX) * zoom,
     panY: rect.height / 2 - toSceneY(centerY) * zoom,
   });
-}
-
-function resolvePaletteNodeType(dataTransfer) {
-  const customType = dataTransfer?.getData?.("application/x-node-type");
-  if (customType) return customType;
-
-  const textType = dataTransfer?.getData?.("text/plain");
-  if (typeof textType === "string" && textType.startsWith("ditherlab-node:")) {
-    return textType.slice("ditherlab-node:".length);
-  }
-
-  return draggedPaletteType || "";
-}
-
-function isPointOverEditor(clientX, clientY) {
-  const target = document.elementFromPoint(clientX, clientY);
-  return Boolean(target?.closest?.("#nodeEditor"));
-}
-
-function isPointOverStage(clientX, clientY) {
-  const target = document.elementFromPoint(clientX, clientY);
-  return Boolean(target?.closest?.("#stage"));
 }
 
 function clientToScene(clientX, clientY) {
