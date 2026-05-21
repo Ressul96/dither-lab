@@ -1,4 +1,4 @@
-import { hexToRgb01, LUMA_BT601, LUMA_BT709, luminanceBt601, luminanceBt709 } from "./color.js";
+import { hexToRgb01, LUMA_BT601, LUMA_BT709, luminanceBt601 } from "./color.js";
 import { createProcessingCanvas } from "./canvas.js";
 import {
   acquireBuffer,
@@ -41,7 +41,6 @@ import {
   applyGradientMapNode,
   applyGradientNode,
   applyMeshGradientNode,
-  sampleGradientLutInto,
 } from "./image-ops/gradient.js";
 import { applyNoiseNode } from "./image-ops/noise-source.js";
 import { sampleBilinearChannel, sampleNearestInto } from "./image-ops/sampling.js";
@@ -58,6 +57,7 @@ import { applyDuotoneNode } from "./image-ops/duotone.js";
 import { applySourceNode } from "./image-ops/source.js";
 import { applyLevelsNode } from "./image-ops/levels.js";
 import { applyRgbCurvesNode } from "./image-ops/rgb-curves.js";
+import { applySceneGradeNode } from "./image-ops/scene-grade.js";
 import {
   applyAnalogNode,
   applyAsciiNode,
@@ -101,6 +101,7 @@ export { applyDuotoneNode };
 export { applySourceNode };
 export { applyLevelsNode };
 export { applyRgbCurvesNode };
+export { applySceneGradeNode };
 export {
   applyAnalogNode,
   applyAsciiNode,
@@ -115,12 +116,8 @@ export {
   applyPixelSortingNode,
   applyVhsNode,
 };
-import {
-  areRgbCurvesIdentity,
-  buildFinalRgbCurvesLuts,
-  buildRgbCurvesLuts,
-} from "./curve-lut.js";
-import { buildGradientLut } from "./gl/gradient-lut.js";
+// curve-lut + gradient-lut imports moved into image-ops/scene-grade.js
+// and image-ops/rgb-curves.js (the only remaining consumers).
 import {
   applyBloomGpu,
   applyStarGlowGpu,
@@ -441,86 +438,9 @@ function renderStreaks(brightCanvas, streakCount, angleOffset, iterations, fade)
 // thin rgbLuma wrapper was inlined to luminanceBt601 calls. Re-
 // exported at the top of this file.
 
-// Scene Grade — final scene-wide color pass intended to sit immediately before
-// Viewer Output. It reuses the RGB curves LUT path, then performs clamp/gamma
-// remapping, and can optionally map the final luma through the shared gradient
-// LUT helper.
-export function applySceneGradeNode(input, params = {}) {
-  if (!input?.width || !input?.height) return null;
-
-  const luts = buildRgbCurvesLuts(params);
-  const hasCurves = !areRgbCurvesIdentity(luts);
-  const clampMin = clamp(Number(params.clampMin ?? 0) / 100, 0, 1);
-  const rawClampMax = clamp(Number(params.clampMax ?? 100) / 100, 0, 1);
-  const clampMax = Math.max(rawClampMax, clampMin + 0.001);
-  const clampGamma = clamp(Number(params.clampGamma ?? 100) / 100, 0.01, 4);
-  const hasClamp =
-    Math.abs(clampMin) > 1e-6 ||
-    Math.abs(clampMax - 1) > 1e-6 ||
-    Math.abs(clampGamma - 1) > 1e-6;
-  const colorMapFlag = String(params.colorMapEnabled ?? "off").toLowerCase();
-  const colorMapEnabled =
-    params.colorMapEnabled === true || colorMapFlag === "on" || colorMapFlag === "true";
-
-  if (!hasCurves && !hasClamp && !colorMapEnabled) return input;
-
-  const finalLuts = hasCurves ? buildFinalRgbCurvesLuts(luts) : null;
-  const colorMapLut = colorMapEnabled
-    ? buildGradientLut(sceneGradeColorMapStops(params))
-    : null;
-  const colorMapData = colorMapLut?.data ?? null;
-  const colorMapWidth = colorMapLut?.width ?? 0;
-  const range = clampMax - clampMin;
-  const inverseGamma = 1 / clampGamma;
-
-  const output = createBuffer(input.width, input.height);
-  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  ctx.drawImage(input, 0, 0);
-  const imageData = ctx.getImageData(0, 0, output.width, output.height);
-  const data = imageData.data;
-  const mapped = [0, 0, 0];
-
-  for (let i = 0; i < data.length; i += 4) {
-    let r = hasCurves ? finalLuts.red[data[i]] : data[i];
-    let g = hasCurves ? finalLuts.green[data[i + 1]] : data[i + 1];
-    let b = hasCurves ? finalLuts.blue[data[i + 2]] : data[i + 2];
-
-    let rf = r / 255;
-    let gf = g / 255;
-    let bf = b / 255;
-
-    if (hasClamp) {
-      rf = Math.pow(clamp01((rf - clampMin) / range), inverseGamma);
-      gf = Math.pow(clamp01((gf - clampMin) / range), inverseGamma);
-      bf = Math.pow(clamp01((bf - clampMin) / range), inverseGamma);
-    }
-
-    if (colorMapData) {
-      const luma = luminanceBt709(rf, gf, bf);
-      sampleGradientLutInto(colorMapData, colorMapWidth, luma, mapped, 0);
-      rf = mapped[0] / 255;
-      gf = mapped[1] / 255;
-      bf = mapped[2] / 255;
-    }
-
-    data[i] = Math.round(clamp01(rf) * 255);
-    data[i + 1] = Math.round(clamp01(gf) * 255);
-    data[i + 2] = Math.round(clamp01(bf) * 255);
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-  return output;
-}
-
-function sceneGradeColorMapStops(params) {
-  if (Array.isArray(params?.colorMapStops) && params.colorMapStops.length > 0) {
-    return params.colorMapStops;
-  }
-  return [
-    { pos: 0, color: params?.colorMapShadow ?? "#111111" },
-    { pos: 1, color: params?.colorMapHighlight ?? "#ffffff" },
-  ];
-}
+// applySceneGradeNode + sceneGradeColorMapStops moved to
+// image-ops/scene-grade.js (RGB curves + clamp/gamma + optional
+// luma → gradient colour map). Re-exported at the top of this file.
 
 // applyLayerAdjustmentsNode moved to image-ops/layer-adjustments.js
 // (per-node opacity / hue / saturation override pass driven by the
