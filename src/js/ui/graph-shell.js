@@ -88,9 +88,6 @@ import { initGraphContextMenu } from "./graph-context-menu.js";
 import {
   initGraphKeyboard,
   markGraphKeyboardActive,
-  setGraphPointerInsideEditor,
-  syncGraphCutCursorFromPointer,
-  syncGraphInteractionModeClasses,
 } from "./graph-keyboard.js";
 import {
   clearInsertHighlight,
@@ -103,7 +100,6 @@ import {
 } from "./graph-edge-insert.js";
 import {
   initGraphEdgeCut,
-  startEdgeCut,
 } from "./graph-edge-cut.js";
 import {
   initGraphSocketDrag,
@@ -114,8 +110,11 @@ import {
   startNodeDrag,
 } from "./graph-node-drag.js";
 import {
+  cancelActiveGraphMarquee,
+  initGraphViewportInteractions,
+} from "./graph-viewport.js";
+import {
   GRAPH_GRID_STEP,
-  GRAPH_MARQUEE_THRESHOLD,
   GRAPH_VIEW_PADDING,
   GRAPH_WORLD_ORIGIN,
   GRAPH_WORLD_SIZE,
@@ -125,7 +124,6 @@ import {
   getNodeRenderHeight,
   getSocketPoint,
   modulo,
-  rectsIntersect,
   toSceneX,
   toSceneY,
 } from "./graph-geometry.js";
@@ -151,7 +149,6 @@ let renderedGraphParentId = "";
 let graphAutoCentered = false;
 let colorPickerState = null;
 let gradientRampState = null;
-let activeGraphMarquee = null;
 let graphRenameNodeId = null;
 const paletteSwatchLocks = new Map();
 // F17.1 inspector undo: snapshot a control's pre-drag value the first time
@@ -219,7 +216,15 @@ export function initGraphShell() {
     renderSocketRows,
     setInsertHighlight,
   });
-  initViewportInteractions();
+  initGraphViewportInteractions({
+    editorEl,
+    nodesEl,
+    clientToWorld,
+    getLocalPoint,
+    renderEdges,
+    renderInspector,
+    selectNodesWithoutDispatch,
+  });
   initGraphContextMenu({
     editorEl,
     nodesEl,
@@ -299,243 +304,6 @@ export function initGraphShell() {
   requestAnimationFrame(() => {
     maybeAutoCenterGraph();
   });
-}
-
-function initViewportInteractions() {
-  editorEl.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      if (e.ctrlKey || e.metaKey) {
-        zoomGraphAtPointer(e);
-        return;
-      }
-
-      const { graphView } = getState();
-      dispatch("graphView", {
-        panX: graphView.panX - e.deltaX,
-        panY: graphView.panY - e.deltaY,
-      });
-    },
-    { passive: false }
-  );
-
-  editorEl.addEventListener("pointerenter", (e) => {
-    setGraphPointerInsideEditor(true, e);
-  });
-  editorEl.addEventListener("pointermove", (e) => {
-    syncGraphCutCursorFromPointer(e);
-    syncGraphInteractionModeClasses();
-  });
-  editorEl.addEventListener("pointerleave", () => {
-    setGraphPointerInsideEditor(false);
-  });
-
-  editorEl.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return;
-    markGraphKeyboardActive();
-    if (e.target.closest("[data-node-id]") || e.target.closest(".graph-socket-hit")) return;
-    // The breadcrumb lives inside #nodeEditor so the pan handler would
-    // otherwise capture the pointer on this same `pointerdown` and the
-    // follow-up `click` never reaches the Root / group buttons — that's
-    // why entering a group looked one-way.
-    if (e.target.closest(".graph-breadcrumb")) return;
-    if (e.altKey) {
-      startEdgeCut(e);
-      return;
-    }
-    // Cmd / Ctrl held over empty canvas opens the marquee box-select.
-    // Plain left-drag is back to panning — that's the default users built
-    // muscle memory around before F13.3 swapped them. Space-pan still
-    // works as a redundant alternative.
-    if (e.metaKey || e.ctrlKey) {
-      startGraphBoxSelect(e);
-      return;
-    }
-    startEditorPan(e);
-  });
-}
-
-function zoomGraphAtPointer(e) {
-  const { graphView } = getState();
-  const point = clientToWorld(e.clientX, e.clientY);
-  const local = getLocalPoint(e.clientX, e.clientY);
-  const nextZoom = clamp(graphView.zoom * Math.exp(-e.deltaY * 0.0015), 0.35, 2.25);
-
-  dispatch("graphView", {
-    zoom: nextZoom,
-    panX: local.x - toSceneX(point.x) * nextZoom,
-    panY: local.y - toSceneY(point.y) * nextZoom,
-  });
-}
-
-function startEditorPan(e) {
-  e.preventDefault();
-  const { graphView } = getState();
-  const startX = e.clientX;
-  const startY = e.clientY;
-  const startPanX = graphView.panX;
-  const startPanY = graphView.panY;
-
-  editorEl.classList.add("panning");
-  try {
-    editorEl.setPointerCapture(e.pointerId);
-  } catch {}
-
-  const onMove = (ev) => {
-    dispatch("graphView", {
-      panX: startPanX + (ev.clientX - startX),
-      panY: startPanY + (ev.clientY - startY),
-    });
-  };
-
-  const onUp = () => {
-    editorEl.removeEventListener("pointermove", onMove);
-    editorEl.removeEventListener("pointerup", onUp);
-    editorEl.removeEventListener("pointercancel", onUp);
-    editorEl.classList.remove("panning");
-    try {
-      editorEl.releasePointerCapture(e.pointerId);
-    } catch {}
-  };
-
-  editorEl.addEventListener("pointermove", onMove);
-  editorEl.addEventListener("pointerup", onUp);
-  editorEl.addEventListener("pointercancel", onUp);
-}
-
-function startGraphBoxSelect(e) {
-  e.preventDefault();
-
-  const startClient = { x: e.clientX, y: e.clientY };
-  const extendSelection = e.shiftKey || e.metaKey || e.ctrlKey;
-  const initialSelectedIds = getSelectedNodeIds();
-  let nextSelectedIds = extendSelection ? initialSelectedIds : [];
-  let moved = false;
-
-  const marqueeEl = document.createElement("div");
-  marqueeEl.className = "graph-marquee hidden";
-  editorEl.appendChild(marqueeEl);
-
-  try {
-    editorEl.setPointerCapture(e.pointerId);
-  } catch {}
-
-  const applySelection = (nodeIds) => {
-    nextSelectedIds = nodeIds;
-    selectNodesWithoutDispatch(nodeIds, nodeIds.at(-1) ?? null);
-    syncRenderedNodeSelection(nodeIds);
-    renderInspector();
-    renderEdges();
-  };
-
-  const finish = (cancelled = false) => {
-    editorEl.removeEventListener("pointermove", onMove);
-    editorEl.removeEventListener("pointerup", onUp);
-    editorEl.removeEventListener("pointercancel", onCancel);
-    editorEl.classList.remove("box-selecting");
-    marqueeEl.remove();
-    if (activeGraphMarquee?.el === marqueeEl) activeGraphMarquee = null;
-    try {
-      editorEl.releasePointerCapture(e.pointerId);
-    } catch {}
-
-    const finalIds = cancelled ? initialSelectedIds : moved ? nextSelectedIds : [];
-    dispatch("graph", {
-      selectedNodeId: finalIds.at(-1) ?? null,
-      selectedNodeIds: finalIds,
-    });
-  };
-
-  const updateMarquee = (clientX, clientY) => {
-    const rect = getMarqueeLocalRect(startClient, { x: clientX, y: clientY });
-    marqueeEl.style.left = `${rect.left}px`;
-    marqueeEl.style.top = `${rect.top}px`;
-    marqueeEl.style.width = `${rect.width}px`;
-    marqueeEl.style.height = `${rect.height}px`;
-  };
-
-  const onMove = (ev) => {
-    const dx = ev.clientX - startClient.x;
-    const dy = ev.clientY - startClient.y;
-    if (!moved && Math.hypot(dx, dy) < GRAPH_MARQUEE_THRESHOLD) return;
-    if (!moved) {
-      moved = true;
-      editorEl.classList.add("box-selecting");
-      marqueeEl.classList.remove("hidden");
-    }
-
-    updateMarquee(ev.clientX, ev.clientY);
-    const marqueeClientRect = getMarqueeClientRect(startClient, { x: ev.clientX, y: ev.clientY });
-    const hitIds = getNodeIdsInClientRect(marqueeClientRect);
-    const selectedIds = extendSelection ? mergeNodeSelection(initialSelectedIds, hitIds) : hitIds;
-    applySelection(selectedIds);
-  };
-
-  const onUp = () => finish(false);
-  const onCancel = () => finish(true);
-
-  activeGraphMarquee = {
-    el: marqueeEl,
-    cancel: onCancel,
-  };
-  editorEl.addEventListener("pointermove", onMove);
-  editorEl.addEventListener("pointerup", onUp);
-  editorEl.addEventListener("pointercancel", onCancel);
-}
-
-function cancelActiveGraphMarquee() {
-  if (!activeGraphMarquee) return false;
-  activeGraphMarquee.cancel();
-  return true;
-}
-
-function syncRenderedNodeSelection(nodeIds) {
-  const selectedIds = new Set(nodeIds);
-  for (const el of nodesEl.querySelectorAll("[data-node-id]")) {
-    el.classList.toggle("selected", selectedIds.has(el.dataset.nodeId));
-  }
-}
-
-function mergeNodeSelection(baseIds, addedIds) {
-  return [...new Set([...(baseIds ?? []), ...(addedIds ?? [])])].filter(Boolean);
-}
-
-function getNodeIdsInClientRect(selectionRect) {
-  return Array.from(nodesEl.querySelectorAll("[data-node-id]"))
-    .filter((nodeEl) => rectsIntersect(selectionRect, nodeEl.getBoundingClientRect()))
-    .map((nodeEl) => nodeEl.dataset.nodeId)
-    .filter(Boolean);
-}
-
-function getMarqueeLocalRect(start, current) {
-  const editorRect = editorEl.getBoundingClientRect();
-  const clientRect = getMarqueeClientRect(start, current);
-  const left = clamp(clientRect.left - editorRect.left, 0, editorRect.width);
-  const top = clamp(clientRect.top - editorRect.top, 0, editorRect.height);
-  const right = clamp(clientRect.right - editorRect.left, 0, editorRect.width);
-  const bottom = clamp(clientRect.bottom - editorRect.top, 0, editorRect.height);
-  return {
-    left,
-    top,
-    width: Math.max(0, right - left),
-    height: Math.max(0, bottom - top),
-  };
-}
-
-function getMarqueeClientRect(start, current) {
-  const left = Math.min(start.x, current.x);
-  const top = Math.min(start.y, current.y);
-  const right = Math.max(start.x, current.x);
-  const bottom = Math.max(start.y, current.y);
-  return {
-    left,
-    top,
-    right,
-    bottom,
-    width: right - left,
-    height: bottom - top,
-  };
 }
 
 function onGraphPointerDown(e) {
