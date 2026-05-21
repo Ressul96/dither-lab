@@ -11,9 +11,7 @@ import {
   getSelectedNodeIds,
   getSoloNodeId,
   getValueNodeOutputBounds,
-  insertExistingNodeOnEdge,
   insertNodeOnEdge,
-  mutateNodePosition,
   removeEdgesById,
   replacePaletteUsages,
   resolveGraphParentId,
@@ -109,6 +107,10 @@ import {
   startSocketDrag,
 } from "./graph-socket-drag.js";
 import {
+  initGraphNodeDrag,
+  startNodeDrag,
+} from "./graph-node-drag.js";
+import {
   EDGE_CUT_RADIUS,
   GRAPH_GRID_STEP,
   GRAPH_MARQUEE_THRESHOLD,
@@ -176,6 +178,17 @@ export function initGraphShell() {
   initGraphActions({ editorEl });
   initGraphEdgeInsertTargets({ edgesEl });
   initGraphSocketDrag({ edgesEl, nodesEl, clientToScene });
+  initGraphNodeDrag({
+    nodesEl,
+    clearInsertHighlight,
+    cssEscape,
+    findInsertTargetForNodeAt,
+    getCurrentGraphParentId,
+    renderEdges,
+    renderInspector,
+    selectNodesWithoutDispatch,
+    setInsertHighlight,
+  });
 
   nodesEl.addEventListener("click", onNodeClick);
   nodesEl.addEventListener("dblclick", onNodeDoubleClick);
@@ -666,106 +679,6 @@ function cancelGraphNodeRename(input) {
   graphRenameNodeId = null;
   renderGraph();
   return true;
-}
-
-function startNodeDrag(e, nodeEl) {
-  const nodeId = nodeEl.dataset.nodeId;
-  const node = getNodeById(nodeId);
-  if (!node) return;
-
-  e.preventDefault();
-  // Lock pointer to this node so the browser cannot start its own drag (e.g. button
-  // native dragstart, focus-driven cancel) before we cross the move threshold.
-  try {
-    nodeEl.setPointerCapture(e.pointerId);
-  } catch (_) {}
-
-  const originX = e.clientX;
-  const originY = e.clientY;
-  const startZoom = getState().graphView.zoom || 1;
-  const selectedAtStart = getSelectedNodeIds();
-  const dragNodeIds = selectedAtStart.includes(nodeId) && selectedAtStart.length > 1
-    ? selectedAtStart.filter((id) => getNodeById(id) && getNodeParentId(getNodeById(id)) === getCurrentGraphParentId())
-    : [nodeId];
-  const startPositions = new Map(
-    dragNodeIds
-      .map((id) => getNodeById(id))
-      .filter(Boolean)
-      .map((item) => [item.id, { x: item.x, y: item.y }])
-  );
-  let moved = false;
-  let liveEl = nodeEl;
-  let edgeRenderQueued = false;
-  document.body.classList.add("dragging-node");
-
-  const scheduleEdgeRender = () => {
-    if (edgeRenderQueued) return;
-    edgeRenderQueued = true;
-    requestAnimationFrame(() => {
-      edgeRenderQueued = false;
-      renderEdges();
-    });
-  };
-
-  const onMove = (ev) => {
-    const dx = ev.clientX - originX;
-    const dy = ev.clientY - originY;
-    if (!moved && Math.hypot(dx, dy) < 3) return;
-    if (!moved) {
-      moved = true;
-      selectNodesWithoutDispatch(dragNodeIds, nodeId);
-    }
-    for (const id of dragNodeIds) {
-      const start = startPositions.get(id);
-      if (!start) continue;
-      const nextX = start.x + dx / startZoom;
-      const nextY = start.y + dy / startZoom;
-      mutateNodePosition(id, nextX, nextY);
-      const itemEl = nodesEl.querySelector(`[data-node-id="${cssEscape(id)}"]`);
-      if (itemEl) {
-        itemEl.style.left = `${toSceneX(nextX)}px`;
-        itemEl.style.top = `${toSceneY(nextY)}px`;
-      }
-    }
-    if (!liveEl.isConnected) {
-      liveEl = nodesEl.querySelector(`[data-node-id="${cssEscape(nodeId)}"]`) || liveEl;
-    }
-    const edge = dragNodeIds.length === 1 ? findInsertTargetForNodeAt(nodeId, ev.clientX, ev.clientY) : null;
-    setInsertHighlight(edge?.edgeId ?? "");
-    scheduleEdgeRender();
-  };
-
-  const onUp = (ev) => {
-    document.removeEventListener("pointermove", onMove);
-    document.removeEventListener("pointerup", onUp);
-    document.removeEventListener("pointercancel", onUp);
-    try {
-      if (nodeEl.hasPointerCapture?.(e.pointerId)) {
-        nodeEl.releasePointerCapture(e.pointerId);
-      }
-    } catch (_) {}
-    document.body.classList.remove("dragging-node");
-    if (!moved) {
-      clearInsertHighlight();
-    } else {
-      const edge = dragNodeIds.length === 1 ? findInsertTargetForNodeAt(nodeId, ev.clientX, ev.clientY) : null;
-      clearInsertHighlight();
-      if (edge?.edgeId && insertExistingNodeOnEdge(nodeId, edge.edgeId)) {
-        return;
-      }
-
-      for (const id of dragNodeIds) {
-        nodesEl.querySelector(`[data-node-id="${cssEscape(id)}"]`)?.classList.add("selected");
-      }
-      selectNodesWithoutDispatch(dragNodeIds, nodeId);
-      renderInspector();
-      renderEdges();
-    }
-  };
-
-  document.addEventListener("pointermove", onMove);
-  document.addEventListener("pointerup", onUp);
-  document.addEventListener("pointercancel", onUp);
 }
 
 function selectNodesWithoutDispatch(nodeIds, primaryNodeId = null) {
