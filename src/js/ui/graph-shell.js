@@ -3,7 +3,6 @@ import {
   MESH_GRADIENT_MAX_STOPS,
   ROOT_PARENT_ID,
   createFreeNode,
-  duplicateNodes,
   ensureBootGraph,
   getNodeById,
   getNodeDefinition,
@@ -12,19 +11,15 @@ import {
   getSelectedNodeIds,
   getSoloNodeId,
   getValueNodeOutputBounds,
-  groupSelectedNodes,
   insertExistingNodeOnEdge,
   insertNodeOnEdge,
   mutateNodePosition,
   removeEdgesById,
-  removeNode,
   replacePaletteUsages,
   resolveGraphParentId,
   selectNode,
-  selectNodes,
   toggleParamExposed,
   toggleNodeBypass,
-  toggleNodeSolo,
   ungroupNode,
   updateNodeLayerProperties,
   updateNodeLabel,
@@ -80,6 +75,18 @@ import {
   setCurrentGraphParent,
   syncGraphBreadcrumb,
 } from "./graph-breadcrumb.js";
+import {
+  clearGraphSelection,
+  duplicateSelectedGraphNodes,
+  frameSelectedGraphNodes,
+  groupCurrentSelection,
+  initGraphActions,
+  removeSelectedGraphNodes,
+  selectAllVisibleGraphNodes,
+  toggleBypassForSelectedNodes,
+  toggleSoloForSelectedNode,
+  ungroupCurrentSelection,
+} from "./graph-actions.js";
 import { initGraphContextMenu } from "./graph-context-menu.js";
 import {
   initGraphKeyboard,
@@ -111,7 +118,6 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
   computeChildrenBbox,
-  getGraphNodesBounds,
   getNodeRenderHeight,
   getSocketPoint,
   modulo,
@@ -167,6 +173,7 @@ export function initGraphShell() {
 
   if (!nodesEl || !edgesEl || !editorEl || !inspectorEl) return;
 
+  initGraphActions({ editorEl });
   initGraphEdgeInsertTargets({ edgesEl });
   initGraphSocketDrag({ edgesEl, nodesEl, clientToScene });
 
@@ -627,82 +634,6 @@ function onGraphPointerDown(e) {
   }
 }
 
-function duplicateSelectedGraphNodes() {
-  const selectedIds = getSelectedNodeIds();
-  if (selectedIds.length === 0) return false;
-  return duplicateNodes(selectedIds).length > 0;
-}
-
-function toggleBypassForSelectedNodes() {
-  const ids = getSelectedNodeIds().filter((nodeId) => canBypassGraphNode(getNodeById(nodeId)));
-  let changed = false;
-  for (const id of ids) {
-    changed = toggleNodeBypass(id) || changed;
-  }
-  return changed;
-}
-
-function removeSelectedGraphNodes() {
-  const ids = getSelectedNodeIds();
-  let removed = false;
-  for (const id of ids) {
-    removed = removeNode(id) || removed;
-  }
-  return removed;
-}
-
-function selectAllVisibleGraphNodes() {
-  const { graph } = getState();
-  const ids = getVisibleGraphNodes(graph).map((node) => node.id);
-  if (ids.length === 0) return false;
-  selectNodes(ids, ids.at(-1));
-  return true;
-}
-
-function clearGraphSelection() {
-  if (getSelectedNodeIds().length === 0) return false;
-  selectNodes([]);
-  return true;
-}
-
-function frameSelectedGraphNodes() {
-  const { graph } = getState();
-  const visibleNodeIds = getVisibleGraphNodeIds(graph);
-  const nodes = getSelectedNodeIds(graph)
-    .filter((nodeId) => visibleNodeIds.has(nodeId))
-    .map((nodeId) => getNodeById(nodeId, graph))
-    .filter(Boolean);
-  if (nodes.length === 0) return false;
-
-  const rect = editorEl.getBoundingClientRect();
-  if (!rect.width || !rect.height) return false;
-
-  const bounds = getGraphNodesBounds(nodes);
-  const contentWidth = Math.max(1, bounds.maxX - bounds.minX);
-  const contentHeight = Math.max(1, bounds.maxY - bounds.minY);
-  const padding = Math.min(GRAPH_VIEW_PADDING, Math.max(48, Math.min(rect.width, rect.height) * 0.18));
-  const zoom = clamp(
-    Math.min((rect.width - padding * 2) / contentWidth, (rect.height - padding * 2) / contentHeight),
-    0.35,
-    1.65
-  );
-  const centerX = (bounds.minX + bounds.maxX) / 2;
-  const centerY = (bounds.minY + bounds.maxY) / 2;
-
-  dispatch("graphView", {
-    zoom,
-    panX: rect.width / 2 - toSceneX(centerX) * zoom,
-    panY: rect.height / 2 - toSceneY(centerY) * zoom,
-  });
-  return true;
-}
-
-function toggleSoloForSelectedNode() {
-  const nodeId = getState().graph.selectedNodeId ?? getSelectedNodeIds().at(-1);
-  if (!nodeId) return false;
-  return toggleNodeSolo(nodeId);
-}
-
 function startRenamingSelectedNode() {
   const nodeId = getState().graph.selectedNodeId ?? getSelectedNodeIds().at(-1);
   const node = getNodeById(nodeId);
@@ -735,22 +666,6 @@ function cancelGraphNodeRename(input) {
   graphRenameNodeId = null;
   renderGraph();
   return true;
-}
-
-function groupCurrentSelection() {
-  const groupId = groupSelectedNodes();
-  if (!groupId) return false;
-  return true;
-}
-
-function ungroupCurrentSelection() {
-  const { graph, graphView } = getState();
-  const selected = getSelectedNode(graph);
-  if (selected?.type === "group") {
-    return ungroupNode(selected.id);
-  }
-  const currentParent = resolveGraphParentId(graph, graphView.currentParentId);
-  return currentParent !== ROOT_PARENT_ID ? ungroupNode(currentParent) : false;
 }
 
 function startNodeDrag(e, nodeEl) {
