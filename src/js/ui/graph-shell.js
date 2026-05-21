@@ -77,25 +77,30 @@ import {
   sanitizeCurvePoints,
 } from "../curve-lut.js";
 import { escapeHtml } from "./utils.js";
+import {
+  EDGE_CUT_RADIUS,
+  EDGE_INSERT_FALLBACK_RADIUS,
+  EDGE_INSERT_RADIUS,
+  GRAPH_GRID_STEP,
+  GRAPH_MARQUEE_THRESHOLD,
+  GRAPH_VIEW_PADDING,
+  GRAPH_WORLD_ORIGIN,
+  GRAPH_WORLD_SIZE,
+  NODE_HEIGHT,
+  NODE_WIDTH,
+  SOCKET_HIT_RADIUS,
+  computeChildrenBbox,
+  getGraphNodesBounds,
+  getNodeRenderHeight,
+  getSocketPoint,
+  modulo,
+  rectsIntersect,
+  segmentDistance,
+  segmentsIntersect,
+  toSceneX,
+  toSceneY,
+} from "./graph-geometry.js";
 
-const NODE_WIDTH = 220;
-const NODE_HEIGHT = 108;
-const SOCKET_Y = 58;
-const SOCKET_STEP = 28;
-const GRAPH_WORLD_SIZE = 16000;
-const GRAPH_WORLD_ORIGIN = GRAPH_WORLD_SIZE / 2;
-const GRAPH_GRID_STEP = 24;
-const SOCKET_HIT_RADIUS = 28;
-// Generous radius around an edge counts as a drop-on-edge target. The user
-// rarely lands the ghost preview exactly on the SVG path, so a wide tolerance
-// trades a tiny bit of "free placement" precision for the much more useful
-// "drop here, snap into the chain" behaviour. The fallback radius is even
-// wider and is only consulted when the precise path-distance check fails.
-const EDGE_INSERT_RADIUS = 140;
-const EDGE_INSERT_FALLBACK_RADIUS = 240;
-const GRAPH_VIEW_PADDING = 120;
-const EDGE_CUT_RADIUS = 10;
-const GRAPH_MARQUEE_THRESHOLD = 4;
 const CURVE_CANVAS_SIZE = 240;
 const CURVE_HANDLE_RADIUS = 6;
 const CURVE_CHANNELS = ["master", "red", "green", "blue"];
@@ -688,34 +693,6 @@ function edgeCrossesStroke(path, strokeScenePoints) {
   return false;
 }
 
-function segmentsIntersect(a, b, c, d) {
-  const denom = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
-  if (denom === 0) return false;
-  const t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / denom;
-  const u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / denom;
-  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
-}
-
-function segmentDistance(a, b, c, d) {
-  return Math.min(
-    pointToSegmentDistance(a, c, d),
-    pointToSegmentDistance(b, c, d),
-    pointToSegmentDistance(c, a, b),
-    pointToSegmentDistance(d, a, b)
-  );
-}
-
-function pointToSegmentDistance(point, a, b) {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const lengthSq = dx * dx + dy * dy;
-  if (lengthSq <= 0) return Math.hypot(point.x - a.x, point.y - a.y);
-  const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq, 0, 1);
-  const x = a.x + dx * t;
-  const y = a.y + dy * t;
-  return Math.hypot(point.x - x, point.y - y);
-}
-
 function zoomGraphAtPointer(e) {
   const { graphView } = getState();
   const point = clientToWorld(e.clientX, e.clientY);
@@ -896,10 +873,6 @@ function getMarqueeClientRect(start, current) {
     width: right - left,
     height: bottom - top,
   };
-}
-
-function rectsIntersect(a, b) {
-  return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top;
 }
 
 function onGraphPointerDown(e) {
@@ -1195,22 +1168,6 @@ function cancelGraphNodeRename(input) {
   graphRenameNodeId = null;
   renderGraph();
   return true;
-}
-
-function getGraphNodesBounds(nodes) {
-  return nodes.reduce(
-    (acc, node) => ({
-      minX: Math.min(acc.minX, node.x),
-      maxX: Math.max(acc.maxX, node.x + NODE_WIDTH),
-      minY: Math.min(acc.minY, node.y),
-      maxY: Math.max(acc.maxY, node.y + getNodeRenderHeight(node)),
-    }),
-    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
-  );
-}
-
-function getNodeRenderHeight(node) {
-  return Math.max(NODE_HEIGHT, node.outputs?.length * SOCKET_STEP + SOCKET_Y + 26);
 }
 
 function groupCurrentSelection() {
@@ -2357,29 +2314,6 @@ function renderGroupProxies(graph, parentId, visibleNodes) {
     renderGroupProxy("input", inputX, y, inputBindings, graph),
     renderGroupProxy("output", outputX, y, outputBindings, graph),
   ].join("");
-}
-
-function computeChildrenBbox(nodes) {
-  if (!nodes?.length) {
-    return {
-      minX: GRAPH_WORLD_ORIGIN,
-      maxX: GRAPH_WORLD_ORIGIN + 220,
-      minY: GRAPH_WORLD_ORIGIN,
-      maxY: GRAPH_WORLD_ORIGIN + 120,
-      centerY: GRAPH_WORLD_ORIGIN + 60,
-    };
-  }
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-  for (const node of nodes) {
-    minX = Math.min(minX, node.x);
-    maxX = Math.max(maxX, node.x + 220);
-    minY = Math.min(minY, node.y);
-    maxY = Math.max(maxY, node.y + 120);
-  }
-  return { minX, maxX, minY, maxY, centerY: (minY + maxY) / 2 };
 }
 
 function renderGroupProxy(kind, x, y, bindings, graph) {
@@ -6740,28 +6674,6 @@ function updateInlineReadout(control) {
   control.style.setProperty("--slider-fill", `${pct}%`);
 }
 
-function getSocketPoint(node, kind, socketName) {
-  if (kind === "input" && typeof socketName === "string" && socketName.startsWith("param:")) {
-    const baseRowCount = Math.max(node.inputs.length, node.outputs.length, 1);
-    const exposed = Array.isArray(node.exposedParams) ? node.exposedParams : [];
-    const paramKey = socketName.slice("param:".length);
-    const paramIndex = exposed.indexOf(paramKey);
-    const rowIndex = baseRowCount + Math.max(0, paramIndex);
-    return {
-      x: toSceneX(node.x + 14),
-      y: toSceneY(node.y + SOCKET_Y + rowIndex * SOCKET_STEP),
-    };
-  }
-
-  const sockets = kind === "output" ? node.outputs : node.inputs;
-  const index = Math.max(0, sockets.findIndex((socket) => socket.name === socketName));
-
-  return {
-    x: kind === "output" ? toSceneX(node.x + NODE_WIDTH - 14) : toSceneX(node.x + 14),
-    y: toSceneY(node.y + SOCKET_Y + index * SOCKET_STEP),
-  };
-}
-
 function applyGraphViewport() {
   if (!editorEl || !nodesEl || !edgesEl) return;
 
@@ -7173,21 +7085,8 @@ function getLocalPoint(clientX, clientY) {
   };
 }
 
-function toSceneX(worldX) {
-  return GRAPH_WORLD_ORIGIN + worldX;
-}
-
-function toSceneY(worldY) {
-  return GRAPH_WORLD_ORIGIN + worldY;
-}
-
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
-}
-
-function modulo(value, divisor) {
-  if (!divisor) return 0;
-  return ((value % divisor) + divisor) % divisor;
 }
 
 function formatSignedValue(value) {
