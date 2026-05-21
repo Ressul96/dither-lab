@@ -114,6 +114,11 @@ import {
   initGraphViewportInteractions,
 } from "./graph-viewport.js";
 import {
+  getCurrentGraphParentId,
+  getVisibleGraphNodeIds,
+  getVisibleGraphNodes,
+} from "./graph-view-scope.js";
+import {
   GRAPH_GRID_STEP,
   GRAPH_VIEW_PADDING,
   GRAPH_WORLD_ORIGIN,
@@ -1174,19 +1179,6 @@ function renderEdges(parentId = getCurrentGraphParentId()) {
     .map((edge) => renderEdge(edge, graph))
     .join("");
   syncInsertHighlight();
-}
-
-function getCurrentGraphParentId() {
-  const { graph, graphView } = getState();
-  return resolveGraphParentId(graph, graphView.currentParentId);
-}
-
-function getVisibleGraphNodes(graph, parentId = getCurrentGraphParentId()) {
-  return graph.nodes.filter((node) => getNodeParentId(node) === parentId);
-}
-
-function getVisibleGraphNodeIds(graph, parentId = getCurrentGraphParentId()) {
-  return new Set(getVisibleGraphNodes(graph, parentId).map((node) => node.id));
 }
 
 function renderNode(node, selectedNodeIds, soloNodeId = null) {

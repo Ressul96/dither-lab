@@ -5,6 +5,7 @@ import {
   getNodeParentId,
   resolveGraphParentId,
 } from "../graph.js";
+import { getCurrentGraphParentId } from "./graph-view-scope.js";
 import { escapeHtml } from "./utils.js";
 
 let graphBreadcrumbEl = null;
@@ -69,9 +70,4 @@ function getGraphBreadcrumbChain(parentId = getCurrentGraphParentId()) {
   }
 
   return chain.concat(groups);
-}
-
-function getCurrentGraphParentId() {
-  const { graph, graphView } = getState();
-  return resolveGraphParentId(graph, graphView.currentParentId);
 }

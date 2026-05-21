@@ -3,7 +3,6 @@ import {
   ROOT_PARENT_ID,
   duplicateNodes,
   getNodeById,
-  getNodeParentId,
   getSelectedNode,
   getSelectedNodeIds,
   groupSelectedNodes,
@@ -20,6 +19,11 @@ import {
   toSceneX,
   toSceneY,
 } from "./graph-geometry.js";
+import {
+  getCurrentGraphParentId,
+  getVisibleGraphNodeIds,
+  getVisibleGraphNodes,
+} from "./graph-view-scope.js";
 
 let editorEl = null;
 
@@ -121,19 +125,6 @@ export function ungroupCurrentSelection() {
 
 function canBypassGraphNode(node) {
   return Boolean(node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
-}
-
-function getCurrentGraphParentId() {
-  const { graph, graphView } = getState();
-  return resolveGraphParentId(graph, graphView.currentParentId);
-}
-
-function getVisibleGraphNodes(graph, parentId = getCurrentGraphParentId()) {
-  return graph.nodes.filter((node) => getNodeParentId(node) === parentId);
-}
-
-function getVisibleGraphNodeIds(graph, parentId = getCurrentGraphParentId()) {
-  return new Set(getVisibleGraphNodes(graph, parentId).map((node) => node.id));
 }
 
 function clamp(value, min, max) {
