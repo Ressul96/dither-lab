@@ -134,6 +134,15 @@ import {
   renderGraph,
   renderSocketRows,
 } from "./graph-render.js";
+import {
+  clearPaletteSwatchLocks,
+  getLockedSwatchIndexes,
+  isSwatchLocked,
+  prunePaletteLocks,
+  removeLockedSwatchIndex,
+  syncPaletteLocks,
+  toggleLockedSwatchIndex,
+} from "./palette-swatch-locks.js";
 
 const CURVE_CANVAS_SIZE = 240;
 const CURVE_HANDLE_RADIUS = 6;
@@ -154,7 +163,6 @@ let paletteExtractionSize = 4;
 let colorPickerState = null;
 let gradientRampState = null;
 let graphRenameNodeId = null;
-const paletteSwatchLocks = new Map();
 // F17.1 inspector undo: snapshot a control's pre-drag value the first time
 // `input` fires for it, then turn the whole drag into a single history entry
 // when `change` flushes. Key: "${nodeId}|param|${paramKey}".
@@ -857,7 +865,7 @@ function handlePaletteClick(control) {
       if (isBuiltInPalette(selectedId)) return;
       const fallback = pickFallbackPaletteId(selectedId);
       if (!removePalette(selectedId)) return;
-      paletteSwatchLocks.delete(selectedId);
+      clearPaletteSwatchLocks(selectedId);
       replacePaletteUsages(selectedId, fallback);
       renderInspector();
       break;
@@ -904,7 +912,7 @@ function handlePaletteClick(control) {
         const colors = extractPaletteFromImageData(imageData, { size: paletteExtractionSize });
         if (colors.length === 0) return;
         const extracted = createCustomPalette(`${palette.name} Extracted`, colors);
-        paletteSwatchLocks.delete(extracted.id);
+        clearPaletteSwatchLocks(extracted.id);
         if (node) updateNodeParams(node.id, { palette: extracted.id });
         renderInspector();
         break;
@@ -1007,49 +1015,6 @@ function readCurrentSourceFrame() {
   } catch (error) {
     console.error("[palette-extract] failed to read current source frame", error);
     return null;
-  }
-}
-
-function getLockedSwatchIndexes(paletteId, colorCount) {
-  const locked = paletteSwatchLocks.get(paletteId);
-  if (!locked || locked.size === 0) return [];
-  return [...locked].filter((index) => index >= 0 && index < colorCount).sort((a, b) => a - b);
-}
-
-function isSwatchLocked(paletteId, index, colorCount) {
-  return getLockedSwatchIndexes(paletteId, colorCount).includes(index);
-}
-
-function toggleLockedSwatchIndex(paletteId, index, colorCount) {
-  const next = new Set(getLockedSwatchIndexes(paletteId, colorCount));
-  if (next.has(index)) next.delete(index);
-  else next.add(index);
-  if (next.size === 0) paletteSwatchLocks.delete(paletteId);
-  else paletteSwatchLocks.set(paletteId, next);
-}
-
-function removeLockedSwatchIndex(paletteId, removedIndex, colorCount) {
-  const next = getLockedSwatchIndexes(paletteId, colorCount + 1)
-    .filter((index) => index !== removedIndex)
-    .map((index) => (index > removedIndex ? index - 1 : index));
-  if (next.length === 0) paletteSwatchLocks.delete(paletteId);
-  else paletteSwatchLocks.set(paletteId, new Set(next));
-}
-
-function syncPaletteLocks(paletteId, colorCount) {
-  const next = getLockedSwatchIndexes(paletteId, colorCount);
-  if (next.length === 0) paletteSwatchLocks.delete(paletteId);
-  else paletteSwatchLocks.set(paletteId, new Set(next));
-}
-
-function prunePaletteLocks() {
-  for (const palette of listCustomPalettes()) {
-    syncPaletteLocks(palette.id, palette.colors.length);
-  }
-  for (const paletteId of [...paletteSwatchLocks.keys()]) {
-    if (!getPalette(paletteId) || isBuiltInPalette(paletteId)) {
-      paletteSwatchLocks.delete(paletteId);
-    }
   }
 }
 
