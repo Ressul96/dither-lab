@@ -1,4 +1,4 @@
-import { DEFAULT_GRAPH_VIEW, dispatch, getState, pushHistory, subscribe } from "../state.js";
+import { dispatch, getState, pushHistory, subscribe } from "../state.js";
 import {
   MESH_GRADIENT_MAX_STOPS,
   ROOT_PARENT_ID,
@@ -119,9 +119,16 @@ import {
   getVisibleGraphNodes,
 } from "./graph-view-scope.js";
 import {
-  GRAPH_GRID_STEP,
-  GRAPH_VIEW_PADDING,
-  GRAPH_WORLD_ORIGIN,
+  applyGraphViewport,
+  clientToScene,
+  clientToWorld,
+  getLocalPoint,
+  getViewportCenterWorld,
+  initGraphViewTransform,
+  maybeAutoCenterGraph,
+  syncGraphAutoCenterReset,
+} from "./graph-view-transform.js";
+import {
   GRAPH_WORLD_SIZE,
   NODE_HEIGHT,
   NODE_WIDTH,
@@ -151,7 +158,6 @@ let renderedInspectorNodeId = null;
 let inspectorEditing = false;
 let paletteExtractionSize = 4;
 let renderedGraphParentId = "";
-let graphAutoCentered = false;
 let colorPickerState = null;
 let gradientRampState = null;
 let graphRenameNodeId = null;
@@ -177,6 +183,7 @@ export function initGraphShell() {
 
   if (!nodesEl || !edgesEl || !editorEl || !inspectorEl) return;
 
+  initGraphViewTransform({ editorEl, nodesEl, edgesEl });
   initGraphActions({ editorEl });
   initGraphEdgeInsertTargets({ edgesEl });
   initGraphEdgeCut({ edgesEl, editorEl, clientToScene });
@@ -266,14 +273,7 @@ export function initGraphShell() {
   listenWithDispose(window, "resize", applyGraphViewport);
 
   subscribe("graph", () => {
-    const { graphView } = getState();
-    if (
-      graphView.zoom === DEFAULT_GRAPH_VIEW.zoom &&
-      graphView.panX === DEFAULT_GRAPH_VIEW.panX &&
-      graphView.panY === DEFAULT_GRAPH_VIEW.panY
-    ) {
-      graphAutoCentered = false;
-    }
+    syncGraphAutoCenterReset();
     // Skip the full graph DOM rebuild while an inspector drag is live. The
     // node cards' visible content (label, position, selection, edges) does
     // not depend on the params being edited mid-drag, so rebuilding 220px-
@@ -5476,39 +5476,6 @@ function updateInlineReadout(control) {
   control.style.setProperty("--slider-fill", `${pct}%`);
 }
 
-function applyGraphViewport() {
-  if (!editorEl || !nodesEl || !edgesEl) return;
-
-  const { graphView } = getState();
-  const transform = `translate(${graphView.panX}px, ${graphView.panY}px) scale(${graphView.zoom})`;
-  nodesEl.style.transform = transform;
-  edgesEl.style.transform = transform;
-  edgesEl.style.transformOrigin = "0 0";
-  nodesEl.style.transformOrigin = "0 0";
-
-  const gridSize = GRAPH_GRID_STEP * graphView.zoom;
-  const offsetX = modulo(graphView.panX + GRAPH_WORLD_ORIGIN * graphView.zoom, gridSize);
-  const offsetY = modulo(graphView.panY + GRAPH_WORLD_ORIGIN * graphView.zoom, gridSize);
-  editorEl.style.setProperty("--graph-grid-size", String(gridSize));
-  editorEl.style.setProperty("--graph-grid-offset-x", String(offsetX));
-  editorEl.style.setProperty("--graph-grid-offset-y", String(offsetY));
-  editorEl.style.setProperty("--graph-zoom", String(graphView.zoom));
-}
-
-function clientToWorld(clientX, clientY) {
-  const { graphView } = getState();
-  const local = getLocalPoint(clientX, clientY);
-  return {
-    x: local.x / graphView.zoom - graphView.panX / graphView.zoom - GRAPH_WORLD_ORIGIN,
-    y: local.y / graphView.zoom - graphView.panY / graphView.zoom - GRAPH_WORLD_ORIGIN,
-  };
-}
-
-function getViewportCenterWorld() {
-  const rect = editorEl.getBoundingClientRect();
-  return clientToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
-}
-
 function insertPaletteNodeAtDefault(type) {
   const definition = getNodeDefinition(type);
   const viewerEdgeId = getViewerInputEdgeId();
@@ -5546,65 +5513,6 @@ function getViewerInputEdgeId() {
 
 function canBypassGraphNode(node) {
   return Boolean(node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group");
-}
-
-function maybeAutoCenterGraph() {
-  if (graphAutoCentered || !editorEl) return;
-  const { graph, graphView } = getState();
-  if (
-    graphView.zoom !== DEFAULT_GRAPH_VIEW.zoom ||
-    graphView.panX !== DEFAULT_GRAPH_VIEW.panX ||
-    graphView.panY !== DEFAULT_GRAPH_VIEW.panY
-  ) {
-    return;
-  }
-
-  const rect = editorEl.getBoundingClientRect();
-  const visibleNodes = getVisibleGraphNodes(graph);
-  if (!rect.width || !rect.height || visibleNodes.length === 0) return;
-
-  const bounds = visibleNodes.reduce(
-    (acc, node) => ({
-      minX: Math.min(acc.minX, node.x),
-      maxX: Math.max(acc.maxX, node.x + NODE_WIDTH),
-      minY: Math.min(acc.minY, node.y),
-      maxY: Math.max(acc.maxY, node.y + NODE_HEIGHT),
-    }),
-    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
-  );
-
-  const contentWidth = Math.max(1, bounds.maxX - bounds.minX);
-  const contentHeight = Math.max(1, bounds.maxY - bounds.minY);
-  const fitZoom = Math.min(
-    (rect.width - GRAPH_VIEW_PADDING * 2) / contentWidth,
-    (rect.height - GRAPH_VIEW_PADDING * 2) / contentHeight
-  );
-  const zoom = clamp(Math.min(0.92, fitZoom), 0.45, 1.2);
-  const centerX = (bounds.minX + bounds.maxX) / 2;
-  const centerY = (bounds.minY + bounds.maxY) / 2;
-
-  graphAutoCentered = true;
-  dispatch("graphView", {
-    zoom,
-    panX: rect.width / 2 - toSceneX(centerX) * zoom,
-    panY: rect.height / 2 - toSceneY(centerY) * zoom,
-  });
-}
-
-function clientToScene(clientX, clientY) {
-  const point = clientToWorld(clientX, clientY);
-  return {
-    x: toSceneX(point.x),
-    y: toSceneY(point.y),
-  };
-}
-
-function getLocalPoint(clientX, clientY) {
-  const rect = editorEl.getBoundingClientRect();
-  return {
-    x: clientX - rect.left,
-    y: clientY - rect.top,
-  };
 }
 
 function clamp(value, min, max) {
