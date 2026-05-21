@@ -152,12 +152,29 @@ import {
   syncTimelineButtons,
 } from "./graph-inspector-fields.js";
 import {
-  hexToHsvColor,
   hexToRgb255,
-  hsvColorToHex,
   normalizeHexOrNull,
   rgbChannelsToHex,
 } from "./graph-color-math.js";
+import {
+  applyColorPickerHex,
+  closeColorPicker,
+  commitColorPickerValue,
+  handleColorPickerEyedropper,
+  initColorPicker,
+  isAnyColorPickerOpen,
+  popPickerHexSnapshot,
+  readColorPickerCurrentHex,
+  readPickerValueFromState,
+  renderColorField,
+  renderColorPickerControl,
+  renderGradientStopColorField,
+  resolveColorPickerTarget,
+  snapshotPickerHexIfNew,
+  startColorPickerDrag,
+  syncColorPickerElements,
+  toggleColorPicker,
+} from "./graph-color-picker.js";
 
 const CURVE_CANVAS_SIZE = 240;
 const CURVE_HANDLE_RADIUS = 6;
@@ -175,17 +192,16 @@ let resizeObserver;
 let renderedInspectorNodeId = null;
 let inspectorEditing = false;
 let paletteExtractionSize = 4;
-let colorPickerState = null;
 let gradientRampState = null;
 let graphRenameNodeId = null;
 // F17.1 inspector undo: snapshot a control's pre-drag value the first time
 // `input` fires for it, then turn the whole drag into a single history entry
 // when `change` flushes. Key: "${nodeId}|param|${paramKey}".
 const inspectorParamSnapshots = new Map();
-// F17.3b/c picker hex input + eyedropper undo. Keyed by colorPickerState's
-// targetId so a session of mid-typing inputs flushes a single entry once
-// `change` fires on blur / Enter.
-const pickerHexSnapshots = new Map();
+
+function setInspectorEditingFlag(value) {
+  inspectorEditing = Boolean(value);
+}
 
 export function initGraphShell() {
   ensureBootGraph();
@@ -205,6 +221,16 @@ export function initGraphShell() {
     getGraphRenameNodeId: () => graphRenameNodeId,
   });
   initInspectorFields({ inspectorEl });
+  initColorPicker({
+    inspectorEl,
+    cssEscape,
+    renderInspector,
+    setInspectorEditing: setInspectorEditingFlag,
+    commitNodeColorParam,
+    commitGradientStopColor: commitGradientStopColorTarget,
+    commitMeshStopColor: commitMeshStopColorTarget,
+    syncGradientRampElements,
+  });
   initGraphViewTransform({ editorEl, nodesEl, edgesEl });
   initGraphActions({ editorEl });
   initGraphEdgeInsertTargets({ edgesEl });
@@ -490,8 +516,8 @@ function onInspectorInput(event) {
     // Pull from node state rather than the DOM input — by the time `input`
     // fires, input.value already holds the in-progress value.
     const pickerTarget = resolveColorPickerTarget(pickerHexInput);
-    if (pickerTarget && !pickerHexSnapshots.has(pickerTarget.targetId)) {
-      pickerHexSnapshots.set(pickerTarget.targetId, readPickerValueFromState(pickerTarget));
+    if (pickerTarget) {
+      snapshotPickerHexIfNew(pickerTarget.targetId, readPickerValueFromState(pickerTarget));
     }
     const nextHex = normalizeHexOrNull(pickerHexInput.value);
     pickerHexInput.classList.toggle("is-invalid", !nextHex);
@@ -645,11 +671,10 @@ function onInspectorChange(event) {
     }
     // F17.3c flush: turn the typing session into a single undo entry. Read
     // the final from state so it matches the snapshot's source of truth.
-    if (target && pickerHexSnapshots.has(target.targetId)) {
-      const oldHex = pickerHexSnapshots.get(target.targetId);
-      pickerHexSnapshots.delete(target.targetId);
+    const oldHex = popPickerHexSnapshot(target?.targetId);
+    if (oldHex !== null) {
       const finalHex = readPickerValueFromState(target);
-      if (oldHex && finalHex && oldHex !== finalHex) {
+      if (finalHex && oldHex !== finalHex) {
         pushHistory({
           undo: () => applyColorPickerHex(target, oldHex),
           redo: () => applyColorPickerHex(target, finalHex),
@@ -2549,8 +2574,8 @@ function startXyPadInteraction(event, pad) {
 }
 
 function onInspectorKeyDown(event) {
-  if (event.key === "Escape" && colorPickerState) {
-    colorPickerState = null;
+  if (event.key === "Escape" && isAnyColorPickerOpen()) {
+    closeColorPicker();
     inspectorEditing = false;
     renderInspector();
     return;
@@ -2808,7 +2833,7 @@ function handleGradientRampKeyDown(event, stop) {
   const direction = event.key === "ArrowLeft" ? -1 : 1;
   const step = event.shiftKey ? 0.05 : 0.01;
   gradientRampState = { targetId: target.targetId, selectedIndex: index };
-  colorPickerState = null;
+  closeColorPicker();
   commitGradientRampStopPosition(target, index, stops[index].pos + direction * step);
   renderInspector();
   return true;
@@ -2824,7 +2849,7 @@ function startGradientRampStopDrag(event, stop) {
   if (!Number.isFinite(index) || index < 0 || index >= stops.length) return;
 
   gradientRampState = { targetId: target.targetId, selectedIndex: index };
-  colorPickerState = null;
+  closeColorPicker();
   if (index === 0 || index === stops.length - 1) return;
 
   event.preventDefault();
@@ -2918,7 +2943,7 @@ function selectGradientRampStop(target, index, options = {}) {
   const stops = readGradientRampStops(target);
   const selectedIndex = Math.max(0, Math.min(Math.max(0, stops.length - 1), Math.round(index)));
   gradientRampState = { targetId: target.targetId, selectedIndex };
-  colorPickerState = null;
+  closeColorPicker();
   if (options.render === false) return;
   renderInspector();
 }
@@ -2935,7 +2960,7 @@ function addGradientRampStop(target, position) {
   const nextStops = normalizeGradientRampEditableStops([...stops, { pos, color }]);
   const selectedIndex = findClosestGradientRampStopIndex(nextStops, pos, color);
   gradientRampState = { targetId: target.targetId, selectedIndex };
-  colorPickerState = null;
+  closeColorPicker();
   commitGradientRampStops(node.id, target.paramKey, nextStops);
   pushGradientRampUndoEntry(target, stopsBefore);
   renderInspector();
@@ -2952,7 +2977,7 @@ function removeSelectedGradientRampStop(target) {
   const nextStops = stops.filter((_, index) => index !== selectedIndex);
   const nextSelectedIndex = Math.max(0, selectedIndex - 1);
   gradientRampState = { targetId: target.targetId, selectedIndex: nextSelectedIndex };
-  colorPickerState = null;
+  closeColorPicker();
   commitGradientRampStops(node.id, target.paramKey, nextStops);
   pushGradientRampUndoEntry(target, stopsBefore);
   renderInspector();
@@ -4307,59 +4332,6 @@ function formatXyPadNumber(value) {
   return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/\.?0+$/, "");
 }
 
-function renderColorField(label, key, value, options = {}) {
-  const safeKey = escapeHtml(key);
-  const fallback = options.fallback ?? "#000000";
-  const hex = normalizeHex(value, fallback);
-  return `
-    <div class="field color-field">
-      <label>
-        <span class="field-label-row">
-          ${renderParamSocketDot(safeKey)}
-          ${renderParamKeyframeButton(key)}
-          <span class="field-label-text">${escapeHtml(label)}</span>
-        </span>
-      </label>
-      ${renderColorPickerControl({
-        label,
-        value: hex,
-        fallback,
-        target: { kind: "node-param", paramKey: key },
-        inputAttrs: `data-node-param="${safeKey}" data-input-kind="color-hex"`,
-      })}
-    </div>
-  `;
-}
-
-function renderGradientStopColorField(label, stopIndex, value, options = {}) {
-  const safeIndex = String(Math.max(0, Number(stopIndex) || 0));
-  const fallback = options.fallback ?? "#000000";
-  const hex = normalizeHex(value, fallback);
-  const stopParamAttr = options.paramKey
-    ? ` data-gradient-stop-param="${escapeHtml(options.paramKey)}"`
-    : "";
-  return `
-    <div class="field color-field">
-      <label>
-        <span class="field-label-row">
-          <span class="field-label-text">${escapeHtml(label)}</span>
-        </span>
-      </label>
-      ${renderColorPickerControl({
-        label,
-        value: hex,
-        fallback,
-        target: {
-          kind: "gradient-stop",
-          stopIndex: safeIndex,
-          paramKey: options.paramKey || "stops",
-        },
-        inputAttrs: `data-gradient-map-stop-color="${safeIndex}" ${stopParamAttr} data-input-kind="gradient-stop-hex"`,
-      })}
-    </div>
-  `;
-}
-
 function renderGradientRampField(label, paramKey, value, options = {}) {
   const node = getSelectedNode();
   const safeKey = escapeHtml(paramKey);
@@ -4443,268 +4415,11 @@ function renderGradientRampStop(stop, index, selectedIndex) {
   `;
 }
 
-function renderColorPickerControl({ label, value, fallback, target, inputAttrs }) {
-  const hex = normalizeHex(value, fallback ?? "#000000");
-  const targetId = colorPickerTargetId(target);
-  const open = colorPickerState?.targetId === targetId;
-  const attrs = renderColorPickerTargetAttrs(target, targetId, fallback ?? "#000000");
-  return `
-    <div class="color-row color-picker-root" ${attrs}>
-      <button
-        type="button"
-        class="color-picker-trigger"
-        data-color-picker-trigger
-        aria-label="${escapeHtml(label)} color"
-        aria-expanded="${open ? "true" : "false"}"
-      >
-        <span class="color-picker-trigger-swatch" style="background:${escapeHtml(hex)}"></span>
-        <span class="color-picker-trigger-value">${escapeHtml(hex.toUpperCase())}</span>
-      </button>
-      <input
-        type="text"
-        class="color-hex"
-        value="${escapeHtml(hex)}"
-        ${inputAttrs}
-        maxlength="7"
-        spellcheck="false"
-        autocomplete="off"
-        autocapitalize="off"
-      />
-      ${open ? renderColorPickerPopover(hex, target, fallback ?? "#000000") : ""}
-    </div>
-  `;
-}
-
-function renderColorPickerPopover(hex, target, fallback = "#000000") {
-  const safeHex = normalizeHex(hex, fallback);
-  const hsv = hexToHsvColor(safeHex);
-  const hueColor = hsvColorToHex({ h: hsv.h, s: 1, v: 1 });
-  const targetId = colorPickerTargetId(target);
-  return `
-    <div class="color-picker-popover" data-color-picker-popover data-color-current="${escapeHtml(safeHex)}" data-color-picker-target-id="${escapeHtml(targetId)}" style="--color-picker-hue:${escapeHtml(hueColor)}; --color-picker-s:${hsv.s * 100}%; --color-picker-v:${(1 - hsv.v) * 100}%; --color-picker-h:${(hsv.h / 360) * 100}%">
-      <div class="color-picker-surface" data-color-picker-surface>
-        <span class="color-picker-surface-white"></span>
-        <span class="color-picker-surface-black"></span>
-        <span class="color-picker-surface-handle"></span>
-      </div>
-      <div class="color-picker-hue" data-color-picker-hue>
-        <span class="color-picker-hue-handle"></span>
-      </div>
-      <div class="color-picker-popover-row">
-        <input
-          type="text"
-          class="color-hex"
-          value="${escapeHtml(safeHex)}"
-          data-color-picker-hex-input
-          maxlength="7"
-          spellcheck="false"
-          autocomplete="off"
-          autocapitalize="off"
-        />
-        <button type="button" class="color-picker-eyedropper" data-color-picker-eyedropper title="Pick color from screen" aria-label="Pick color from screen">Pick</button>
-      </div>
-    </div>
-  `;
-}
-
-function renderColorPickerTargetAttrs(target, targetId, fallback) {
-  const attrs = [
-    `data-color-picker-target="${escapeHtml(targetId)}"`,
-    `data-color-picker-kind="${escapeHtml(target.kind)}"`,
-    `data-color-picker-fallback="${escapeHtml(fallback)}"`,
-  ];
-  if (target.kind === "node-param") {
-    attrs.push(`data-color-picker-param="${escapeHtml(target.paramKey)}"`);
-  } else if (target.kind === "gradient-stop") {
-    attrs.push(`data-color-picker-stop-index="${escapeHtml(String(target.stopIndex))}"`);
-    attrs.push(`data-color-picker-param="${escapeHtml(target.paramKey || "stops")}"`);
-  } else if (target.kind === "mesh-stop") {
-    attrs.push(`data-color-picker-stop-index="${escapeHtml(String(target.stopIndex))}"`);
-  }
-  return attrs.join(" ");
-}
-
-function colorPickerTargetId(target) {
-  if (!target) return "";
-  switch (target.kind) {
-    case "node-param":
-      return `node:${target.paramKey}`;
-    case "gradient-stop":
-      return `gradient:${target.paramKey || "stops"}:${target.stopIndex}`;
-    case "mesh-stop":
-      return `mesh:${target.stopIndex}`;
-    default:
-      return "";
-  }
-}
-
-function resolveColorPickerTarget(element) {
-  const root = element?.closest?.("[data-color-picker-target]");
-  if (!root) return null;
-  const kind = root.dataset.colorPickerKind;
-  const target = {
-    kind,
-    targetId: root.dataset.colorPickerTarget,
-    fallback: root.dataset.colorPickerFallback || "#000000",
-  };
-  if (kind === "node-param") {
-    target.paramKey = root.dataset.colorPickerParam;
-  } else if (kind === "gradient-stop") {
-    target.paramKey = root.dataset.colorPickerParam || "stops";
-    target.stopIndex = Number(root.dataset.colorPickerStopIndex);
-  } else if (kind === "mesh-stop") {
-    target.stopIndex = Number(root.dataset.colorPickerStopIndex);
-  }
-  if (!target.targetId || !target.kind) return null;
-  return target;
-}
-
-function toggleColorPicker(trigger) {
-  const target = resolveColorPickerTarget(trigger);
-  if (!target) return;
-  colorPickerState = colorPickerState?.targetId === target.targetId
-    ? null
-    : { targetId: target.targetId };
-  renderInspector();
-}
-
-function startColorPickerDrag(event, control, mode) {
-  if (event.button !== 0) return;
-  const target = resolveColorPickerTarget(control);
-  if (!target) return;
-  event.preventDefault();
-  event.stopPropagation();
-
-  inspectorEditing = true;
-  document.body.classList.add("dragging-color-picker");
-
-  // F17.3b: snapshot the pre-drag color so onUp can record a single undo
-  // entry covering the whole SV-surface / hue-rail drag instead of one per
-  // pointermove commit.
-  const pickerUndoSnapshot = readColorPickerCurrentHex(target);
-
-  const commitFromPointer = (ev) => {
-    const current = hexToHsvColor(readColorPickerCurrentHex(target));
-    const next = mode === "hue"
-      ? hsvFromHuePointer(control, current, ev.clientX)
-      : hsvFromSurfacePointer(control, current, ev.clientX, ev.clientY);
-    commitColorPickerValue(control, hsvColorToHex(next));
-  };
-
-  commitFromPointer(event);
-
-  try {
-    control.setPointerCapture(event.pointerId);
-  } catch {}
-
-  const onMove = (ev) => {
-    if (ev.buttons !== undefined && !(ev.buttons & 1)) return;
-    commitFromPointer(ev);
-  };
-
-  const onUp = () => {
-    control.removeEventListener("pointermove", onMove);
-    control.removeEventListener("pointerup", onUp);
-    control.removeEventListener("pointercancel", onUp);
-    inspectorEditing = false;
-    document.body.classList.remove("dragging-color-picker");
-    try {
-      control.releasePointerCapture(event.pointerId);
-    } catch {}
-    // F17.3b flush: if the drag changed the color, record one history entry.
-    const finalHex = readColorPickerCurrentHex(target);
-    if (finalHex && pickerUndoSnapshot && finalHex !== pickerUndoSnapshot) {
-      pushHistory({
-        undo: () => applyColorPickerHex(target, pickerUndoSnapshot),
-        redo: () => applyColorPickerHex(target, finalHex),
-      });
-    }
-  };
-
-  control.addEventListener("pointermove", onMove);
-  control.addEventListener("pointerup", onUp);
-  control.addEventListener("pointercancel", onUp);
-}
-
-function applyColorPickerHex(target, hex) {
-  // Same dispatcher commitColorPickerValue uses, but takes a target object
-  // directly so undo callbacks don't need to look one up from a DOM element
-  // that may have been re-rendered since the history entry was pushed.
-  switch (target.kind) {
-    case "node-param":
-      commitNodeColorParam(target.paramKey, hex);
-      return;
-    case "gradient-stop":
-      commitGradientStopColorTarget(target, hex);
-      return;
-    case "mesh-stop":
-      commitMeshStopColorTarget(target, hex);
-      return;
-  }
-}
-
-// Read the picker's value from node state rather than the DOM input. The DOM
-// can be a beat ahead during typing (input event fires after the user pressed
-// a key, so input.value already reflects the in-progress edit), but the node
-// state still holds the pre-edit color until commitColorPickerValue runs.
-// Drag handlers can keep using readColorPickerCurrentHex since their
-// snapshots happen at pointerdown, before any DOM mutation.
-function readPickerValueFromState(target) {
-  if (!target) return null;
-  const node = getSelectedNode();
-  if (!node) return null;
-  switch (target.kind) {
-    case "node-param":
-      return node.params?.[target.paramKey];
-    case "gradient-stop": {
-      const stops = node.params?.[target.paramKey || "stops"];
-      return Array.isArray(stops) ? stops[target.stopIndex]?.color : null;
-    }
-    case "mesh-stop":
-      return node.params?.stops?.[target.stopIndex]?.color;
-  }
-  return null;
-}
-
-function hsvFromSurfacePointer(surface, current, clientX, clientY) {
-  const rect = surface.getBoundingClientRect();
-  return {
-    h: current.h,
-    s: clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1),
-    v: 1 - clamp((clientY - rect.top) / Math.max(1, rect.height), 0, 1),
-  };
-}
-
-function hsvFromHuePointer(hueControl, current, clientX) {
-  const rect = hueControl.getBoundingClientRect();
-  return {
-    ...current,
-    h: clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1) * 360,
-  };
-}
-
-function commitColorPickerValue(element, rawHex) {
-  const target = resolveColorPickerTarget(element);
-  if (!target) return null;
-  const hex = normalizeHex(rawHex, target.fallback);
-
-  switch (target.kind) {
-    case "node-param":
-      commitNodeColorParam(target.paramKey, hex);
-      break;
-    case "gradient-stop":
-      commitGradientStopColorTarget(target, hex);
-      break;
-    case "mesh-stop":
-      commitMeshStopColorTarget(target, hex);
-      break;
-    default:
-      return null;
-  }
-
-  syncColorPickerElements(target, hex);
-  return hex;
-}
+// Color picker target writers — injected into the color picker module via
+// initColorPicker so the picker's commit dispatch ends up here. Kept in
+// graph-shell because the gradient-stop path leans on `isGradientRampNode`
+// + `normalizeGradientMapInspectorStops` + `commitGradientRampStops`, which
+// belong to the gradient-ramp subsystem that hasn't been split out yet.
 
 function commitNodeColorParam(paramKey, hex) {
   const node = getSelectedNode();
@@ -4747,69 +4462,6 @@ function commitMeshStopColorTarget(target, hex) {
     stopIndex === index ? { ...stop, color: hex } : stop
   );
   updateNodeParams(node.id, { stops: nextStops });
-}
-
-async function handleColorPickerEyedropper(control) {
-  if (typeof window === "undefined" || typeof window.EyeDropper !== "function") return;
-  try {
-    const result = await new window.EyeDropper().open();
-    if (!result?.sRGBHex) return;
-    // F17.3b eyedropper: single commit, snapshot before / push after.
-    const target = resolveColorPickerTarget(control);
-    const before = target ? readColorPickerCurrentHex(target) : null;
-    commitColorPickerValue(control, result.sRGBHex);
-    if (target && before) {
-      const after = readColorPickerCurrentHex(target);
-      if (after && before !== after) {
-        pushHistory({
-          undo: () => applyColorPickerHex(target, before),
-          redo: () => applyColorPickerHex(target, after),
-        });
-      }
-    }
-  } catch {
-    // User cancelled the picker; keep the current color.
-  }
-}
-
-function readColorPickerCurrentHex(target) {
-  if (!target?.targetId || !inspectorEl) return normalizeHex(target?.fallback, "#000000");
-  const row = inspectorEl.querySelector(`[data-color-picker-target="${cssEscape(target.targetId)}"]`);
-  const hexInput = row?.querySelector(".color-hex");
-  return normalizeHex(hexInput?.value, target.fallback || "#000000");
-}
-
-function syncColorPickerElements(target, hex) {
-  if (!target?.targetId || !inspectorEl) return;
-  const safeHex = normalizeHex(hex, target.fallback || "#000000");
-  const hsv = hexToHsvColor(safeHex);
-  const hueColor = hsvColorToHex({ h: hsv.h, s: 1, v: 1 });
-  const rows = inspectorEl.querySelectorAll(`[data-color-picker-target="${cssEscape(target.targetId)}"]`);
-  for (const row of rows) {
-    const triggerSwatch = row.querySelector(".color-picker-trigger-swatch");
-    const triggerValue = row.querySelector(".color-picker-trigger-value");
-    const hexInputs = row.querySelectorAll(".color-hex");
-    if (triggerSwatch) triggerSwatch.style.background = safeHex;
-    if (triggerValue) triggerValue.textContent = safeHex.toUpperCase();
-    for (const input of hexInputs) {
-      input.classList.remove("is-invalid");
-      if (input.value !== safeHex) input.value = safeHex;
-    }
-    const meshDot = row.closest(".mesh-stop-row")?.querySelector(".mesh-stop-swatch-dot");
-    if (meshDot) meshDot.style.background = safeHex;
-    const popover = row.querySelector("[data-color-picker-popover]");
-    if (popover) {
-      popover.dataset.colorCurrent = safeHex;
-      popover.style.setProperty("--color-picker-hue", hueColor);
-      popover.style.setProperty("--color-picker-s", `${hsv.s * 100}%`);
-      popover.style.setProperty("--color-picker-v", `${(1 - hsv.v) * 100}%`);
-      popover.style.setProperty("--color-picker-h", `${(hsv.h / 360) * 100}%`);
-    }
-  }
-  if (target.kind === "gradient-stop") {
-    syncGradientRampElements(target);
-  }
-  syncTimelineButtons();
 }
 
 function readControlValue(control) {
