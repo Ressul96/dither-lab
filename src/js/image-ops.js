@@ -57,6 +57,7 @@ import { applyAdjustNode } from "./image-ops/adjust.js";
 import { applyDuotoneNode } from "./image-ops/duotone.js";
 import { applySourceNode } from "./image-ops/source.js";
 import { applyLevelsNode } from "./image-ops/levels.js";
+import { applyRgbCurvesNode } from "./image-ops/rgb-curves.js";
 import {
   applyAnalogNode,
   applyAsciiNode,
@@ -99,6 +100,7 @@ export { applyAdjustNode };
 export { applyDuotoneNode };
 export { applySourceNode };
 export { applyLevelsNode };
+export { applyRgbCurvesNode };
 export {
   applyAnalogNode,
   applyAsciiNode,
@@ -115,10 +117,8 @@ export {
 };
 import {
   areRgbCurvesIdentity,
-  buildCurveLut,
   buildFinalRgbCurvesLuts,
   buildRgbCurvesLuts,
-  normalizeCurveApplyMode,
 } from "./curve-lut.js";
 import { buildGradientLut } from "./gl/gradient-lut.js";
 import {
@@ -435,44 +435,11 @@ function renderStreaks(brightCanvas, streakCount, angleOffset, iterations, fade)
 // applyHsvNode moved to image-ops/hsv.js. Re-exported at the top of
 // this file so applyAdjustNode / applySourceNode chains keep working.
 
-export function applyRgbCurvesNode(input, params) {
-  if (!input?.width || !input?.height) return null;
-  const luts = buildRgbCurvesLuts(params);
-  const applyMode = normalizeCurveApplyMode(params?.applyMode);
-
-  if (areRgbCurvesIdentity(luts)) {
-    return input;
-  }
-  const finalLuts = buildFinalRgbCurvesLuts(luts);
-
-  const output = createBuffer(input.width, input.height);
-  const ctx = output.getContext("2d", { alpha: false, willReadFrequently: true });
-  ctx.drawImage(input, 0, 0);
-  const imageData = ctx.getImageData(0, 0, output.width, output.height);
-  const data = imageData.data;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const srcR = data[i];
-    const srcG = data[i + 1];
-    const srcB = data[i + 2];
-    const curvedR = finalLuts.red[srcR];
-    const curvedG = finalLuts.green[srcG];
-    const curvedB = finalLuts.blue[srcB];
-
-    if (applyMode === "luma") {
-      scaleRgbToLumaInto(srcR, srcG, srcB, rgbLuma(curvedR, curvedG, curvedB), data, i);
-    } else if (applyMode === "color") {
-      scaleRgbToLumaInto(curvedR, curvedG, curvedB, rgbLuma(srcR, srcG, srcB), data, i);
-    } else {
-      data[i] = curvedR;
-      data[i + 1] = curvedG;
-      data[i + 2] = curvedB;
-    }
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-  return output;
-}
+// applyRgbCurvesNode moved to image-ops/rgb-curves.js (LUT-based
+// channel curves with rgb / luma / color apply modes). The
+// scaleRgbToLumaInto helper moved with it (only consumer); the
+// thin rgbLuma wrapper was inlined to luminanceBt601 calls. Re-
+// exported at the top of this file.
 
 // Scene Grade — final scene-wide color pass intended to sit immediately before
 // Viewer Output. It reuses the RGB curves LUT path, then performs clamp/gamma
@@ -633,24 +600,9 @@ function sceneGradeColorMapStops(params) {
 
 // rgbToHsvInto moved to image-ops/hsv.js (only consumed by applyHsvNode).
 
-function rgbLuma(r, g, b) {
-  return luminanceBt601(r, g, b);
-}
-
-function scaleRgbToLumaInto(r, g, b, targetLuma, target, offset) {
-  const currentLuma = rgbLuma(r, g, b);
-  if (currentLuma <= 0.001) {
-    const neutral = clamp(Math.round(targetLuma), 0, 255);
-    target[offset] = neutral;
-    target[offset + 1] = neutral;
-    target[offset + 2] = neutral;
-    return;
-  }
-  const scale = targetLuma / currentLuma;
-  target[offset] = clamp(Math.round(r * scale), 0, 255);
-  target[offset + 1] = clamp(Math.round(g * scale), 0, 255);
-  target[offset + 2] = clamp(Math.round(b * scale), 0, 255);
-}
+// rgbLuma / scaleRgbToLumaInto moved alongside applyRgbCurvesNode into
+// image-ops/rgb-curves.js (the only consumer). rgbLuma was a 1-line
+// wrapper around luminanceBt601 and is now inlined at the call site.
 
 // hsvToRgbInto moved to image-ops/hsv.js (only consumed by applyHsvNode).
 
