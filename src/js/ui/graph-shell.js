@@ -83,6 +83,13 @@ import {
 } from "./graph-breadcrumb.js";
 import { initGraphContextMenu } from "./graph-context-menu.js";
 import {
+  initGraphKeyboard,
+  markGraphKeyboardActive,
+  setGraphPointerInsideEditor,
+  syncGraphCutCursorFromPointer,
+  syncGraphInteractionModeClasses,
+} from "./graph-keyboard.js";
+import {
   EDGE_CUT_RADIUS,
   EDGE_INSERT_FALLBACK_RADIUS,
   EDGE_INSERT_RADIUS,
@@ -122,21 +129,12 @@ let stageEl;
 let resizeObserver;
 let renderedInspectorNodeId = null;
 let inspectorEditing = false;
-let keyboardWired = false;
 let paletteExtractionSize = 4;
 let renderedGraphParentId = "";
 let insertHighlightEdgeId = "";
 let graphAutoCentered = false;
 let colorPickerState = null;
 let gradientRampState = null;
-let graphSpacePanActive = false;
-let graphCutCursorActive = false;
-// Tracks Meta/Ctrl held above the editor — drives the marquee-ready cursor
-// (crosshair) and lets the empty-area pointerdown branch route to marquee
-// instead of the new default pan.
-let graphMarqueeModifierActive = false;
-let graphPointerInsideEditor = false;
-let graphKeyboardActive = false;
 let activeGraphMarquee = null;
 let graphRenameNodeId = null;
 const paletteSwatchLocks = new Map();
@@ -202,7 +200,20 @@ export function initGraphShell() {
     setInsertHighlight,
   });
   initGraphBreadcrumb(editorEl);
-  wireKeyboard();
+  initGraphKeyboard({
+    editorEl,
+    cancelActiveGraphMarquee,
+    clearGraphSelection,
+    duplicateSelectedGraphNodes,
+    frameSelectedGraphNodes,
+    groupCurrentSelection,
+    removeSelectedGraphNodes,
+    selectAllVisibleGraphNodes,
+    startRenamingSelectedNode,
+    toggleBypassForSelectedNodes,
+    toggleSoloForSelectedNode,
+    ungroupCurrentSelection,
+  });
 
   if (typeof ResizeObserver === "function") {
     resizeObserver = new ResizeObserver(() => applyGraphViewport());
@@ -278,22 +289,19 @@ function initViewportInteractions() {
   );
 
   editorEl.addEventListener("pointerenter", (e) => {
-    graphPointerInsideEditor = true;
-    syncGraphCutCursorFromPointer(e);
-    syncGraphInteractionModeClasses();
+    setGraphPointerInsideEditor(true, e);
   });
   editorEl.addEventListener("pointermove", (e) => {
     syncGraphCutCursorFromPointer(e);
     syncGraphInteractionModeClasses();
   });
   editorEl.addEventListener("pointerleave", () => {
-    graphPointerInsideEditor = false;
-    syncGraphInteractionModeClasses();
+    setGraphPointerInsideEditor(false);
   });
 
   editorEl.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
-    graphKeyboardActive = true;
+    markGraphKeyboardActive();
     if (e.target.closest("[data-node-id]") || e.target.closest(".graph-socket-hit")) return;
     // The breadcrumb lives inside #nodeEditor so the pan handler would
     // otherwise capture the pointer on this same `pointerdown` and the
@@ -594,7 +602,7 @@ function onGraphPointerDown(e) {
   if (e.button !== 0) return;
   if (e.target.closest("[data-node-rename-input]")) return;
   if (e.target.closest("[data-node-action]")) return;
-  graphKeyboardActive = true;
+  markGraphKeyboardActive();
 
   const socket = e.target.closest(".graph-socket-hit");
   if (socket) {
@@ -606,173 +614,6 @@ function onGraphPointerDown(e) {
   if (nodeBtn) {
     startNodeDrag(e, nodeBtn);
   }
-}
-
-function wireKeyboard() {
-  if (keyboardWired) return;
-  keyboardWired = true;
-
-  // Window-scoped keyboard shortcuts: graph-shell owns Cmd+D (duplicate),
-  // G (group), M (bypass), X/Delete (remove), A (select all), F (frame),
-  // T (solo), R (rename), Space (pan), Escape (cancel marquee), plus the
-  // Alt/Cmd/Ctrl modifier-cursor toggles. listenWithDispose lets a multi-
-  // window or test harness re-init the shell without duplicate handlers.
-  listenWithDispose(window, "keydown", (event) => {
-    const target = event.target;
-    if (
-      target &&
-      (target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.tagName === "SELECT" ||
-        target.isContentEditable)
-    ) {
-      return;
-    }
-
-    if (event.key === "Alt" && shouldUseGraphCutCursor()) {
-      graphCutCursorActive = true;
-      syncGraphInteractionModeClasses();
-      return;
-    }
-
-    // Cmd / Ctrl: arm marquee-ready cursor when the pointer is over the
-    // editor. Don't preventDefault — we still want regular Cmd shortcuts
-    // (G, D, Z, etc.) to fire below.
-    if ((event.key === "Meta" || event.key === "Control") && shouldUseGraphMarqueeCursor()) {
-      graphMarqueeModifierActive = true;
-      syncGraphInteractionModeClasses();
-    }
-
-    if (isSpaceKey(event) && shouldUseGraphSpacePan()) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      graphSpacePanActive = true;
-      syncGraphInteractionModeClasses();
-      return;
-    }
-
-    if (event.key === "Escape") {
-      const handled = cancelActiveGraphMarquee() || clearGraphSelection();
-      if (handled) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-      return;
-    }
-
-    const commandKey = event.metaKey || event.ctrlKey;
-    const key = event.key.toLowerCase();
-
-    if (commandKey && key === "d" && !event.shiftKey && !event.altKey) {
-      if (duplicateSelectedGraphNodes()) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
-      return;
-    }
-
-    if (key === "g" && !event.altKey && shouldHandleGraphShortcut()) {
-      const handled = event.shiftKey ? ungroupCurrentSelection() : groupCurrentSelection();
-      if (handled) event.preventDefault();
-      return;
-    }
-
-    if (key === "m" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
-      if (toggleBypassForSelectedNodes()) event.preventDefault();
-      return;
-    }
-
-    if ((key === "x" || event.key === "Delete" || event.key === "Backspace") && shouldHandleGraphShortcut()) {
-      if (removeSelectedGraphNodes()) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
-      return;
-    }
-
-    if (key === "a" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
-      if (selectAllVisibleGraphNodes()) event.preventDefault();
-      return;
-    }
-
-    if (key === "f" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
-      if (frameSelectedGraphNodes()) event.preventDefault();
-      return;
-    }
-
-    if (key === "t" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
-      if (toggleSoloForSelectedNode()) event.preventDefault();
-      return;
-    }
-
-    if (key === "r" && !commandKey && !event.altKey && shouldHandleGraphShortcut()) {
-      if (startRenamingSelectedNode()) event.preventDefault();
-    }
-  });
-
-  listenWithDispose(window, "keyup", (event) => {
-    if (event.key === "Alt" && graphCutCursorActive) {
-      graphCutCursorActive = false;
-      syncGraphInteractionModeClasses();
-      return;
-    }
-
-    if ((event.key === "Meta" || event.key === "Control") && graphMarqueeModifierActive) {
-      graphMarqueeModifierActive = false;
-      syncGraphInteractionModeClasses();
-    }
-
-    if (isSpaceKey(event) && graphSpacePanActive) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      graphSpacePanActive = false;
-      syncGraphInteractionModeClasses();
-    }
-  });
-
-  listenWithDispose(window, "blur", () => {
-    graphSpacePanActive = false;
-    graphCutCursorActive = false;
-    syncGraphInteractionModeClasses();
-    cancelActiveGraphMarquee();
-  });
-}
-
-function isSpaceKey(event) {
-  return event.key === " " || event.code === "Space";
-}
-
-function shouldUseGraphSpacePan() {
-  return graphPointerInsideEditor || editorEl?.matches?.(":hover") || graphSpacePanActive;
-}
-
-function shouldUseGraphCutCursor() {
-  return graphPointerInsideEditor || editorEl?.matches?.(":hover") || graphCutCursorActive;
-}
-
-function shouldUseGraphMarqueeCursor() {
-  return graphPointerInsideEditor || editorEl?.matches?.(":hover") || graphMarqueeModifierActive;
-}
-
-function syncGraphCutCursorFromPointer(event) {
-  const nextCutCursorActive = Boolean(event.altKey);
-  if (graphCutCursorActive === nextCutCursorActive) return;
-  graphCutCursorActive = nextCutCursorActive;
-}
-
-function shouldHandleGraphShortcut() {
-  return (
-    graphKeyboardActive ||
-    graphPointerInsideEditor ||
-    editorEl?.matches?.(":hover") ||
-    getSelectedNodeIds().length > 0
-  );
-}
-
-function syncGraphInteractionModeClasses() {
-  editorEl?.classList.toggle("space-panning", graphSpacePanActive && shouldUseGraphSpacePan());
-  editorEl?.classList.toggle("cut-ready", graphCutCursorActive && shouldUseGraphCutCursor());
-  editorEl?.classList.toggle("marquee-ready", graphMarqueeModifierActive && shouldUseGraphMarqueeCursor());
 }
 
 function duplicateSelectedGraphNodes() {
