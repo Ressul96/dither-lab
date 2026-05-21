@@ -90,9 +90,16 @@ import {
   syncGraphInteractionModeClasses,
 } from "./graph-keyboard.js";
 import {
+  clearInsertHighlight,
+  findInsertableEdgeAt,
+  findInsertTargetAt,
+  findInsertTargetForNodeAt,
+  initGraphEdgeInsertTargets,
+  setInsertHighlight,
+  syncInsertHighlight,
+} from "./graph-edge-insert.js";
+import {
   EDGE_CUT_RADIUS,
-  EDGE_INSERT_FALLBACK_RADIUS,
-  EDGE_INSERT_RADIUS,
   GRAPH_GRID_STEP,
   GRAPH_MARQUEE_THRESHOLD,
   GRAPH_VIEW_PADDING,
@@ -131,7 +138,6 @@ let renderedInspectorNodeId = null;
 let inspectorEditing = false;
 let paletteExtractionSize = 4;
 let renderedGraphParentId = "";
-let insertHighlightEdgeId = "";
 let graphAutoCentered = false;
 let colorPickerState = null;
 let gradientRampState = null;
@@ -158,6 +164,8 @@ export function initGraphShell() {
   stageEl = document.getElementById("stage");
 
   if (!nodesEl || !edgesEl || !editorEl || !inspectorEl) return;
+
+  initGraphEdgeInsertTargets({ edgesEl });
 
   nodesEl.addEventListener("click", onNodeClick);
   nodesEl.addEventListener("dblclick", onNodeDoubleClick);
@@ -996,128 +1004,6 @@ function clearHighlight() {
   }
 }
 
-function findInsertableEdgeAt(clientX, clientY) {
-  let best = null;
-
-  for (const path of edgesEl.querySelectorAll(".graph-edge[data-edge-id]")) {
-    const distance = distanceToEdgePath(path, clientX, clientY);
-    if (!Number.isFinite(distance) || distance > EDGE_INSERT_RADIUS) continue;
-    if (best && best.distance <= distance) continue;
-    best = {
-      edgeId: path.dataset.edgeId,
-      distance,
-      el: path,
-    };
-  }
-
-  return best;
-}
-
-// Last-resort lookup: when path sampling didn't snap to anything (often
-// because the user dropped a bit far from the line), accept the closest
-// edge whose midpoint is within the fallback radius.
-function findClosestEdgeByMidpoint(clientX, clientY) {
-  let best = null;
-  for (const path of edgesEl.querySelectorAll(".graph-edge[data-edge-id]")) {
-    if (!path?.getBoundingClientRect) continue;
-    const rect = path.getBoundingClientRect();
-    if (!rect.width && !rect.height) continue;
-    const mx = rect.left + rect.width / 2;
-    const my = rect.top + rect.height / 2;
-    const distance = Math.hypot(clientX - mx, clientY - my);
-    if (distance > EDGE_INSERT_FALLBACK_RADIUS) continue;
-    if (best && best.distance <= distance) continue;
-    best = { edgeId: path.dataset.edgeId, distance, el: path };
-  }
-  return best;
-}
-
-function findInsertTargetAt(clientX, clientY) {
-  return (
-    findInsertableEdgeAt(clientX, clientY) ??
-    getHighlightedInsertEdge() ??
-    findClosestEdgeByMidpoint(clientX, clientY)
-  );
-}
-
-function findInsertTargetForNodeAt(nodeId, clientX, clientY) {
-  const target = findInsertTargetAt(clientX, clientY);
-  if (!target?.edgeId || edgeTouchesNode(target.edgeId, nodeId)) return null;
-  return target;
-}
-
-function edgeTouchesNode(edgeId, nodeId) {
-  const { graph } = getState();
-  const edge = graph.edges.find((item) => item.id === edgeId);
-  return Boolean(edge && (edge.fromNode === nodeId || edge.toNode === nodeId));
-}
-
-function getHighlightedInsertEdge() {
-  if (!insertHighlightEdgeId) return null;
-  const el = edgesEl.querySelector(`[data-edge-id="${insertHighlightEdgeId}"]`);
-  if (!el) return null;
-  return {
-    edgeId: insertHighlightEdgeId,
-    distance: 0,
-    el,
-  };
-}
-
-function distanceToEdgePath(path, clientX, clientY) {
-  if (!path?.getTotalLength) return Infinity;
-  const total = path.getTotalLength();
-  if (!Number.isFinite(total) || total <= 0) return Infinity;
-  if (!isNearClientRect(path.getBoundingClientRect(), clientX, clientY, EDGE_INSERT_RADIUS)) {
-    return Infinity;
-  }
-
-  let best = Infinity;
-  const matrix = path.getScreenCTM?.() ?? null;
-  const step = Math.max(4, total / 64);
-  for (let length = 0; length <= total; length += step) {
-    const point = path.getPointAtLength(length);
-    const screenPoint = toScreenPoint(point, matrix);
-    best = Math.min(best, Math.hypot(clientX - screenPoint.x, clientY - screenPoint.y));
-  }
-
-  const endPoint = path.getPointAtLength(total);
-  const screenEndPoint = toScreenPoint(endPoint, matrix);
-  best = Math.min(best, Math.hypot(clientX - screenEndPoint.x, clientY - screenEndPoint.y));
-  return best;
-}
-
-function toScreenPoint(point, matrix) {
-  if (!matrix || typeof DOMPoint !== "function") return point;
-  return new DOMPoint(point.x, point.y).matrixTransform(matrix);
-}
-
-function isNearClientRect(rect, clientX, clientY, padding) {
-  if (!rect?.width && !rect?.height) return true;
-  return (
-    clientX >= rect.left - padding &&
-    clientX <= rect.right + padding &&
-    clientY >= rect.top - padding &&
-    clientY <= rect.bottom + padding
-  );
-}
-
-function setInsertHighlight(edgeId) {
-  if (insertHighlightEdgeId === edgeId) return;
-
-  if (insertHighlightEdgeId) {
-    edgesEl.querySelector(`[data-edge-id="${insertHighlightEdgeId}"]`)?.classList.remove("insert-target");
-  }
-
-  insertHighlightEdgeId = edgeId || "";
-  if (insertHighlightEdgeId) {
-    edgesEl.querySelector(`[data-edge-id="${insertHighlightEdgeId}"]`)?.classList.add("insert-target");
-  }
-}
-
-function clearInsertHighlight() {
-  setInsertHighlight("");
-}
-
 function onNodeClick(event) {
   if (event.target.closest("[data-node-rename-input]")) return;
 
@@ -1917,9 +1803,7 @@ function renderEdges(parentId = getCurrentGraphParentId()) {
     .filter((edge) => visibleNodeIds.has(edge.fromNode) && visibleNodeIds.has(edge.toNode))
     .map((edge) => renderEdge(edge, graph))
     .join("");
-  if (insertHighlightEdgeId) {
-    edgesEl.querySelector(`[data-edge-id="${insertHighlightEdgeId}"]`)?.classList.add("insert-target");
-  }
+  syncInsertHighlight();
 }
 
 function getCurrentGraphParentId() {
