@@ -2,7 +2,6 @@ import { dispatch, getState, pushHistory, subscribe } from "../state.js";
 import {
   MESH_GRADIENT_MAX_STOPS,
   ROOT_PARENT_ID,
-  createFreeNode,
   ensureBootGraph,
   getNodeById,
   getNodeDefinition,
@@ -129,9 +128,12 @@ import {
   syncGraphAutoCenterReset,
 } from "./graph-view-transform.js";
 import {
+  createNodeFromPalette,
+  insertPaletteNodeAtDefault,
+  nodePositionFromPoint,
+} from "./graph-node-placement.js";
+import {
   GRAPH_WORLD_SIZE,
-  NODE_HEIGHT,
-  NODE_WIDTH,
   computeChildrenBbox,
   getNodeRenderHeight,
   getSocketPoint,
@@ -5474,41 +5476,6 @@ function updateInlineReadout(control) {
   if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(value) || max === min) return;
   const pct = clamp((value - min) / (max - min), 0, 1) * 100;
   control.style.setProperty("--slider-fill", `${pct}%`);
-}
-
-function insertPaletteNodeAtDefault(type) {
-  const definition = getNodeDefinition(type);
-  const viewerEdgeId = getViewerInputEdgeId();
-  if (definition?.chainable !== false && viewerEdgeId) {
-    return insertNodeOnEdge(viewerEdgeId, type);
-  }
-  return createNodeFromPalette(type, getViewportCenterWorld());
-}
-
-function createNodeFromPalette(type, point) {
-  if (!type || !point) return null;
-  return createFreeNode(type, nodePositionFromPoint(point), getCurrentGraphParentId());
-}
-
-function nodePositionFromPoint(point) {
-  return {
-    x: point.x - NODE_WIDTH / 2,
-    y: point.y - NODE_HEIGHT / 2,
-  };
-}
-
-function getViewerInputEdgeId() {
-  const { graph } = getState();
-  const visibleNodeIds = getVisibleGraphNodeIds(graph);
-  const viewer = graph.nodes.find((node) => node.type === "viewer-output" && visibleNodeIds.has(node.id));
-  const primarySocket = viewer?.inputs?.[0]?.name;
-  if (!viewer || !primarySocket) return null;
-  return graph.edges.find(
-    (edge) =>
-      edge.toNode === viewer.id &&
-      edge.toSocket === primarySocket &&
-      visibleNodeIds.has(edge.fromNode)
-  )?.id ?? null;
 }
 
 function canBypassGraphNode(node) {
