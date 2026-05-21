@@ -49,6 +49,7 @@ import {
   updateTimelineTrack,
 } from "../timeline.js";
 import { escapeHtml } from "./utils.js";
+import { listenWithDispose } from "./lifecycle.js";
 
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 const KEYFRAME_DRAG_THRESHOLD = 3;
@@ -325,6 +326,7 @@ function wireAnimationTimeline() {
   const timelineEl = document.getElementById("playerCard");
   if (!timelineEl) return;
   timelineEl.addEventListener("pointerdown", onAnimationTimelinePointerDown);
+  listenWithDispose(timelineEl, "keydown", onAnimationTimelineKeyDown);
   timelineEl.addEventListener("click", (event) => {
     if (event.target.closest("[data-tangent-handle]")) {
       event.preventDefault();
@@ -1905,6 +1907,43 @@ function onAnimationTimelinePointerDown(event) {
   renderAnimationTimeline();
 }
 
+function onAnimationTimelineKeyDown(event) {
+  const playheadHandle = event.target.closest(".playhead-handle");
+  if (playheadHandle && handlePlayheadKeyDown(event)) return;
+}
+
+function handlePlayheadKeyDown(event) {
+  if (
+    (event.key !== "ArrowLeft" && event.key !== "ArrowRight") ||
+    event.metaKey ||
+    event.ctrlKey
+  ) {
+    return false;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  const { source, timeline, playback } = getState();
+  const normalized = normalizeTimeline(timeline, {
+    duration: source.duration,
+    fps: source.fps,
+  });
+  const duration = resolveTimelineDuration(normalized, source);
+  if (duration <= 0) return true;
+
+  const fps = timelineFrameRate(normalized, source.fps);
+  const direction = event.key === "ArrowLeft" ? -1 : 1;
+  const multiplier = event.shiftKey ? 10 : event.altKey ? 0.1 : 1;
+  const trimStart = clamp(Number(playback.trimStart) || 0, 0, duration);
+  const trimEnd = clamp(Number(playback.trimEnd) || duration, trimStart, duration);
+  const maxTime = Math.max(trimStart, trimEnd - 1 / Math.max(1, fps));
+  const currentTime = Number.isFinite(Number(playback.currentTime)) ? Number(playback.currentTime) : 0;
+  pausePlayback();
+  seek(clamp(currentTime + (direction * multiplier) / Math.max(1, fps), trimStart, maxTime));
+  return true;
+}
+
 function onAnimationTimelinePointerMove(event) {
   if (!keyframeDrag) return;
   const dx = event.clientX - keyframeDrag.startX;
@@ -2470,6 +2509,7 @@ function openBezierPopover(anchor, trackId, keyframeId) {
   popover.setAttribute("role", "dialog");
   popover.setAttribute("aria-label", "Easing curve editor");
   popover.addEventListener("pointerdown", onBezierPopoverPointerDown);
+  popover.addEventListener("keydown", onBezierPopoverControlKeyDown);
   popover.addEventListener("click", onBezierPopoverClick);
 
   bezierPopover.el = popover;
@@ -2526,7 +2566,13 @@ function renderBezierPopoverContent() {
     closeBezierPopover();
     return;
   }
+  const focusedHandle = bezierPopover.el.contains(document.activeElement)
+    ? document.activeElement?.dataset?.bezierHandle
+    : null;
   bezierPopover.el.innerHTML = renderBezierPopoverHTML(found.track, found.keyframe);
+  if (focusedHandle) {
+    bezierPopover.el.querySelector(`[data-bezier-handle="${focusedHandle}"]`)?.focus();
+  }
 }
 
 function renderBezierPopoverHTML(track, keyframe) {
@@ -2561,8 +2607,8 @@ function renderBezierPopoverHTML(track, keyframe) {
         <path d="${curveD}" class="bezier-curve-path" />
         <circle cx="0" cy="100" r="3" class="bezier-curve-anchor" />
         <circle cx="100" cy="0" r="3" class="bezier-curve-anchor" />
-        ${!isStep ? `<circle cx="${x1.toFixed(2)}" cy="${y1.toFixed(2)}" r="7" class="bezier-curve-handle" data-bezier-handle="p1" tabindex="0" />` : ""}
-        ${!isStep ? `<circle cx="${x2.toFixed(2)}" cy="${y2.toFixed(2)}" r="7" class="bezier-curve-handle" data-bezier-handle="p2" tabindex="0" />` : ""}
+        ${!isStep ? `<circle cx="${x1.toFixed(2)}" cy="${y1.toFixed(2)}" r="7" class="bezier-curve-handle" data-bezier-handle="p1" tabindex="0" focusable="true" role="slider" aria-label="Bezier control point 1" aria-valuetext="x ${formatBezierControlValue(cp[0])}, y ${formatBezierControlValue(cp[1])}" />` : ""}
+        ${!isStep ? `<circle cx="${x2.toFixed(2)}" cy="${y2.toFixed(2)}" r="7" class="bezier-curve-handle" data-bezier-handle="p2" tabindex="0" focusable="true" role="slider" aria-label="Bezier control point 2" aria-valuetext="x ${formatBezierControlValue(cp[2])}, y ${formatBezierControlValue(cp[3])}" />` : ""}
       </svg>
       <div class="bezier-curve-readout">
         ${isStep ? "step" : `cubic-bezier(${cp.map((v) => Number(v).toFixed(2)).join(", ")})`}
@@ -2592,6 +2638,57 @@ function positionBezierPopover() {
   // bound when the anchor is near the right edge so the curve never clips.
   popover.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
   popover.style.bottom = `${Math.max(8, window.innerHeight - rect.top + margin)}px`;
+}
+
+function onBezierPopoverControlKeyDown(event) {
+  const handle = event.target.closest("[data-bezier-handle]");
+  if (!handle || !bezierPopover.el?.contains(handle)) return;
+  if (!handleBezierPopoverKeyDown(event, handle.dataset.bezierHandle)) return;
+}
+
+function handleBezierPopoverKeyDown(event, handleName) {
+  if (
+    !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key) ||
+    event.metaKey ||
+    event.ctrlKey
+  ) {
+    return false;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  const { trackId, keyframeId } = bezierPopover;
+  if (!trackId || !keyframeId) return true;
+  const { timeline } = getState();
+  const found = getTimelineKeyframe(timeline, trackId, keyframeId);
+  if (!found) return true;
+
+  const easing = found.keyframe.easing ?? { type: "bezier", controlPoints: [0, 0, 1, 1] };
+  const cp = easing.type === "step"
+    ? [0, 0, 1, 1]
+    : [...(easing.controlPoints ?? [0, 0, 1, 1])];
+  const step = event.shiftKey ? 0.1 : event.altKey ? 0.001 : 0.01;
+  const index = handleName === "p2" ? 2 : 0;
+  if (event.key === "ArrowLeft") cp[index] = clampBezierControlValue(cp[index] - step, 0, 1);
+  else if (event.key === "ArrowRight") cp[index] = clampBezierControlValue(cp[index] + step, 0, 1);
+  else if (event.key === "ArrowUp") cp[index + 1] = clampBezierControlValue(cp[index + 1] + step, BEZIER_HANDLE_Y_MIN, BEZIER_HANDLE_Y_MAX);
+  else if (event.key === "ArrowDown") cp[index + 1] = clampBezierControlValue(cp[index + 1] - step, BEZIER_HANDLE_Y_MIN, BEZIER_HANDLE_Y_MAX);
+
+  dispatch(
+    "timeline",
+    updateTimelineKeyframe(timeline, {
+      trackId,
+      keyframeId,
+      patch: {
+        easing: { type: "bezier", controlPoints: cp },
+        interpolation: "linear",
+        inTangent: null,
+        outTangent: null,
+      },
+    })
+  );
+  return true;
 }
 
 function onBezierPopoverPointerDown(event) {
@@ -2804,6 +2901,18 @@ function updateAnimationPlayhead(playback, sourceDuration) {
   if (!playhead) return;
   const left = timeToTimelinePercent(playback.currentTime, duration, fps) * getEffectiveTimelineZoom(normalized);
   playhead.style.left = `${left}%`;
+  syncPlayheadAccessibility(playhead, playback.currentTime, duration, fps);
+}
+
+function syncPlayheadAccessibility(playhead, time, duration, fps) {
+  const handle = playhead.querySelector(".playhead-handle");
+  if (!handle) return;
+  const totalFrames = durationToFrames(duration, fps);
+  const frame = timeToFrame(time, fps);
+  handle.setAttribute("aria-valuemin", "0");
+  handle.setAttribute("aria-valuemax", String(Math.max(0, totalFrames - 1)));
+  handle.setAttribute("aria-valuenow", String(clamp(frame, 0, Math.max(0, totalFrames - 1))));
+  handle.setAttribute("aria-valuetext", `F${frame} · ${formatRulerSecond(time)}`);
 }
 
 function resolveTimelineDuration(timeline, source) {
@@ -2837,6 +2946,16 @@ function formatNumericInputValue(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "0";
   return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatBezierControlValue(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "0";
+  return numeric.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function clampBezierControlValue(value, min, max) {
+  return Number(clamp(value, min, max).toFixed(3));
 }
 
 function formatKeyframeValue(value) {

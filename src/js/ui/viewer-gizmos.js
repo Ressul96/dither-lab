@@ -18,6 +18,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 // 1px nudges from accidentally locking.
 const SHIFT_AXIS_THRESHOLD_PX = 2;
 const ANGLE_SNAP_DEG = 15;
+const GIZMO_KEYBOARD_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
 
 let outputCanvas = null;
 let pointGroup = null;
@@ -79,6 +80,7 @@ function createPointGroup() {
   group.style.display = "none";
 
   const hit = svgCircle(18, ["gizmo-handle", "viewer-point-gizmo__hit"]);
+  configureGizmoHandle(hit, "Move point", onPointKeyDown);
   const ring = svgCircle(8.5, ["viewer-point-gizmo__ring"]);
   const dot = svgCircle(3.5, ["viewer-point-gizmo__dot"]);
 
@@ -99,6 +101,7 @@ function createAngleGroup() {
   const tipRing = svgCircle(7, ["viewer-angle-gizmo__tip-ring"]);
   const tipDot = svgCircle(2.5, ["viewer-angle-gizmo__tip-dot"]);
   const tipHit = svgCircle(18, ["gizmo-handle", "viewer-angle-gizmo__tip-hit"]);
+  configureGizmoHandle(tipHit, "Adjust angle handle", onAngleKeyDown);
 
   group.append(shaft, anchor, tipRing, tipDot, tipHit);
   tipHit.addEventListener("pointerdown", onAnglePointerDown);
@@ -128,9 +131,11 @@ function createRingGroup() {
   const centerRing = svgCircle(8.5, ["viewer-ring-gizmo__center-ring"]);
   const centerDot = svgCircle(3.5, ["viewer-ring-gizmo__center-dot"]);
   const centerHit = svgCircle(18, ["gizmo-handle", "viewer-ring-gizmo__center-hit"]);
+  configureGizmoHandle(centerHit, "Move ring center", onRingCenterKeyDown);
 
   const rimDot = svgCircle(4, ["viewer-ring-gizmo__rim-dot"]);
   const rimHit = svgCircle(18, ["gizmo-handle", "viewer-ring-gizmo__rim-hit"]);
+  configureGizmoHandle(rimHit, "Adjust ring radius", onRingRimKeyDown);
 
   group.append(ellipse, falloff, centerHit, centerRing, centerDot, rimHit, rimDot);
   centerHit.addEventListener("pointerdown", onRingCenterPointerDown);
@@ -154,6 +159,19 @@ function svgLine(classes) {
   const el = document.createElementNS(SVG_NS, "line");
   for (const c of classes) el.classList.add(c);
   return el;
+}
+
+function configureGizmoHandle(el, label, onKeyDown) {
+  el.setAttribute("tabindex", "0");
+  el.setAttribute("focusable", "true");
+  el.setAttribute("role", "slider");
+  el.setAttribute("aria-label", label);
+  el.addEventListener("keydown", onKeyDown);
+}
+
+function setGizmoValueText(el, text) {
+  if (!el) return;
+  el.setAttribute("aria-valuetext", text);
 }
 
 // ---------------------------------------------------------------------------
@@ -217,8 +235,10 @@ function createMeshStopGroup() {
   ellipse.setAttribute("cy", "0");
 
   const centerHit = svgCircle(16, ["gizmo-handle", "viewer-mesh-stop__center-hit"]);
+  configureGizmoHandle(centerHit, "Move mesh stop", onMeshStopCenterKeyDown);
   const centerDot = svgCircle(4.5, ["viewer-mesh-stop__center-dot"]);
   const rimHit = svgCircle(16, ["gizmo-handle", "viewer-mesh-stop__rim-hit"]);
+  configureGizmoHandle(rimHit, "Adjust mesh stop radius", onMeshStopRimKeyDown);
   const rimDot = svgCircle(3.5, ["viewer-mesh-stop__rim-dot"]);
 
   centerHit.addEventListener("pointerdown", onMeshStopCenterDown);
@@ -265,11 +285,17 @@ function positionMeshStopGroup(group, stop) {
   const centerDot = group.querySelector(".viewer-mesh-stop__center-dot");
   centerDot.style.fill = String(stop.color ?? "#ffffff");
   centerDot.style.stroke = "rgba(0, 0, 0, 0.7)";
+  const centerHit = group.querySelector(".viewer-mesh-stop__center-hit");
+  setGizmoValueText(
+    centerHit,
+    `x ${formatGizmoNumber(stopX * 100)}%, y ${formatGizmoNumber(stopY * 100)}%`,
+  );
 
   // Rim handle: at the +x rim. Drag uses absolute distance from centre, so
   // any direction works for the user — visual placement is just affordance.
   const rimDot = group.querySelector(".viewer-mesh-stop__rim-dot");
   const rimHit = group.querySelector(".viewer-mesh-stop__rim-hit");
+  setGizmoValueText(rimHit, `radius ${formatGizmoNumber(radius * 100)}%`);
   for (const el of [rimDot, rimHit]) {
     el.setAttribute("cx", String(rxOverlay));
     el.setAttribute("cy", "0");
@@ -354,6 +380,7 @@ function syncPoint(node) {
   if (!pt) return;
   pointGroup.style.display = "";
   pointGroup.setAttribute("transform", `translate(${pt.x} ${pt.y})`);
+  setGizmoValueText(pointHit, `x ${formatGizmoNumber(centerX)}%, y ${formatGizmoNumber(centerY)}%`);
 }
 
 function syncAngle(node, target) {
@@ -369,6 +396,10 @@ function syncAngle(node, target) {
   if (!anchorPt || !tipPt) return;
   angleGroup.style.display = "";
   angleGroup.setAttribute("transform", `translate(${anchorPt.x} ${anchorPt.y})`);
+  setGizmoValueText(
+    angleTipHit,
+    `angle ${formatGizmoNumber(angleDeg)} degrees, length ${formatGizmoNumber(length)}`,
+  );
   const dx = tipPt.x - anchorPt.x;
   const dy = tipPt.y - anchorPt.y;
   angleShaft.setAttribute("x1", "0");
@@ -414,6 +445,11 @@ function syncRing(node, target) {
 
   ringGroup.style.display = "";
   ringGroup.setAttribute("transform", `translate(${centerPt.x} ${centerPt.y}) rotate(${rotationDeg})`);
+  setGizmoValueText(
+    ringCenterHit,
+    `x ${formatGizmoNumber(centerX)}%, y ${formatGizmoNumber(centerY)}%`,
+  );
+  setGizmoValueText(ringRimHit, `radius ${formatGizmoNumber(radiusPct)}%`);
   ringEllipse.setAttribute("rx", String(rxOverlay));
   ringEllipse.setAttribute("ry", String(ryOverlay));
 
@@ -626,6 +662,12 @@ function onPointDoubleClick(e) {
   });
 }
 
+function onPointKeyDown(e) {
+  if (!activeTarget || activeTarget.kind !== "point") return;
+  if (!prepareGizmoKeyboardEvent(e)) return;
+  nudgePointLikeTarget(activeTarget, e);
+}
+
 // ---------------------------------------------------------------------------
 // Angle gizmo handlers
 // ---------------------------------------------------------------------------
@@ -664,6 +706,30 @@ function computeAngleDrag(e, state) {
   return { [target.paramAngle]: angleDeg, [target.paramLength]: length };
 }
 
+function onAngleKeyDown(e) {
+  if (!activeTarget || activeTarget.kind !== "angle") return;
+  if (!prepareGizmoKeyboardEvent(e)) return;
+
+  const target = activeTarget;
+  const node = getNodeById(target.node.id) ?? target.node;
+  const step = keyboardNudgeStep(e);
+  const patch = {};
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    const direction = e.key === "ArrowLeft" ? -1 : 1;
+    const current = readNumericParam(node, target.paramAngle, 0);
+    patch[target.paramAngle] = roundKeyboardValue(
+      clamp(current + direction * step, target.angleMin, target.angleMax),
+    );
+  } else {
+    const direction = e.key === "ArrowDown" ? -1 : 1;
+    const current = readNumericParam(node, target.paramLength, target.lengthMin);
+    patch[target.paramLength] = roundKeyboardValue(
+      clamp(current + direction * step, target.lengthMin, target.lengthMax),
+    );
+  }
+  commitKeyboardParamPatch(node.id, patch);
+}
+
 // ---------------------------------------------------------------------------
 // Ring gizmo handlers
 // ---------------------------------------------------------------------------
@@ -691,6 +757,12 @@ function onRingCenterDoubleClick(e) {
     [activeTarget.paramX]: 50,
     [activeTarget.paramY]: 50,
   });
+}
+
+function onRingCenterKeyDown(e) {
+  if (!activeTarget || activeTarget.kind !== "ring") return;
+  if (!prepareGizmoKeyboardEvent(e)) return;
+  nudgePointLikeTarget(activeTarget, e);
 }
 
 function onRingRimPointerDown(e) {
@@ -728,6 +800,19 @@ function computeRingRimDrag(e, state) {
   if (denom <= 0) return null;
   const radiusPct = clamp(Math.abs(along / denom) * 100, 0, 100);
   return { [target.paramRadius]: radiusPct };
+}
+
+function onRingRimKeyDown(e) {
+  if (!activeTarget || activeTarget.kind !== "ring") return;
+  if (!prepareGizmoKeyboardEvent(e)) return;
+  const target = activeTarget;
+  const node = getNodeById(target.node.id) ?? target.node;
+  const direction = e.key === "ArrowLeft" || e.key === "ArrowDown" ? -1 : 1;
+  const step = keyboardNudgeStep(e);
+  const current = readNumericParam(node, target.paramRadius, 35);
+  commitKeyboardParamPatch(node.id, {
+    [target.paramRadius]: roundKeyboardValue(clamp(current + direction * step, 0, 100)),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -802,6 +887,46 @@ function commitMeshStopPatch(state, patch) {
   // tracked by the current timeline schema. Whole-array snapshots only.
 }
 
+function onMeshStopCenterKeyDown(e) {
+  if (!activeTarget || activeTarget.kind !== "mesh-stops") return;
+  if (!prepareGizmoKeyboardEvent(e)) return;
+  const stopIndex = resolveMeshStopIndex(e.currentTarget);
+  if (!Number.isFinite(stopIndex)) return;
+  const node = getNodeById(activeTarget.node.id) ?? activeTarget.node;
+  const stops = Array.isArray(node.params?.stops) ? node.params.stops : [];
+  const stop = stops[stopIndex];
+  if (!stop) return;
+  const step = keyboardNudgeStep(e, 0.01);
+  const dx = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+  const dy = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
+  const patch = {};
+  if (dx !== 0) patch.x = roundKeyboardValue(clamp(Number(stop.x ?? 0.5) + dx * step, 0, 1));
+  if (dy !== 0) patch.y = roundKeyboardValue(clamp(Number(stop.y ?? 0.5) + dy * step, 0, 1));
+  commitKeyboardMeshStopPatch(node.id, stopIndex, patch);
+}
+
+function onMeshStopRimKeyDown(e) {
+  if (!activeTarget || activeTarget.kind !== "mesh-stops") return;
+  if (!prepareGizmoKeyboardEvent(e)) return;
+  const stopIndex = resolveMeshStopIndex(e.currentTarget);
+  if (!Number.isFinite(stopIndex)) return;
+  const node = getNodeById(activeTarget.node.id) ?? activeTarget.node;
+  const stops = Array.isArray(node.params?.stops) ? node.params.stops : [];
+  const stop = stops[stopIndex];
+  if (!stop) return;
+  const direction = e.key === "ArrowLeft" || e.key === "ArrowDown" ? -1 : 1;
+  const step = keyboardNudgeStep(e, 0.01);
+  commitKeyboardMeshStopPatch(node.id, stopIndex, {
+    radius: roundKeyboardValue(clamp(Number(stop.radius ?? 0.6) + direction * step, 0.02, 2)),
+  });
+}
+
+function resolveMeshStopIndex(handle) {
+  const stopGroup = handle?.closest(".viewer-mesh-stop");
+  if (!stopGroup) return NaN;
+  return Number(stopGroup.dataset.meshStopIndex);
+}
+
 // ---------------------------------------------------------------------------
 // Crop / transform box gizmo (F7.3 P2)
 // ---------------------------------------------------------------------------
@@ -834,6 +959,7 @@ function createCropBoxGroup() {
       `viewer-crop-box-gizmo__edge-hit--${edge}`,
     );
     hit.dataset.cropEdge = edge;
+    configureGizmoHandle(hit, `Adjust crop ${cropEdgeLabel(edge)} edge`, onCropHandleKeyDown);
     hit.addEventListener("pointerdown", onCropEdgePointerDown);
     group.appendChild(hit);
 
@@ -854,6 +980,7 @@ function createCropBoxGroup() {
       `viewer-crop-box-gizmo__corner-hit--${corner}`,
     );
     hit.dataset.cropCorner = corner;
+    configureGizmoHandle(hit, `Adjust crop ${cropCornerLabel(corner)} corner`, onCropHandleKeyDown);
     hit.addEventListener("pointerdown", onCropCornerPointerDown);
     group.appendChild(hit);
 
@@ -924,6 +1051,8 @@ function syncCropBox(node) {
       hit.setAttribute("y", String(geo.y));
       hit.setAttribute("width", String(geo.w));
       hit.setAttribute("height", String(geo.h));
+      const paramKey = edge === "t" ? "top" : edge === "r" ? "right" : edge === "b" ? "bottom" : "left";
+      setGizmoValueText(hit, `${paramKey} ${formatGizmoNumber(Number(node.params?.[paramKey] ?? 0))}%`);
     }
     if (dot) {
       dot.setAttribute("x", String(geo.dotX));
@@ -952,6 +1081,10 @@ function syncCropBox(node) {
       hit.setAttribute("y", String(pt.y - halfHit));
       hit.setAttribute("width", String(CORNER_HIT_SIZE));
       hit.setAttribute("height", String(CORNER_HIT_SIZE));
+      setGizmoValueText(
+        hit,
+        `left ${formatGizmoNumber(left)}%, right ${formatGizmoNumber(right)}%, top ${formatGizmoNumber(top)}%, bottom ${formatGizmoNumber(bottom)}%`,
+      );
     }
     if (dot) {
       dot.setAttribute("x", String(pt.x - halfCornerDot));
@@ -980,11 +1113,7 @@ function onCropCornerPointerDown(e) {
   const corner = e.currentTarget.dataset.cropCorner;
   if (!corner) return;
   // Two edges per corner. e.g. "tl" → top + left.
-  const edges = [];
-  if (corner.includes("t")) edges.push("t");
-  if (corner.includes("b")) edges.push("b");
-  if (corner.includes("l")) edges.push("l");
-  if (corner.includes("r")) edges.push("r");
+  const edges = cropCornerEdges(corner);
   beginDrag(e.currentTarget, e, {
     nodeId: activeTarget.node.id,
     groupEl: cropBoxGroup,
@@ -1027,9 +1156,171 @@ function commitCropPatch(state, patch) {
   commitParamPatch(state.nodeId, patch);
 }
 
+function onCropHandleKeyDown(e) {
+  if (!activeTarget || activeTarget.kind !== "crop-box") return;
+  if (!prepareGizmoKeyboardEvent(e)) return;
+
+  const edge = e.currentTarget.dataset.cropEdge;
+  const corner = e.currentTarget.dataset.cropCorner;
+  const edges = edge ? [edge] : cropCornerEdges(corner);
+  if (edges.length === 0) return;
+
+  const node = getNodeById(activeTarget.node.id) ?? activeTarget.node;
+  const params = node.params ?? {};
+  const step = keyboardNudgeStep(e);
+  const dx = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+  const dy = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
+  const patch = {};
+
+  for (const cropEdge of edges) {
+    if (cropEdge === "l" && dx !== 0) {
+      patch.left = clampCropKeyboardInset("left", readNumericParam(node, "left", 0) + dx * step, params, patch);
+    } else if (cropEdge === "r" && dx !== 0) {
+      patch.right = clampCropKeyboardInset("right", readNumericParam(node, "right", 0) - dx * step, params, patch);
+    } else if (cropEdge === "t" && dy !== 0) {
+      patch.top = clampCropKeyboardInset("top", readNumericParam(node, "top", 0) + dy * step, params, patch);
+    } else if (cropEdge === "b" && dy !== 0) {
+      patch.bottom = clampCropKeyboardInset("bottom", readNumericParam(node, "bottom", 0) - dy * step, params, patch);
+    }
+  }
+
+  commitKeyboardParamPatch(node.id, patch);
+}
+
+function cropCornerEdges(corner) {
+  const edges = [];
+  if (!corner) return edges;
+  if (corner.includes("t")) edges.push("t");
+  if (corner.includes("b")) edges.push("b");
+  if (corner.includes("l")) edges.push("l");
+  if (corner.includes("r")) edges.push("r");
+  return edges;
+}
+
+function clampCropKeyboardInset(key, value, params, patch) {
+  const left = Number(patch.left ?? params.left ?? 0);
+  const right = Number(patch.right ?? params.right ?? 0);
+  const top = Number(patch.top ?? params.top ?? 0);
+  const bottom = Number(patch.bottom ?? params.bottom ?? 0);
+  let max = CROP_HANDLE_BOUNDS.max;
+  if (key === "left") max = Math.min(max, 100 - right - 1);
+  else if (key === "right") max = Math.min(max, 100 - left - 1);
+  else if (key === "top") max = Math.min(max, 100 - bottom - 1);
+  else if (key === "bottom") max = Math.min(max, 100 - top - 1);
+  return roundKeyboardValue(clamp(value, CROP_HANDLE_BOUNDS.min, max));
+}
+
 // ---------------------------------------------------------------------------
 // Util
 // ---------------------------------------------------------------------------
+
+function prepareGizmoKeyboardEvent(e) {
+  if (!GIZMO_KEYBOARD_KEYS.has(e.key) || e.metaKey || e.ctrlKey) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  return true;
+}
+
+function keyboardNudgeStep(e, base = 1) {
+  if (e.shiftKey) return base * 10;
+  if (e.altKey) return base * 0.1;
+  return base;
+}
+
+function nudgePointLikeTarget(target, e) {
+  const node = getNodeById(target.node.id) ?? target.node;
+  const step = keyboardNudgeStep(e);
+  const dx = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+  const dy = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
+  const patch = {};
+  if (dx !== 0) {
+    patch[target.paramX] = roundKeyboardValue(
+      clamp(readNumericParam(node, target.paramX, 50) + dx * step, 0, 100),
+    );
+  }
+  if (dy !== 0) {
+    patch[target.paramY] = roundKeyboardValue(
+      clamp(readNumericParam(node, target.paramY, 50) + dy * step, 0, 100),
+    );
+  }
+  commitKeyboardParamPatch(node.id, patch);
+}
+
+function commitKeyboardParamPatch(nodeId, patch) {
+  const node = getNodeById(nodeId);
+  if (!node || !patch) return;
+  const filtered = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (!Number.isFinite(value)) continue;
+    if (Number(node.params?.[key]) !== value) filtered[key] = value;
+  }
+  if (Object.keys(filtered).length === 0) return;
+
+  const before = snapshotGizmoParams(nodeId);
+  commitParamPatch(nodeId, filtered);
+  const after = snapshotGizmoParams(nodeId);
+  if (before && after && !gizmoParamsEqual(before, after)) {
+    pushHistory({
+      undo: () => updateNodeParams(nodeId, before),
+      redo: () => updateNodeParams(nodeId, after),
+    });
+  }
+}
+
+function commitKeyboardMeshStopPatch(nodeId, stopIndex, patch) {
+  const node = getNodeById(nodeId);
+  const stops = Array.isArray(node?.params?.stops) ? node.params.stops : [];
+  if (stopIndex < 0 || stopIndex >= stops.length) return;
+  const stop = stops[stopIndex];
+  const filtered = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (!Number.isFinite(value)) continue;
+    if (Number(stop?.[key]) !== value) filtered[key] = value;
+  }
+  if (Object.keys(filtered).length === 0) return;
+
+  const before = snapshotGizmoParams(nodeId);
+  const nextStops = stops.map((s, i) => (i === stopIndex ? { ...s, ...filtered } : s));
+  updateNodeParams(nodeId, { stops: nextStops });
+  const after = snapshotGizmoParams(nodeId);
+  if (before && after && !gizmoParamsEqual(before, after)) {
+    pushHistory({
+      undo: () => updateNodeParams(nodeId, before),
+      redo: () => updateNodeParams(nodeId, after),
+    });
+  }
+}
+
+function readNumericParam(node, key, fallback) {
+  const value = Number(node?.params?.[key]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function roundKeyboardValue(value) {
+  return Number(value.toFixed(4));
+}
+
+function formatGizmoNumber(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "0";
+  return Number.isInteger(numeric)
+    ? String(numeric)
+    : numeric.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function cropEdgeLabel(edge) {
+  if (edge === "t") return "top";
+  if (edge === "r") return "right";
+  if (edge === "b") return "bottom";
+  return "left";
+}
+
+function cropCornerLabel(corner) {
+  if (corner === "tl") return "top left";
+  if (corner === "tr") return "top right";
+  if (corner === "bl") return "bottom left";
+  return "bottom right";
+}
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));

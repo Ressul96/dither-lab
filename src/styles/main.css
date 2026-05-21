@@ -569,6 +569,13 @@ body.resizing-y * {
   vector-effect: non-scaling-stroke;
 }
 
+.viewer-overlay .gizmo-handle:focus-visible {
+  outline: none;
+  stroke: rgba(245, 248, 255, 0.95);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 5px rgba(74, 158, 255, 0.72));
+}
+
 .viewer-point-gizmo__hit {
   fill: transparent;
   cursor: grab;
@@ -2632,6 +2639,13 @@ body.cutting-edges * {
   pointer-events: auto;
 }
 
+.playhead-handle:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.5),
+    0 0 0 3px rgba(74, 158, 255, 0.55);
+}
+
 .playhead-tooltip {
   position: absolute;
   top: 14px;
@@ -3299,6 +3313,11 @@ body.dragging-tangent .timeline-tangent-handle {
 .bezier-curve-handle:focus {
   fill: var(--text-primary);
   outline: none;
+}
+
+.bezier-curve-handle:focus-visible {
+  stroke: rgba(245, 248, 255, 0.95);
+  filter: drop-shadow(0 0 5px rgba(74, 158, 255, 0.72));
 }
 
 body.dragging-keyframe .bezier-curve-handle,
