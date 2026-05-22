@@ -337,6 +337,7 @@ export function initGraphShell() {
     if (!isInspectorEditing()) syncTimelineButtons();
   });
   subscribe("graphView", () => {
+    syncGraphAutoCenterReset();
     const parentId = getCurrentGraphParentId();
     if (parentId !== getLastRenderedGraphParentId()) {
       renderGraph();
@@ -344,6 +345,7 @@ export function initGraphShell() {
       syncGraphBreadcrumb();
     }
     applyGraphViewport();
+    maybeAutoCenterGraph();
   });
   subscribe("source", () => {
     const selected = getSelectedNode();
