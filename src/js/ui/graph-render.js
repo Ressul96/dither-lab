@@ -1,7 +1,7 @@
 // Graph DOM render — extracted from graph-shell.js as part of the
-// M.1 split. Owns the per-frame string-template build for the node
-// cards and the SVG edge paths, plus the group-input/output proxy
-// cards that appear when the user descends into a group.
+// M.1 split. Owns the per-frame build for the node cards and the SVG
+// edge paths, plus the group-input/output proxy cards that appear when
+// the user descends into a group.
 //
 // State kept private here:
 //   * nodesEl / edgesEl — DOM refs the renderer writes into
@@ -10,11 +10,20 @@
 //   * lastRenderedParentId — the parent the renderer last wrote out, so
 //     graph-shell's `graphView` subscriber can skip a full rebuild when
 //     the parent hasn't changed
+//   * lastRenderedNodeHtml — Map<nodeId, html> M.4 phase 2 diff cache.
+//     When a graph dispatch lands on the same parent, the renderer
+//     compares each visible node's freshly-built HTML against the
+//     entry from the previous render and skips the DOM swap if they
+//     match. Stale entries are pruned for nodes that left the visible
+//     set; the map is cleared on a parent-change (full rebuild path).
 //
-// The renderer is intentionally HTML-string + innerHTML. M.4 (the
-// replaceChildren migration) is a separate ticket; this commit only
-// moves the existing strings into a new file without changing the
-// render strategy.
+// Render strategy:
+//   * Parent changed → single `setInnerHtml` rebuild (fast, rare).
+//   * Same parent    → per-node diff: upsert changed, leave unchanged
+//     DOM in place (preserves focus / input selection / mid-drag state
+//     on the unchanged cards). Edges still rebuild as one SVG swap —
+//     during a drag every edge's path changes anyway, so per-edge diff
+//     wouldn't pay off.
 //
 // `renderSocketRows` is exported because palette-ui's drop handler
 // needs to splice a freshly-created node's socket rows into the DOM
@@ -51,6 +60,15 @@ let nodesEl = null;
 let edgesEl = null;
 let getGraphRenameNodeId = () => null;
 let lastRenderedParentId = "";
+// M.4 phase 2: per-node HTML cache used to skip the DOM swap when a
+// dispatch lands on a node whose rendered output hasn't changed. Keyed
+// by node.id. Cleared on parent-change (the fast-path full rebuild
+// below also resets it).
+const lastRenderedNodeHtml = new Map();
+// Same idea for the group-proxy block as a whole — only ever two cards
+// (input + output) and they only appear inside a group, so a single
+// string compare is enough; no per-card diff bookkeeping.
+let lastRenderedProxiesHtml = "";
 
 export function initGraphRender(refs) {
   nodesEl = refs.nodesEl;
@@ -75,7 +93,7 @@ export function renderGraph() {
   const soloNodeId = getSoloNodeId(graph);
   nodesEl.style.width = `${GRAPH_WORLD_SIZE}px`;
   nodesEl.style.height = `${GRAPH_WORLD_SIZE}px`;
-  const nodesHtml = visibleNodes.map((node) => renderNode(node, selectedNodeIds, soloNodeId)).join("");
+
   // F24 group I/O proxies: when the user has descended into a group, render
   // virtual "Group Input" / "Group Output" cards on either side of the
   // children so the boundary connections are visible from inside. These are
@@ -84,10 +102,86 @@ export function renderGraph() {
   const proxiesHtml = parentId !== ROOT_PARENT_ID
     ? renderGroupProxies(graph, parentId, visibleNodes)
     : "";
-  setInnerHtml(nodesEl, nodesHtml + proxiesHtml);
+
+  if (parentId !== lastRenderedParentId) {
+    // Full-rebuild fast path: the user navigated to a different parent
+    // (root <-> group), so almost everything changes. Doing this in one
+    // setInnerHtml is cheaper than the diff bookkeeping below, and it
+    // wipes the per-node cache cleanly.
+    lastRenderedNodeHtml.clear();
+    const nodeHtmls = visibleNodes.map((node) => {
+      const html = renderNode(node, selectedNodeIds, soloNodeId);
+      lastRenderedNodeHtml.set(node.id, html);
+      return html;
+    });
+    setInnerHtml(nodesEl, nodeHtmls.join("") + proxiesHtml);
+    lastRenderedProxiesHtml = proxiesHtml;
+  } else {
+    // Same parent: diff. For each visible node, compare its freshly-
+    // rendered HTML against the previous render. Unchanged nodes keep
+    // their DOM (preserves focus / input selection / mid-drag visuals
+    // on the cards that didn't change). Changed nodes get a single
+    // contextual-fragment replace. Stale DOM (graph nodes that left
+    // the visible set) is removed afterwards.
+    const visibleIds = new Set();
+    for (const node of visibleNodes) {
+      visibleIds.add(node.id);
+      const html = renderNode(node, selectedNodeIds, soloNodeId);
+      const existing = nodesEl.querySelector(
+        `[data-node-id="${escapeSelector(node.id)}"]`
+      );
+      if (existing && lastRenderedNodeHtml.get(node.id) === html) {
+        continue;
+      }
+      lastRenderedNodeHtml.set(node.id, html);
+      const fragment = parseHtmlInto(nodesEl, html);
+      if (existing) {
+        existing.replaceWith(fragment);
+      } else {
+        nodesEl.appendChild(fragment);
+      }
+    }
+    for (const el of nodesEl.querySelectorAll("[data-node-id]")) {
+      if (!visibleIds.has(el.dataset.nodeId)) {
+        lastRenderedNodeHtml.delete(el.dataset.nodeId);
+        el.remove();
+      }
+    }
+
+    // Group proxies — coarse compare on the combined HTML. They only
+    // appear inside a group and the two cards always move together
+    // (bbox-driven layout), so a per-card diff would over-spend on a
+    // path that's already cheap.
+    if (proxiesHtml !== lastRenderedProxiesHtml) {
+      for (const el of nodesEl.querySelectorAll("[data-group-proxy]")) {
+        el.remove();
+      }
+      if (proxiesHtml) {
+        nodesEl.appendChild(parseHtmlInto(nodesEl, proxiesHtml));
+      }
+      lastRenderedProxiesHtml = proxiesHtml;
+    }
+  }
+
   lastRenderedParentId = parentId;
   renderEdges(parentId);
   syncGraphBreadcrumb(parentId);
+}
+
+function escapeSelector(value) {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function"
+    ? CSS.escape(value)
+    : String(value).replace(/(["\\])/g, "\\$1");
+}
+
+// Parse `html` into a DocumentFragment whose elements live in the host's
+// namespace. The contextual-fragment parser inherits the host element's
+// namespace, which matters when nodesEl is HTML (here) and also lets the
+// same helper work if a future caller points it at an SVG host.
+function parseHtmlInto(host, html) {
+  const range = document.createRange();
+  range.selectNodeContents(host);
+  return range.createContextualFragment(html);
 }
 
 function renderGroupProxies(graph, parentId, visibleNodes) {
