@@ -186,6 +186,19 @@ import {
   renderNoiseNode,
 } from "./graph-inspector-gradient.js";
 import {
+  clamp,
+  clamp01,
+  formatFpsReadout,
+  formatSignedStops,
+  formatSignedValue,
+  getLayerPropertyDefaultValue,
+  initInspectorUtils,
+  readControlValue,
+  syncLayerPropertySiblingControls,
+  syncSiblingControls,
+  updateInlineReadout,
+} from "./graph-inspector-utils.js";
+import {
   applyColorPickerHex,
   closeColorPicker,
   commitColorPickerValue,
@@ -287,6 +300,10 @@ export function initGraphShell() {
     inspectorEl,
     cssEscape,
     renderInspector,
+  });
+  initInspectorUtils({
+    inspectorEl,
+    cssEscape,
   });
   initGradientRamp({
     inspectorEl,
@@ -2614,94 +2631,4 @@ function commitMeshStopColorTarget(target, hex) {
     stopIndex === index ? { ...stop, color: hex } : stop
   );
   updateNodeParams(node.id, { stops: nextStops });
-}
-
-function readControlValue(control) {
-  if (control.type === "checkbox") return control.checked;
-  if (control.tagName === "SELECT") return control.value;
-  if (
-    control.dataset.inputKind === "color-swatch" ||
-    control.dataset.inputKind === "color-hex"
-  ) {
-    return normalizeHex(control.value, "#000000");
-  }
-  return Number(control.value);
-}
-
-// Slider and number input share the same data-node-param key — when one
-// moves the other has to follow without going through a full re-render
-// (re-render would steal focus / blow away the user's typed digits).
-function syncSiblingControls(control) {
-  const key = control.dataset.nodeParam;
-  if (!key || !inspectorEl) return;
-  const value = control.value;
-  const siblings = inspectorEl.querySelectorAll(`[data-node-param="${cssEscape(key)}"]`);
-  for (const el of siblings) {
-    if (el === control) continue;
-    if (el.value !== value) el.value = value;
-  }
-}
-
-function syncLayerPropertySiblingControls(control) {
-  const key = control.dataset.nodeProperty;
-  if (!key || !inspectorEl) return;
-  const value = control.value;
-  const siblings = inspectorEl.querySelectorAll(`[data-node-property="${cssEscape(key)}"]`);
-  for (const el of siblings) {
-    if (el === control) continue;
-    if (el.value !== value) el.value = value;
-  }
-}
-
-function getLayerPropertyDefaultValue(key) {
-  switch (key) {
-    case "opacity":
-      return 100;
-    case "hue":
-      return 0;
-    case "saturation":
-      return 100;
-    default:
-      return 0;
-  }
-}
-
-
-
-
-function clamp01(value) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
-}
-
-function updateInlineReadout(control) {
-  // F23 AE-style fill: write --slider-fill on the range input so the CSS
-  // `linear-gradient` track shows the filled portion up to the thumb.
-  if (!control || control.type !== "range") return;
-  const min = Number(control.min);
-  const max = Number(control.max);
-  const value = Number(control.value);
-  if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(value) || max === min) return;
-  const pct = clamp((value - min) / (max - min), 0, 1) * 100;
-  control.style.setProperty("--slider-fill", `${pct}%`);
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function formatSignedValue(value) {
-  if (value > 0) return `+${value}`;
-  return String(value);
-}
-
-function formatSignedStops(value) {
-  const stops = (value / 100).toFixed(2);
-  return value > 0 ? `+${stops}` : stops;
-}
-
-function formatFpsReadout(value, sourceFps) {
-  const numeric = Math.max(1, Math.round(Number(value) || 0));
-  const sourceNumeric = Math.max(1, Math.round(Number(sourceFps) || 0));
-  return numeric === sourceNumeric ? `Source (${sourceNumeric})` : String(numeric);
 }
