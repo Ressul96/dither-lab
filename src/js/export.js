@@ -14,6 +14,7 @@ import {
   tauriWriteBinary,
 } from "./tauri-compat.js";
 import { listenWithDispose } from "./ui/lifecycle.js";
+import { setInnerHtml } from "./ui/utils.js";
 
 const STILL_FORMATS = Object.freeze([
   { id: "png", label: "PNG", extension: "png", mime: "image/png" },
@@ -133,7 +134,10 @@ function ensureExportSheet() {
   exportSheetEl.className = "export-sheet-backdrop hidden";
   exportSheetEl.id = "exportSheet";
   exportSheetEl.setAttribute("aria-hidden", "true");
-  exportSheetEl.innerHTML = `<div class="export-sheet floating-card" role="dialog" aria-modal="true" aria-labelledby="exportSheetTitle"></div>`;
+  setInnerHtml(
+    exportSheetEl,
+    `<div class="export-sheet floating-card" role="dialog" aria-modal="true" aria-labelledby="exportSheetTitle"></div>`
+  );
 
   exportSheetEl.addEventListener("click", async (event) => {
     if (event.target === exportSheetEl) {
@@ -336,7 +340,7 @@ function renderExportSheet() {
     submitDisabled = exportInFlight || dirty || !isSelectedVideoEncoderAvailable();
   }
 
-  panel.innerHTML = `
+  setInnerHtml(panel, `
     <div class="export-sheet__header">
       <div>
         <p class="eyebrow">Export</p>
@@ -388,7 +392,7 @@ function renderExportSheet() {
         >${escapeHtml(submitLabel)}</button>
       </div>
     </div>
-  `;
+  `);
 }
 
 function renderModeButton(mode, label) {

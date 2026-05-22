@@ -14,7 +14,7 @@ import {
 } from "../graph.js";
 import { setCurrentGraphParent } from "./graph-breadcrumb.js";
 import { canBypassGraphNode } from "./graph-node-policy.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, setInnerHtml } from "./utils.js";
 
 let graphMenuEl = null;
 let graphMenuState = null;
@@ -77,7 +77,7 @@ export function initGraphContextMenu(deps) {
     };
     setInsertHighlight(edge?.edgeId ?? "");
     graphMenuEl.className = "context-menu graph-node-picker floating-card hidden";
-    graphMenuEl.innerHTML = renderGraphContextMenuContent(Boolean(edge?.edgeId));
+    setInnerHtml(graphMenuEl, renderGraphContextMenuContent(Boolean(edge?.edgeId)));
     positionGraphContextMenu(event.clientX, event.clientY);
   });
 
@@ -114,7 +114,7 @@ function onNodeContextMenu(event, deps) {
     point: deps.clientToWorld(event.clientX, event.clientY),
   };
   graphMenuEl.className = "context-menu graph-node-context-menu floating-card hidden";
-  graphMenuEl.innerHTML = renderGraphNodeMenuContent(node.id);
+  setInnerHtml(graphMenuEl, renderGraphNodeMenuContent(node.id));
   positionGraphContextMenu(event.clientX, event.clientY);
 }
 

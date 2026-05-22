@@ -30,7 +30,7 @@ import {
   getSelectedNodeIds,
   getSoloNodeId,
 } from "../graph.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, setInnerHtml } from "./utils.js";
 import { syncGraphBreadcrumb } from "./graph-breadcrumb.js";
 import { syncInsertHighlight } from "./graph-edge-insert.js";
 import {
@@ -84,7 +84,7 @@ export function renderGraph() {
   const proxiesHtml = parentId !== ROOT_PARENT_ID
     ? renderGroupProxies(graph, parentId, visibleNodes)
     : "";
-  nodesEl.innerHTML = nodesHtml + proxiesHtml;
+  setInnerHtml(nodesEl, nodesHtml + proxiesHtml);
   lastRenderedParentId = parentId;
   renderEdges(parentId);
   syncGraphBreadcrumb(parentId);
@@ -157,10 +157,13 @@ export function renderEdges(parentId = getCurrentGraphParentId()) {
   edgesEl.setAttribute("viewBox", `0 0 ${GRAPH_WORLD_SIZE} ${GRAPH_WORLD_SIZE}`);
   edgesEl.setAttribute("width", String(GRAPH_WORLD_SIZE));
   edgesEl.setAttribute("height", String(GRAPH_WORLD_SIZE));
-  edgesEl.innerHTML = graph.edges
-    .filter((edge) => visibleNodeIds.has(edge.fromNode) && visibleNodeIds.has(edge.toNode))
-    .map((edge) => renderEdge(edge, graph))
-    .join("");
+  setInnerHtml(
+    edgesEl,
+    graph.edges
+      .filter((edge) => visibleNodeIds.has(edge.fromNode) && visibleNodeIds.has(edge.toNode))
+      .map((edge) => renderEdge(edge, graph))
+      .join("")
+  );
   syncInsertHighlight();
 }
 

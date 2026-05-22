@@ -5,6 +5,7 @@ import { timeToFrame, timelineFrameRate } from "../timeline.js";
 import { initViewerOverlay } from "./viewer-overlay.js";
 import { initViewerGizmos } from "./viewer-gizmos.js";
 import { listenWithDispose, registerDispose } from "./lifecycle.js";
+import { setInnerHtml } from "./utils.js";
 
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 
@@ -470,12 +471,12 @@ function wireContextMenu(stage) {
 function buildContextMenu() {
   const menu = document.createElement("div");
   menu.className = "context-menu floating-card hidden";
-  menu.innerHTML = `
+  setInnerHtml(menu, `
     <button data-mitem="export-frame">Export Current Frame…</button>
     <button data-mitem="remove-source">Remove Video</button>
     <button data-mitem="reset-zoom">Reset Zoom</button>
     <button data-mitem="toggle-inspector">Toggle Pixel Inspector</button>
-  `;
+  `);
   menu.addEventListener("click", async (e) => {
     const btn = e.target.closest("button[data-mitem]");
     if (!btn || btn.disabled) return;

@@ -18,7 +18,7 @@ import {
   getSelectedNode,
   getSelectedNodeIds,
 } from "../graph.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, setInnerHtml } from "./utils.js";
 import { canBypassGraphNode } from "./graph-node-policy.js";
 import {
   isLayerAdjustableNode,
@@ -109,7 +109,7 @@ export function renderInspector() {
   if (selectedNodeIds.length > 1) {
     renderedInspectorNodeId = selectedNodeIds.join(",");
     syncInspectorTitle(null, `${selectedNodeIds.length} nodes selected`);
-    inspectorEl.innerHTML = renderMultiSelectionInspector(selectedNodeIds);
+    setInnerHtml(inspectorEl, renderMultiSelectionInspector(selectedNodeIds));
     return;
   }
 
@@ -118,17 +118,17 @@ export function renderInspector() {
 
   if (!node) {
     syncInspectorTitle(null);
-    inspectorEl.innerHTML = renderEmptyInspector();
+    setInnerHtml(inspectorEl, renderEmptyInspector());
     return;
   }
 
   syncInspectorTitle(node);
 
-  inspectorEl.innerHTML = `
+  setInnerHtml(inspectorEl, `
     ${renderNodeActions(node)}
     ${renderLayerControls(node)}
     ${renderNodeSpecifics(node)}
-  `;
+  `);
 }
 
 function syncInspectorTitle(node, fallback = "No node selected") {

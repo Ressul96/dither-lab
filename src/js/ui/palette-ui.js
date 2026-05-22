@@ -5,7 +5,7 @@ import {
   toSceneX,
   toSceneY,
 } from "./graph-geometry.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, setInnerHtml } from "./utils.js";
 
 let nodePaletteSearchEl = null;
 let nodePaletteEmptyEl = null;
@@ -242,7 +242,7 @@ function createPaletteDragPreview(type, renderSocketRows) {
   const preview = document.createElement("div");
   preview.className = "graph-node graph-node--drag-preview";
   preview.dataset.previewType = type;
-  preview.innerHTML = `
+  setInnerHtml(preview, `
     <div class="graph-node-head">
       <span class="graph-node-title">${escapeHtml(definition.label)}</span>
       <span class="graph-node-family">${escapeHtml(definition.family ?? "Node")}</span>
@@ -250,7 +250,7 @@ function createPaletteDragPreview(type, renderSocketRows) {
     <div class="graph-node-rows">
       ${renderSocketRows(previewNode)}
     </div>
-  `;
+  `);
   return preview;
 }
 

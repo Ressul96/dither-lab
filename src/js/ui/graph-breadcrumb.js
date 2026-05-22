@@ -6,7 +6,7 @@ import {
   resolveGraphParentId,
 } from "../graph.js";
 import { getCurrentGraphParentId } from "./graph-view-scope.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, setInnerHtml } from "./utils.js";
 
 let graphBreadcrumbEl = null;
 
@@ -27,21 +27,24 @@ export function initGraphBreadcrumb(editorEl) {
 export function syncGraphBreadcrumb(parentId = getCurrentGraphParentId()) {
   if (!graphBreadcrumbEl) return;
   const chain = getGraphBreadcrumbChain(parentId);
-  graphBreadcrumbEl.innerHTML = chain
-    .map((item, index) => {
-      const separator = index > 0 ? `<span class="graph-breadcrumb-separator">/</span>` : "";
-      const active = index === chain.length - 1 ? " is-active" : "";
-      return `
-        ${separator}
-        <button
-          type="button"
-          class="graph-breadcrumb-item${active}"
-          data-graph-parent-id="${escapeHtml(item.id)}"
-          aria-current="${index === chain.length - 1 ? "page" : "false"}"
-        >${escapeHtml(item.label)}</button>
-      `;
-    })
-    .join("");
+  setInnerHtml(
+    graphBreadcrumbEl,
+    chain
+      .map((item, index) => {
+        const separator = index > 0 ? `<span class="graph-breadcrumb-separator">/</span>` : "";
+        const active = index === chain.length - 1 ? " is-active" : "";
+        return `
+          ${separator}
+          <button
+            type="button"
+            class="graph-breadcrumb-item${active}"
+            data-graph-parent-id="${escapeHtml(item.id)}"
+            aria-current="${index === chain.length - 1 ? "page" : "false"}"
+          >${escapeHtml(item.label)}</button>
+        `;
+      })
+      .join("")
+  );
 }
 
 export function setCurrentGraphParent(parentId) {

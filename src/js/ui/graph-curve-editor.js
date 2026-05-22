@@ -8,7 +8,7 @@
 // graph-shell's onInspectorPointerDown can dispatch into it
 // without owning the curve drag state machine itself.
 
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, setInnerHtml } from "./utils.js";
 import { getSelectedNode, updateNodeParams } from "../graph.js";
 import { pushHistory } from "../state.js";
 import {
@@ -457,7 +457,7 @@ function syncCurveSvg(svg, points) {
   const mainPath = svg.querySelector("[data-curve-main]");
   if (mainPath) mainPath.setAttribute("d", buildCurvePath(points, size));
   const handleLayer = svg.querySelector("[data-curve-handles]");
-  if (handleLayer) handleLayer.innerHTML = renderCurveHandles(points, size);
+  if (handleLayer) setInnerHtml(handleLayer, renderCurveHandles(points, size));
 }
 
 function findClosestCurvePointIndex(points, x, y) {
