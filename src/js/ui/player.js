@@ -13,7 +13,6 @@ import {
   TIMELINE_BINDING_NODE_PARAM,
   TIMELINE_BINDING_NODE_PROPERTY,
   createTimelineTrackId,
-  duplicateTimelineKeyframes,
   durationToFrames,
   formatFrameReadout,
   formatSecondReadout,
@@ -21,8 +20,6 @@ import {
   moveTimelineKeyframe,
   moveTimelineKeyframes,
   normalizeTimeline,
-  pasteTimelineKeyframes,
-  removeTimelineKeyframeById,
   setSelectedProperty,
   setTimelinePanelOpen,
   setTimelineZoom,
@@ -30,7 +27,6 @@ import {
   setTimelineAutokey,
   setViewMode,
   snapTimeToFrame,
-  snapshotTimelineKeyframes,
   timeToFrame,
   timelineFrameRate,
   toggleTimelineKeyframeAtCurrentTime,
@@ -74,6 +70,14 @@ import {
 } from "./player-graph-editor.js";
 import { createEasingPatch } from "./player-easing.js";
 import {
+  copySelectedKeyframes,
+  deleteSelectedKeyframes,
+  duplicateSelectedKeyframes,
+  initPlayerKeyframeActions,
+  nudgeSelectedKeyframes,
+  pasteKeyframesAtPlayhead,
+} from "./player-keyframe-actions.js";
+import {
   formatKeyframeValue,
   formatNumericInputValue,
   formatPropertyValue,
@@ -99,6 +103,14 @@ import {
   toggleKeyframeSelection,
 } from "./player-selection.js";
 
+export {
+  copySelectedKeyframes,
+  deleteSelectedKeyframes,
+  duplicateSelectedKeyframes,
+  nudgeSelectedKeyframes,
+  pasteKeyframesAtPlayhead,
+};
+
 const KEYFRAME_DRAG_THRESHOLD = 3;
 const selectedKeyframes = getSelectedKeyframes();
 let keyframeDrag = null;
@@ -113,6 +125,7 @@ export function initPlayer() {
   initPlayerTimelineTargets();
   initPlayerGraphEditor();
   initPlayerBezierPopover();
+  initPlayerKeyframeActions();
   bindAction("restart", restart);
   bindAction("prev-frame", () => stepFrame(-1));
   bindAction("toggle-play", togglePlay, { pointerDown: true });
@@ -344,7 +357,7 @@ function wireAnimationTimeline() {
 
     const deleteButton = event.target.closest("[data-keyframe-action='delete']");
     if (deleteButton) {
-      deleteSelectedKeyframe();
+      deleteSelectedKeyframes();
       return;
     }
 
@@ -1501,133 +1514,6 @@ function resetSelectedKeyframeTangents(button) {
       },
     })
   );
-}
-
-// Public form, used by the Inspector "Delete" button and by the Faz 2.b
-// keyboard shortcut. Removes every keyframe currently in the multi-select
-// set in a single timeline pass, then clears selection.
-// Returns true if anything was removed — the keyboard handler uses this to
-// decide whether to swallow the Delete/Backspace key.
-export function deleteSelectedKeyframes() {
-  if (selectedKeyframes.size === 0) return false;
-  let next = getState().timeline;
-  for (const key of selectedKeyframes) {
-    const { trackId, keyframeId } = parseSelectionKey(key);
-    if (!trackId || !keyframeId) continue;
-    next = removeTimelineKeyframeById(next, { trackId, keyframeId });
-  }
-  dispatch("timeline", next);
-  clearSelection();
-  return true;
-}
-
-// Backwards-compat alias — older callers (and the inline Inspector button)
-// expect a singular name; both routes go through the multi-select path.
-function deleteSelectedKeyframe() {
-  deleteSelectedKeyframes();
-}
-
-// Duplicate every selected keyframe one frame later. The resulting newly
-// created keyframes become the new selection so the user can immediately
-// drag or delete them. Returns true when at least one keyframe was made;
-// the keyboard handler uses that to decide whether to swallow Cmd+D.
-export function duplicateSelectedKeyframes() {
-  if (selectedKeyframes.size === 0) return false;
-  const items = [...selectedKeyframes].map(parseSelectionKey);
-  const { timeline: next, newKeys } = duplicateTimelineKeyframes(getState().timeline, items);
-  if (newKeys.length === 0) return false;
-  // Reroute the multi-select to the new keyframes BEFORE dispatching, since
-  // dispatch synchronously triggers renderAnimationTimeline which reads
-  // isKeyframeSelected.
-  selectedKeyframes.clear();
-  for (const { trackId, keyframeId } of newKeys) {
-    selectedKeyframes.add(selectionKey(trackId, keyframeId));
-  }
-  setSelectedTimelineKeyframeCursor(newKeys[newKeys.length - 1]);
-  dispatch("timeline", next);
-  return true;
-}
-
-// Module-level clipboard (shader-lab pattern). Holds the last copied snapshot
-// so paste can repeat across multiple presses without re-copying. Persists for
-// the session — cleared only when overwritten by another copy.
-let timelineKeyframeClipboard = [];
-
-// Nudge every selected keyframe by `direction` (+1 or -1) frame units. With
-// `big`, the step jumps to 10 frames — same scale shader-lab's SMALL/LARGE
-// nudge uses, anchored to the timeline's fps so the result is always a clean
-// integer-frame shift. Returns true when something moved so the caller can
-// fall back to playhead-step when no selection exists.
-export function nudgeSelectedKeyframes(direction, big = false) {
-  if (selectedKeyframes.size === 0) return false;
-  const sign = direction < 0 ? -1 : 1;
-  const { timeline, source } = getState();
-  const normalized = normalizeTimeline(timeline, {
-    duration: source.duration,
-    fps: source.fps,
-  });
-  const fps = normalized.fps;
-  const dt = (sign * (big ? 10 : 1)) / fps;
-  const moves = [];
-  for (const key of selectedKeyframes) {
-    const { trackId, keyframeId } = parseSelectionKey(key);
-    const found = getTimelineKeyframe(normalized, trackId, keyframeId);
-    if (!found) continue;
-    moves.push({
-      trackId,
-      keyframeId,
-      time: Math.max(0, found.keyframe.time + dt),
-    });
-  }
-  if (moves.length === 0) return false;
-  dispatch("timeline", moveTimelineKeyframes(timeline, moves));
-  return true;
-}
-
-// Capture the current multi-selection into the module-level clipboard. Stores
-// the keyframes' full value/easing/tangent payload so paste survives even if
-// the originals get moved or deleted between Cmd+C and Cmd+V. Returns true
-// when at least one keyframe was captured.
-export function copySelectedKeyframes() {
-  if (selectedKeyframes.size === 0) return false;
-  const items = [...selectedKeyframes].map(parseSelectionKey);
-  const snapshot = snapshotTimelineKeyframes(getState().timeline, items);
-  if (snapshot.length === 0) return false;
-  timelineKeyframeClipboard = snapshot;
-  return true;
-}
-
-// Paste the clipboard at the current playhead. Earliest clipboard time lands
-// on the playhead frame; the remaining items preserve their relative offsets
-// (so a 0.5s gap between two copied keyframes stays a 0.5s gap when pasted).
-// Reroutes the multi-selection onto the freshly created keyframes — same UX
-// as duplicate, so the user can immediately drag/nudge what they just pasted.
-export function pasteKeyframesAtPlayhead() {
-  if (!Array.isArray(timelineKeyframeClipboard) || timelineKeyframeClipboard.length === 0) {
-    return false;
-  }
-  const { timeline, playback, source } = getState();
-  const normalized = normalizeTimeline(timeline, {
-    duration: source.duration,
-    fps: source.fps,
-  });
-  const targetTime = snapTimeToFrame(
-    Math.max(0, Number(playback.currentTime) || 0),
-    normalized.fps
-  );
-  const { timeline: next, newKeys } = pasteTimelineKeyframes(
-    timeline,
-    timelineKeyframeClipboard,
-    targetTime
-  );
-  if (newKeys.length === 0) return false;
-  selectedKeyframes.clear();
-  for (const { trackId, keyframeId } of newKeys) {
-    selectedKeyframes.add(selectionKey(trackId, keyframeId));
-  }
-  setSelectedTimelineKeyframeCursor(newKeys[newKeys.length - 1]);
-  dispatch("timeline", next);
-  return true;
 }
 
 function pickTimelineKeyframe(element) {
