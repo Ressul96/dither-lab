@@ -4,16 +4,15 @@
 // either GPU (cheap fullscreen-quad pass) or CPU fallback with the same
 // soft-edge semantics.
 //
-// Luma here intentionally uses BT.601 (legacy "Rec.601 SDR Y") — the
-// channel labels (red/green/blue/luma/max) map to a single scalar
-// comparison and the default "luma" picks the coefficients that match
-// what GPU-side threshold shaders elsewhere in the project use today.
-// Switching to BT.709 is a project-wide decision tracked in
-// docs/audit/next-phases.md item V.1.
+// Luma here uses BT.709 — the project canon, matches the GPU shaders
+// and the rest of the CPU image-ops (posterize / levels / duotone /
+// gradient-map / rgb-curves). The channel labels (red/green/blue/luma
+// /max) map to a single scalar comparison and the default "luma" picks
+// these coefficients.
 
 import { createBuffer } from "./buffer-pool.js";
 import { clamp, mixByte, smoothstep } from "./pixel-math.js";
-import { luminanceBt601 } from "../color.js";
+import { luminanceBt709 } from "../color.js";
 import { applyThresholdGpu } from "../gpu-effects.js";
 
 export function applyThresholdNode(input, params) {
@@ -80,6 +79,6 @@ function thresholdChannelValue(r, g, b, channel) {
       return Math.max(r, g, b);
     case "luma":
     default:
-      return luminanceBt601(r, g, b);
+      return luminanceBt709(r, g, b);
   }
 }

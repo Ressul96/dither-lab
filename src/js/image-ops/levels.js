@@ -6,7 +6,7 @@
 //     independently. The fast path: bake the curve into a 256-entry
 //     LUT once, then per pixel it's just three array reads + an
 //     optional opacity blend.
-//   * luma — shape the BT.601 luma via the same LUT, then scale the
+//   * luma — shape the BT.709 luma via the same LUT, then scale the
 //     original RGB by the new/old ratio so chroma direction is
 //     preserved (avoids the tinting that channel-wise application
 //     introduces on saturated colours).
@@ -16,7 +16,7 @@
 
 import { createBuffer } from "./buffer-pool.js";
 import { clamp, clamp01 } from "./pixel-math.js";
-import { luminanceBt601 } from "../color.js";
+import { luminanceBt709 } from "../color.js";
 
 export function applyLevelsNode(input, params) {
   if (!input?.width || !input?.height) return null;
@@ -75,7 +75,7 @@ export function applyLevelsNode(input, params) {
       const r = data[i];
       const g = data[i + 1];
       const b = data[i + 2];
-      const oldLuma = luminanceBt601(r, g, b) / 255;
+      const oldLuma = luminanceBt709(r, g, b) / 255;
       // Sample the LUT at the integer luma byte (round) so the result
       // matches the RGB-mode pre-bake above.
       const lumaIndex = Math.max(0, Math.min(255, Math.round(oldLuma * 255)));

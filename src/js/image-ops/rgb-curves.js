@@ -3,17 +3,17 @@
 // Three apply modes:
 //
 //   rgb    — write the curved RGB directly (default; channel-wise).
-//   luma   — keep the source RGB direction but rescale to the BT.601
+//   luma   — keep the source RGB direction but rescale to the BT.709
 //            luma of the *curved* triple. Lets curves act as a tonal
 //            shaper without recolouring saturated hues.
-//   color  — apply the curve as a chroma move: BT.601 luma of the
+//   color  — apply the curve as a chroma move: BT.709 luma of the
 //            *source* is preserved, RGB is rescaled to the curved
 //            colour. Useful for tinted grades that shouldn't push
 //            shadows or highlights.
 
 import { createBuffer } from "./buffer-pool.js";
 import { clamp } from "./pixel-math.js";
-import { luminanceBt601 } from "../color.js";
+import { luminanceBt709 } from "../color.js";
 import {
   areRgbCurvesIdentity,
   buildFinalRgbCurvesLuts,
@@ -46,9 +46,9 @@ export function applyRgbCurvesNode(input, params) {
     const curvedB = finalLuts.blue[srcB];
 
     if (applyMode === "luma") {
-      scaleRgbToLumaInto(srcR, srcG, srcB, luminanceBt601(curvedR, curvedG, curvedB), data, i);
+      scaleRgbToLumaInto(srcR, srcG, srcB, luminanceBt709(curvedR, curvedG, curvedB), data, i);
     } else if (applyMode === "color") {
-      scaleRgbToLumaInto(curvedR, curvedG, curvedB, luminanceBt601(srcR, srcG, srcB), data, i);
+      scaleRgbToLumaInto(curvedR, curvedG, curvedB, luminanceBt709(srcR, srcG, srcB), data, i);
     } else {
       data[i] = curvedR;
       data[i + 1] = curvedG;
@@ -60,13 +60,13 @@ export function applyRgbCurvesNode(input, params) {
   return output;
 }
 
-// Rescale an RGB triple so its BT.601 luma matches `targetLuma`, then
+// Rescale an RGB triple so its BT.709 luma matches `targetLuma`, then
 // write into `target[offset..offset+2]`. Falls back to a flat grey at
 // the requested luma when the input is effectively black — preserves
 // the perceived brightness without dividing by ~0 and exploding the
 // channels.
 function scaleRgbToLumaInto(r, g, b, targetLuma, target, offset) {
-  const currentLuma = luminanceBt601(r, g, b);
+  const currentLuma = luminanceBt709(r, g, b);
   if (currentLuma <= 0.001) {
     const neutral = clamp(Math.round(targetLuma), 0, 255);
     target[offset] = neutral;

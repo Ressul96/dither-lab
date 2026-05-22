@@ -6,10 +6,10 @@
 // (mix, color, dither, gradient) import a known stable surface instead
 // of redeclaring the same helpers everywhere.
 //
-// Luma defaults to BT.709 (the project's canonical convention —
-// see color.js for the rationale). Nodes that intentionally want BT.601
-// (currently posterize / RGB-curves "luma mode", gradient-map's
-// rgbLuma scale) import `luminanceBt601` from color.js directly.
+// Luma is BT.709 across the whole pipeline (project canon — see
+// color.js for the rationale). The only remaining BT.601 caller is the
+// user-selectable RGB-to-BW "BT.601" coefficient set, which imports
+// LUMA_BT601 directly when that option is picked.
 
 import { luminanceBt709 } from "../color.js";
 

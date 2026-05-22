@@ -10,7 +10,7 @@
 
 import { createBuffer } from "./buffer-pool.js";
 import { clamp, clamp01, mixByte } from "./pixel-math.js";
-import { luminanceBt601 } from "../color.js";
+import { luminanceBt709 } from "../color.js";
 import { buildGradientLut } from "../gl/gradient-lut.js";
 import {
   applyGradientMapGpu,
@@ -224,14 +224,15 @@ function gradientMapStops(params) {
   ];
 }
 
-// Single-channel scalar the LUT is indexed by. `luma` uses BT.601 to
-// match the established gradient-map look; per-channel modes return
-// the raw 0..1 normalised component.
+// Single-channel scalar the LUT is indexed by. `luma` uses BT.709
+// (the project canon — matches CPU posterize/levels/duotone and the
+// GPU shaders); per-channel modes return the raw 0..1 normalised
+// component.
 function gradientMapSignal(r, g, b, mode) {
   if (mode === "r" || mode === "red") return r;
   if (mode === "g" || mode === "green") return g;
   if (mode === "b" || mode === "blue") return b;
-  return luminanceBt601(r, g, b);
+  return luminanceBt709(r, g, b);
 }
 
 function gradientMapCoordinate(signal, repeat, shift) {

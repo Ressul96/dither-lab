@@ -4,13 +4,13 @@
 // redGamma compresses shadows on the red channel, etc.).
 //
 // Implementation: bake the per-channel gamma curves into 256-entry
-// LUTs once, then the inner loop is just three array reads + a BT.601
+// LUTs once, then the inner loop is just three array reads + a BT.709
 // luma dot + a 3-channel linear interpolation. Opacity blends the
 // duotone result against the original RGB at the end.
 
 import { createBuffer } from "./buffer-pool.js";
 import { clamp, clamp01 } from "./pixel-math.js";
-import { hexToRgb01, luminanceBt601 } from "../color.js";
+import { hexToRgb01, luminanceBt709 } from "../color.js";
 
 export function applyDuotoneNode(input, params) {
   if (!input?.width || !input?.height) return null;
@@ -46,7 +46,7 @@ export function applyDuotoneNode(input, params) {
     const r = lutR[data[i]];
     const g = lutG[data[i + 1]];
     const b = lutB[data[i + 2]];
-    const luma = luminanceBt601(r, g, b);
+    const luma = luminanceBt709(r, g, b);
     const mappedR = shadow[0] + (highlight[0] - shadow[0]) * luma;
     const mappedG = shadow[1] + (highlight[1] - shadow[1]) * luma;
     const mappedB = shadow[2] + (highlight[2] - shadow[2]) * luma;

@@ -7,13 +7,13 @@
 // → toSrgb) so the banding lines fall at perceptually-uniform luma
 // steps instead of bunching up in the highlights.
 //
-// Luma mode quantizes the BT.601 luma and rescales the original RGB
+// Luma mode quantizes the BT.709 luma and rescales the original RGB
 // triple so the hue stays put — useful when the user wants posterized
 // bands without losing colour identity within each band.
 
 import { createBuffer } from "./buffer-pool.js";
 import { clamp, clamp01, mixByte } from "./pixel-math.js";
-import { luminanceBt601 } from "../color.js";
+import { luminanceBt709 } from "../color.js";
 import { applyPosterizeGpu } from "../gpu-effects.js";
 
 export function applyPosterizeNode(input, params) {
@@ -54,7 +54,7 @@ function applyPosterizeCpu(input, params) {
     let outG;
     let outB;
     if (lumaMode) {
-      const luma = luminanceBt601(workR, workG, workB);
+      const luma = luminanceBt709(workR, workG, workB);
       const quantizedLuma = Math.floor(luma * levelR + 0.5) / levelR;
       outR = quantizedLuma + (workR - luma);
       outG = quantizedLuma + (workG - luma);

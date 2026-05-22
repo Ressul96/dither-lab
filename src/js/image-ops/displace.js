@@ -17,7 +17,7 @@
 import { createBuffer, releaseBuffer } from "./buffer-pool.js";
 import { clamp } from "./pixel-math.js";
 import { sampleBilinearChannel, sampleNearestInto } from "./sampling.js";
-import { luminanceBt601 } from "../color.js";
+import { luminanceBt709 } from "../color.js";
 import { buildCurveLut } from "../curve-lut.js";
 
 export function applyDisplaceNode(input, mapInput, params) {
@@ -79,7 +79,7 @@ export function applyDisplaceNode(input, mapInput, params) {
         sampleDisplaceMapInto(mapData, mapWidth, mapHeight, x, y, mapLayout, mapSample);
         hasMapSample = true;
         if (mapMode === "luma") {
-          const luma = clamp(Math.round(luminanceBt601(mapSample[0], mapSample[1], mapSample[2])), 0, 255);
+          const luma = clamp(Math.round(luminanceBt709(mapSample[0], mapSample[1], mapSample[2])), 0, 255);
           const shaped = mapCurve[luma];
           vectorX = (shaped - 128) / 128;
           vectorY = vectorX;
@@ -100,7 +100,7 @@ export function applyDisplaceNode(input, mapInput, params) {
           out[i + 1] = clamp(Math.round(128 + vectorY * 127), 0, 255);
           out[i + 2] = 128;
         } else if (mapMode === "luma") {
-          const luma = clamp(Math.round(luminanceBt601(mapSample[0], mapSample[1], mapSample[2])), 0, 255);
+          const luma = clamp(Math.round(luminanceBt709(mapSample[0], mapSample[1], mapSample[2])), 0, 255);
           const shaped = mapCurve[luma];
           out[i] = shaped;
           out[i + 1] = shaped;
