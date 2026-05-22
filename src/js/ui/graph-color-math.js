@@ -97,3 +97,25 @@ export function hexToRgb255(hex) {
     parseInt(safe.slice(4, 6), 16),
   ];
 }
+
+// Palette-side helpers — palette swatches store colours as [r, g, b]
+// triples, not hex strings, so these short converters round-trip
+// between that array form and hex / css notation for the swatch UI
+// and the picker hex input wiring.
+
+export function rgbToHex(rgb) {
+  const toHex = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+  return `#${toHex(rgb[0])}${toHex(rgb[1])}${toHex(rgb[2])}`;
+}
+
+export function rgbToCss(rgb) {
+  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
+export function hexToRgb(hex) {
+  const clean = String(hex || "#000000").replace("#", "");
+  const r = parseInt(clean.slice(0, 2), 16) || 0;
+  const g = parseInt(clean.slice(2, 4), 16) || 0;
+  const b = parseInt(clean.slice(4, 6), 16) || 0;
+  return [r, g, b];
+}
