@@ -347,7 +347,8 @@
             <span class="time-readout tabular">0000 / 0000</span>
             <button class="icon-btn" data-action="more" title="More" aria-label="More">⋯</button>
             <button class="icon-btn timeline-panel-toggle" data-action="toggle-timeline-panel"
-              title="Expand timeline" aria-label="Expand timeline" aria-expanded="true">▾</button>
+              title="Expand timeline" aria-label="Expand timeline" aria-expanded="true"
+              aria-controls="animationTimeline">▾</button>
           </div>
         </header>
 
@@ -391,6 +392,11 @@
             </div>
           </section>
         </div>
+        <button class="timeline-minimise-handle" type="button" data-action="toggle-timeline-panel"
+          title="Collapse timeline" aria-label="Collapse timeline" aria-expanded="true"
+          aria-controls="animationTimeline">
+          <span class="timeline-minimise-handle__grip" aria-hidden="true"></span>
+        </button>
       </div>
     </main>
 

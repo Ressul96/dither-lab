@@ -2224,6 +2224,47 @@ body.cutting-edges * {
   font-size: 12px;
 }
 
+.timeline-minimise-handle {
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 92px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  transform: translateX(-50%);
+  cursor: pointer;
+}
+
+.timeline-minimise-handle__grip {
+  width: 48px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.22);
+}
+
+.timeline-minimise-handle:hover .timeline-minimise-handle__grip,
+.timeline-minimise-handle:focus-visible .timeline-minimise-handle__grip {
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.timeline-minimise-handle:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.player-card.is-collapsed .timeline-minimise-handle__grip {
+  width: 56px;
+  background: rgba(106, 176, 255, 0.48);
+}
+
 /* --- Body grid: properties | timeline ----------------------------------- */
 
 .player-body {

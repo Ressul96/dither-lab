@@ -39,12 +39,17 @@ export function updateTimelineChrome(timeline) {
     playerEls.playerCard.classList.toggle("is-collapsed", !panelOpen);
     playerEls.playerCard.setAttribute("aria-expanded", panelOpen ? "true" : "false");
   }
-  if (playerEls.panelToggle) {
+  if (playerEls.panelToggles?.length) {
     const panelOpen = timeline.panelOpen !== false;
-    playerEls.panelToggle.textContent = panelOpen ? "▾" : "▴";
-    playerEls.panelToggle.setAttribute("aria-expanded", panelOpen ? "true" : "false");
-    playerEls.panelToggle.setAttribute("aria-label", panelOpen ? "Collapse timeline" : "Expand timeline");
-    playerEls.panelToggle.setAttribute("title", panelOpen ? "Collapse timeline" : "Expand timeline");
+    const label = panelOpen ? "Collapse timeline" : "Expand timeline";
+    for (const toggle of playerEls.panelToggles) {
+      if (toggle.classList.contains("timeline-panel-toggle")) {
+        toggle.textContent = panelOpen ? "▾" : "▴";
+      }
+      toggle.setAttribute("aria-expanded", panelOpen ? "true" : "false");
+      toggle.setAttribute("aria-label", label);
+      toggle.setAttribute("title", label);
+    }
   }
   for (const button of playerEls.viewButtons ?? []) {
     const active = button.dataset.timelineView === timeline.viewMode;

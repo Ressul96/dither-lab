@@ -15,6 +15,7 @@ const playerEls = {
   timelinePane: null,
   timelineBody: null,
   panelToggle: null,
+  panelToggles: [],
   viewButtons: [],
   zoomReadout: null,
   playerCard: null,
@@ -48,7 +49,8 @@ export function cachePlayerEls() {
   playerEls.emptyState = root.querySelector(".empty-state");
   playerEls.timelinePane = root.querySelector(".timeline-pane");
   playerEls.timelineBody = root.querySelector(".timeline-pane-body");
-  playerEls.panelToggle = root.querySelector('[data-action="toggle-timeline-panel"]');
+  playerEls.panelToggles = Array.from(root.querySelectorAll('[data-action="toggle-timeline-panel"]'));
+  playerEls.panelToggle = playerEls.panelToggles[0] ?? null;
   playerEls.viewButtons = Array.from(root.querySelectorAll("[data-timeline-view]"));
   playerEls.zoomReadout = root.querySelector("[data-timeline-zoom-readout]");
 
