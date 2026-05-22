@@ -56,6 +56,22 @@ import {
   initPlayerElements,
 } from "./player-elements.js";
 import { initPlayerCompare } from "./player-compare.js";
+import {
+  clearSelection,
+  getSelectedKeyframes,
+  getSelectedPropertyTrackId,
+  getSelectedTimelineKeyframeCursor,
+  initPlayerSelection,
+  isKeyframeSelected,
+  parseSelectionKey,
+  pickKeyframeWithModifier,
+  replaceSelectedKeyframes,
+  selectionKey,
+  setSelectedPropertyTrackId,
+  setSelectedTimelineKeyframeCursor,
+  setSoleSelection,
+  toggleKeyframeSelection,
+} from "./player-selection.js";
 
 const KEYFRAME_DRAG_THRESHOLD = 3;
 const GRAPH_EDITOR_WIDTH = 1000;
@@ -70,72 +86,16 @@ const LAYER_TRACKS = Object.freeze([
 const COLOR_PARAM_TRACK_COLOR = "#FF8CAB";
 const DEFAULT_PARAM_TRACK_COLOR = "#B697FF";
 
-// Multi-select keyframe state. `selectedKeyframes` is the full set of
-// "trackId|keyframeId" keys; `selectedTimelineKeyframe` always points at the
-// most recently picked one — the inspector panel only edits a single keyframe
-// at a time, so it follows that "last clicked" cursor.
-const selectedKeyframes = new Set();
-let selectedTimelineKeyframe = null;
+const selectedKeyframes = getSelectedKeyframes();
 let keyframeDrag = null;
 let tangentDrag = null;
 let playheadDrag = null;
-
-let selectedPropertyTrackId = null;
-
-function selectionKey(trackId, keyframeId) {
-  return `${trackId}|${keyframeId}`;
-}
-
-function isKeyframeSelected(trackId, keyframeId) {
-  return selectedKeyframes.has(selectionKey(trackId, keyframeId));
-}
-
-function setSoleSelection(trackId, keyframeId) {
-  selectedKeyframes.clear();
-  selectedKeyframes.add(selectionKey(trackId, keyframeId));
-  selectedTimelineKeyframe = { trackId, keyframeId };
-}
-
-function toggleKeyframeSelection(trackId, keyframeId) {
-  const key = selectionKey(trackId, keyframeId);
-  if (selectedKeyframes.has(key)) {
-    selectedKeyframes.delete(key);
-    if (
-      selectedTimelineKeyframe?.trackId === trackId &&
-      selectedTimelineKeyframe?.keyframeId === keyframeId
-    ) {
-      // Promote any remaining selection to be the inspector target.
-      const next = selectedKeyframes.values().next().value;
-      selectedTimelineKeyframe = next ? parseSelectionKey(next) : null;
-    }
-  } else {
-    selectedKeyframes.add(key);
-    selectedTimelineKeyframe = { trackId, keyframeId };
-  }
-}
-
-function parseSelectionKey(key) {
-  const [trackId, keyframeId] = key.split("|");
-  return { trackId, keyframeId };
-}
-
-function clearSelection() {
-  selectedKeyframes.clear();
-  selectedTimelineKeyframe = null;
-}
-
-function pickKeyframeWithModifier(trackId, keyframeId, event) {
-  if (event && (event.shiftKey || event.metaKey || event.ctrlKey)) {
-    toggleKeyframeSelection(trackId, keyframeId);
-  } else {
-    setSoleSelection(trackId, keyframeId);
-  }
-}
 
 const playerEls = getPlayerEls();
 
 export function initPlayer() {
   initPlayerElements();
+  initPlayerSelection();
   bindAction("restart", restart);
   bindAction("prev-frame", () => stepFrame(-1));
   bindAction("toggle-play", togglePlay, { pointerDown: true });
@@ -344,7 +304,7 @@ function wireAnimationTimeline() {
       event.preventDefault();
       event.stopPropagation();
       const trackId = trackToggle.dataset.trackToggle;
-      selectedPropertyTrackId = trackId;
+      setSelectedPropertyTrackId(trackId);
       setSelectedProperty(trackId);
       toggleTrackExpanded(trackId);
       return;
@@ -354,9 +314,10 @@ function wireAnimationTimeline() {
     if (propCard) {
       event.preventDefault();
       event.stopPropagation();
-      selectedPropertyTrackId = propCard.dataset.trackId;
-      setSelectedProperty(selectedPropertyTrackId);
-      setTrackExpanded(selectedPropertyTrackId, true);
+      const trackId = propCard.dataset.trackId;
+      setSelectedPropertyTrackId(trackId);
+      setSelectedProperty(trackId);
+      setTrackExpanded(trackId, true);
       return;
     }
 
@@ -467,6 +428,7 @@ function applyCurvePreset(button) {
   const track = normalized.tracks.find((item) => item.id === trackId);
   if (!track) return;
 
+  const selectedTimelineKeyframe = getSelectedTimelineKeyframeCursor();
   const selectedOnTrack = selectedTimelineKeyframe?.trackId === trackId
     ? track.keyframes.find((keyframe) => keyframe.id === selectedTimelineKeyframe.keyframeId)
     : null;
@@ -510,7 +472,7 @@ function togglePropertyKeyframe(button) {
   const changed = toggleTimelineKeyframeAtCurrentTime({ nodeId, binding, value });
   if (!changed) return;
   const trackId = createTimelineTrackId(nodeId, binding);
-  selectedPropertyTrackId = trackId;
+  setSelectedPropertyTrackId(trackId);
   setSelectedProperty(trackId);
   setTrackExpanded(trackId, true);
 }
@@ -527,7 +489,7 @@ function togglePropertyTrackEnabled(button) {
       patch: { enabled: track.enabled === false },
     })
   );
-  selectedPropertyTrackId = trackId;
+  setSelectedPropertyTrackId(trackId);
   setSelectedProperty(trackId);
 }
 
@@ -788,12 +750,13 @@ function renderAnimationTimeline() {
 
   updateTimelineChrome(normalized);
 
+  const selectedPropertyTrackId = getSelectedPropertyTrackId();
   const selectedId = targets.some((target) => target.id === normalized.selectedPropertyId)
     ? normalized.selectedPropertyId
     : selectedPropertyTrackId;
   const activeTarget = targets.find((target) => target.id === selectedId) || (targets.length > 0 ? targets[0] : null);
   if (activeTarget && selectedPropertyTrackId !== activeTarget.id) {
-    selectedPropertyTrackId = activeTarget.id;
+    setSelectedPropertyTrackId(activeTarget.id);
   }
   const activeTrack = activeTarget?.track ?? null;
   const activeId = activeTarget?.id ?? null;
@@ -1775,7 +1738,7 @@ function onAnimationTimelinePointerDown(event) {
   } else if (!isKeyframeSelected(picked.trackId, picked.keyframeId)) {
     setSoleSelection(picked.trackId, picked.keyframeId);
   } else {
-    selectedTimelineKeyframe = picked;
+    setSelectedTimelineKeyframeCursor(picked);
   }
 
   const selected = getSelectedTimelineKeyframe(normalized);
@@ -2175,21 +2138,7 @@ function onMarqueePointerUp() {
 // element is parented to a lane that renderAnimationTimeline rebuilds, so
 // we deliberately avoid re-rendering during the drag.
 function applySelectionSet(next) {
-  selectedKeyframes.clear();
-  for (const k of next) selectedKeyframes.add(k);
-  // Inspector cursor: keep "last clicked" if still in the set, otherwise
-  // promote any survivor.
-  if (
-    selectedTimelineKeyframe &&
-    !selectedKeyframes.has(
-      selectionKey(selectedTimelineKeyframe.trackId, selectedTimelineKeyframe.keyframeId)
-    )
-  ) {
-    const last = selectedKeyframes.size ? [...selectedKeyframes].pop() : null;
-    selectedTimelineKeyframe = last ? parseSelectionKey(last) : null;
-  } else if (!selectedTimelineKeyframe && selectedKeyframes.size) {
-    selectedTimelineKeyframe = parseSelectionKey([...selectedKeyframes].pop());
-  }
+  replaceSelectedKeyframes(next);
   for (const k of document.querySelectorAll(".animation-keyframe, .animation-graph-keyframe")) {
     const key = selectionKey(k.dataset.timelineTrackId, k.dataset.timelineKeyframeId);
     k.classList.toggle("is-selected", selectedKeyframes.has(key));
@@ -2334,7 +2283,7 @@ export function duplicateSelectedKeyframes() {
   for (const { trackId, keyframeId } of newKeys) {
     selectedKeyframes.add(selectionKey(trackId, keyframeId));
   }
-  selectedTimelineKeyframe = newKeys[newKeys.length - 1];
+  setSelectedTimelineKeyframeCursor(newKeys[newKeys.length - 1]);
   dispatch("timeline", next);
   return true;
 }
@@ -2767,7 +2716,7 @@ export function pasteKeyframesAtPlayhead() {
   for (const { trackId, keyframeId } of newKeys) {
     selectedKeyframes.add(selectionKey(trackId, keyframeId));
   }
-  selectedTimelineKeyframe = newKeys[newKeys.length - 1];
+  setSelectedTimelineKeyframeCursor(newKeys[newKeys.length - 1]);
   dispatch("timeline", next);
   return true;
 }
@@ -2780,6 +2729,7 @@ function pickTimelineKeyframe(element) {
 }
 
 function getSelectedTimelineKeyframe(timeline = getState().timeline) {
+  let selectedTimelineKeyframe = getSelectedTimelineKeyframeCursor();
   if (!selectedTimelineKeyframe?.trackId || !selectedTimelineKeyframe?.keyframeId) return null;
   const selected = getTimelineKeyframe(
     timeline,
@@ -2794,6 +2744,7 @@ function getSelectedTimelineKeyframe(timeline = getState().timeline) {
     );
     const next = selectedKeyframes.values().next().value;
     selectedTimelineKeyframe = next ? parseSelectionKey(next) : null;
+    setSelectedTimelineKeyframeCursor(selectedTimelineKeyframe);
     if (!selectedTimelineKeyframe) return null;
     return getTimelineKeyframe(
       timeline,
