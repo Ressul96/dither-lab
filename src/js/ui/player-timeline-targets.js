@@ -147,6 +147,14 @@ export function getTimelineTargetBaseValue(node, binding, fallback) {
   return node.params?.[key] ?? definition?.defaultParams?.[key] ?? fallback;
 }
 
+export function getTrackBaseValue(track, node) {
+  const key = track.binding?.key;
+  if (!key || !node) return undefined;
+  if (track.binding?.type === TIMELINE_BINDING_NODE_PROPERTY) return getTimelineTargetBaseValue(node, track.binding);
+  if (track.binding?.type === TIMELINE_BINDING_NODE_PARAM) return getTimelineTargetBaseValue(node, track.binding);
+  return node.params?.[key] ?? node[key];
+}
+
 function isTimelineVisibleParam(node, key) {
   const value = getTimelineTargetBaseValue(node, {
     type: TIMELINE_BINDING_NODE_PARAM,

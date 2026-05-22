@@ -54,6 +54,7 @@ import {
 import {
   buildTimelineProperties,
   getTimelineTargetBaseValue,
+  getTrackBaseValue,
   initPlayerTimelineTargets,
 } from "./player-timeline-targets.js";
 import {
@@ -702,14 +703,6 @@ function renderAnimationTimeline() {
   }
 
   updateAnimationPlayhead(playback, duration);
-}
-
-function getTrackBaseValue(track, node) {
-  const key = track.binding?.key;
-  if (!key || !node) return undefined;
-  if (track.binding?.type === TIMELINE_BINDING_NODE_PROPERTY) return getTimelineTargetBaseValue(node, track.binding);
-  if (track.binding?.type === TIMELINE_BINDING_NODE_PARAM) return getTimelineTargetBaseValue(node, track.binding);
-  return node.params?.[key] ?? node[key];
 }
 
 function onAnimationTimelinePointerDown(event) {
