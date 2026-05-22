@@ -6,7 +6,6 @@ import {
   getSelectedNode,
   getSelectedNodeIds,
   insertNodeOnEdge,
-  replacePaletteUsages,
   resolveGraphParentId,
   selectNode,
   toggleParamExposed,
@@ -16,23 +15,8 @@ import {
   updateNodeLabel,
   updateNodeParams,
 } from "../graph.js";
-import {
-  extractPaletteFromImageData,
-  mergePaletteExtraction,
-  normalizeExtractionSize,
-} from "../palette-extraction.js";
-import {
-  createCustomPalette,
-  duplicatePalette,
-  getPalette,
-  getPaletteOptionsGrouped,
-  isBuiltInPalette,
-  listCustomPalettes,
-  removePalette,
-  subscribePalettes,
-  updateCustomPalette,
-} from "../palettes.js";
-import { getCurrentSourceFrameCanvas, setFps } from "../source.js";
+import { subscribePalettes } from "../palettes.js";
+import { setFps } from "../source.js";
 import { listenWithDispose, registerDispose } from "./lifecycle.js";
 import {
   TIMELINE_BINDING_NODE_PROPERTY,
@@ -127,11 +111,7 @@ import {
   isLayerAdjustableNode,
   syncTimelineButtons,
 } from "./graph-inspector-fields.js";
-import {
-  hexToRgb,
-  normalizeHexOrNull,
-  rgbToHex,
-} from "./graph-color-math.js";
+import { normalizeHexOrNull } from "./graph-color-math.js";
 import {
   initDitherInspector,
   renderPaletteManager,
@@ -164,6 +144,15 @@ import {
   initInspectorCore,
   renderInspector,
 } from "./graph-inspector-core.js";
+import {
+  getPaletteExtractionSize,
+  getSelectedDitherNode,
+  handlePaletteChange,
+  handlePaletteClick,
+  handlePaletteInput,
+  initPaletteActions,
+  onPaletteRegistryChange,
+} from "./graph-palette-actions.js";
 import {
   applyColorPickerHex,
   closeColorPicker,
@@ -219,7 +208,6 @@ let inspectorTitleEl;
 let stageEl;
 let resizeObserver;
 let inspectorEditing = false;
-let paletteExtractionSize = 4;
 let graphRenameNodeId = null;
 // F17.1 inspector undo: snapshot a control's pre-drag value the first time
 // `input` fires for it, then turn the whole drag into a single history entry
@@ -249,8 +237,13 @@ export function initGraphShell() {
   });
   initInspectorFields({ inspectorEl });
   initInspectorCore({ inspectorEl, inspectorTitleEl });
+  initPaletteActions({
+    inspectorEl,
+    setInspectorEditing: setInspectorEditingFlag,
+    isInspectorEditing: () => inspectorEditing,
+  });
   initDitherInspector({
-    getPaletteExtractionSize: () => paletteExtractionSize,
+    getPaletteExtractionSize,
   });
   initCurveEditor({
     renderInspector,
@@ -933,185 +926,6 @@ function handleGraphInspectorAction(control) {
       break;
     default:
       break;
-  }
-}
-
-function handlePaletteClick(control) {
-  const action = control.dataset.paletteAction;
-  const node = getSelectedDitherNode();
-  const selectedId = node?.params?.palette ?? "monochrome";
-
-  switch (action) {
-    case "new": {
-      const palette = createCustomPalette("Custom Palette", [
-        [0, 0, 0],
-        [128, 128, 128],
-        [255, 255, 255],
-      ]);
-      if (node) updateNodeParams(node.id, { palette: palette.id });
-      renderInspector();
-      break;
-    }
-    case "duplicate": {
-      const palette = duplicatePalette(selectedId);
-      if (palette && node) updateNodeParams(node.id, { palette: palette.id });
-      renderInspector();
-      break;
-    }
-    case "delete": {
-      if (isBuiltInPalette(selectedId)) return;
-      const fallback = pickFallbackPaletteId(selectedId);
-      if (!removePalette(selectedId)) return;
-      clearPaletteSwatchLocks(selectedId);
-      replacePaletteUsages(selectedId, fallback);
-      renderInspector();
-      break;
-    }
-    case "add-swatch": {
-      if (isBuiltInPalette(selectedId)) return;
-      const palette = getPalette(selectedId);
-      if (!palette) return;
-      const next = [...palette.colors, [128, 128, 128]];
-      updateCustomPalette(selectedId, { colors: next });
-      syncPaletteLocks(selectedId, next.length);
-      renderInspector();
-      break;
-    }
-    case "remove-swatch": {
-      if (isBuiltInPalette(selectedId)) return;
-      const palette = getPalette(selectedId);
-      if (!palette || palette.colors.length <= 1) return;
-      const index = Number(control.dataset.swatchIndex);
-      if (Number.isNaN(index)) return;
-      const next = palette.colors.filter((_, i) => i !== index);
-      updateCustomPalette(selectedId, { colors: next });
-      removeLockedSwatchIndex(selectedId, index, next.length);
-      renderInspector();
-      break;
-    }
-    case "toggle-lock": {
-      if (isBuiltInPalette(selectedId)) return;
-      const palette = getPalette(selectedId);
-      if (!palette) return;
-      const index = Number(control.dataset.swatchIndex);
-      if (Number.isNaN(index)) return;
-      toggleLockedSwatchIndex(selectedId, index, palette.colors.length);
-      renderInspector();
-      break;
-    }
-    case "extract": {
-      const imageData = readCurrentSourceFrame();
-      if (!imageData) return;
-      const palette = getPalette(selectedId);
-      if (!palette) return;
-
-      if (isBuiltInPalette(selectedId)) {
-        const colors = extractPaletteFromImageData(imageData, { size: paletteExtractionSize });
-        if (colors.length === 0) return;
-        const extracted = createCustomPalette(`${palette.name} Extracted`, colors);
-        clearPaletteSwatchLocks(extracted.id);
-        if (node) updateNodeParams(node.id, { palette: extracted.id });
-        renderInspector();
-        break;
-      }
-
-      const size = paletteExtractionSize;
-      const lockedIndexes = getLockedSwatchIndexes(selectedId, palette.colors.length)
-        .filter((index) => index < size);
-      const lockedColors = lockedIndexes.map((index) => palette.colors[index]);
-      const extractedColors = extractPaletteFromImageData(imageData, {
-        size: Math.max(0, size - lockedColors.length),
-        avoidColors: lockedColors,
-      });
-      const next = mergePaletteExtraction({
-        size,
-        currentColors: palette.colors,
-        lockedIndexes,
-        extractedColors,
-      });
-      if (next.length === 0) return;
-      updateCustomPalette(selectedId, { colors: next });
-      syncPaletteLocks(selectedId, next.length);
-      renderInspector();
-      break;
-    }
-    default:
-      break;
-  }
-}
-
-function handlePaletteInput(control) {
-  const action = control.dataset.paletteAction;
-  const node = getSelectedDitherNode();
-  const selectedId = node?.params?.palette ?? "monochrome";
-
-  if (action === "edit-swatch") {
-    if (isBuiltInPalette(selectedId)) return;
-    const palette = getPalette(selectedId);
-    if (!palette) return;
-    const index = Number(control.dataset.swatchIndex);
-    if (Number.isNaN(index)) return;
-    const next = palette.colors.map((c, i) => (i === index ? hexToRgb(control.value) : c));
-    inspectorEditing = true;
-    updateCustomPalette(selectedId, { colors: next });
-  }
-}
-
-function handlePaletteChange(control) {
-  const action = control.dataset.paletteAction;
-  const node = getSelectedDitherNode();
-  const selectedId = node?.params?.palette ?? "monochrome";
-
-  if (action === "rename") {
-    if (isBuiltInPalette(selectedId)) return;
-    inspectorEditing = false;
-    updateCustomPalette(selectedId, { name: control.value });
-    renderInspector();
-    return;
-  }
-
-  if (action === "edit-swatch") {
-    inspectorEditing = false;
-    renderInspector();
-    return;
-  }
-
-  if (action === "extract-size") {
-    paletteExtractionSize = normalizeExtractionSize(control.value, paletteExtractionSize);
-  }
-}
-
-function onPaletteRegistryChange() {
-  if (!inspectorEl) return;
-  prunePaletteLocks();
-  if (!inspectorEditing) {
-    renderInspector();
-  }
-  dispatch("graph", {});
-}
-
-function getSelectedDitherNode() {
-  const { graph } = getState();
-  const node = graph.nodes.find((n) => n.id === graph.selectedNodeId);
-  return node?.type === "dither" ? node : null;
-}
-
-function pickFallbackPaletteId(removingId) {
-  const custom = listCustomPalettes().filter((p) => p.id !== removingId);
-  if (custom.length > 0) return custom[0].id;
-  return "monochrome";
-}
-
-function readCurrentSourceFrame() {
-  const canvas = getCurrentSourceFrameCanvas();
-  if (!canvas?.width || !canvas?.height) return null;
-  const context = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
-  if (!context) return null;
-  try {
-    return context.getImageData(0, 0, canvas.width, canvas.height);
-  } catch (error) {
-    console.error("[palette-extract] failed to read current source frame", error);
-    return null;
   }
 }
 
