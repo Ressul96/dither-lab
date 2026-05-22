@@ -252,7 +252,7 @@ uniform float u_opacity;
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 const float TAU = 6.28318530718;
 
 float lineMask(float phase) {
@@ -305,7 +305,7 @@ in vec2 v_uv;
 out vec4 out_color;
 
 const int MAX_ITERATIONS = 32;
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 
 float channelKey(vec3 color) {
   if (u_channel < 0.5) return dot(color, LUMA_W);
@@ -376,7 +376,7 @@ uniform float u_saturation;  // pre-process saturation 0 - 2
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 
 float shapeMask(vec2 cellPos, float radius, float aa, float shape) {
   if (shape < 0.5) {
@@ -520,8 +520,8 @@ vec3 sampleSoft(vec2 uv, float bleedPx) {
   vec3 c = texture(u_image, uv + vec2(2.0 * dx, 0.0)).rgb;
   vec3 d = texture(u_image, uv - vec2(2.0 * dx, 0.0)).rgb;
   vec3 blurred = (base + a + b + c + d) / 5.0;
-  float lumaBase = dot(base, vec3(0.299, 0.587, 0.114));
-  float lumaBlur = dot(blurred, vec3(0.299, 0.587, 0.114));
+  float lumaBase = dot(base, vec3(0.2126, 0.7152, 0.0722));
+  float lumaBlur = dot(blurred, vec3(0.2126, 0.7152, 0.0722));
   vec3 chroma = blurred - vec3(lumaBlur);
   return vec3(lumaBase) + chroma;
 }
@@ -587,7 +587,7 @@ void main() {
   col *= mix(1.0, sl, u_scanlines * 0.45);
 
   // Saturation pre-process (matches the Shader Lab "General" block)
-  float luma = dot(col, vec3(0.299, 0.587, 0.114));
+  float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
   col = mix(vec3(luma), col, u_saturation);
 
   // Vignette darkens corners
@@ -696,7 +696,7 @@ uniform float u_opacity;
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 
 vec3 toLinear(vec3 c) { return pow(c, vec3(2.2)); }
 vec3 toSrgb(vec3 c) { return pow(c, vec3(1.0 / 2.2)); }
@@ -747,7 +747,7 @@ uniform float u_opacity;
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 
 float sampleSignal(vec3 color, float mode) {
   if (mode < 0.5) return dot(color, LUMA_W);
@@ -787,7 +787,7 @@ uniform float u_opacity;
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 
 float sampleChannel(vec3 c, float ch) {
   if (ch < 0.5) return dot(c, LUMA_W);
@@ -835,7 +835,7 @@ uniform float u_gamma;       // 0 linear, 1 sRGB-aware
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 
 // Hardcoded Bayer matrices in shader constant memory — much cheaper than
 // uniform-array access on most GPUs and avoids any dynamic upload cost.
@@ -948,7 +948,7 @@ uniform float u_presenceSoftness;  // 0..1
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 
 void main() {
   // Snap each output pixel to its containing cell on the ASCII grid.
@@ -1015,7 +1015,7 @@ uniform float u_taps;  // 24..96, scales with radius (set by uniform builder)
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 const int MAX_TAPS = 96;
 const float GOLDEN = 2.39996323;
 const float TAU = 6.28318530718;
@@ -1084,7 +1084,7 @@ uniform float u_taps;        // 24..96, scales with radius (set by uniform build
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 const int MAX_TAPS = 96;
 // Golden ratio in radians (137.5°). Picks an "incommensurate" angle so
 // successive samples in the spiral never line up — spreads tap energy
@@ -1171,7 +1171,7 @@ uniform float u_colorize;   // lightweight spectral tint amount
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 const float PI = 3.141592653589793;
 const float TAU = 6.283185307179586;
 const int MAX_STREAKS = 8;
@@ -1356,7 +1356,7 @@ uniform float u_rolling;       // 0-1 rolling sync band
 in vec2 v_uv;
 out vec4 out_color;
 
-const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA_W = vec3(0.2126, 0.7152, 0.0722);
 
 vec2 curveUv(vec2 uv, float strength) {
   // Center origin, distort outward by squared distance — classic CRT bulge.
@@ -2809,7 +2809,7 @@ uniform float u_knee;
 uniform float u_saturation;
 in vec2 v_uv;
 out vec4 out_color;
-const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 void main() {
   vec3 c = texture(u_image, v_uv).rgb;
   float l = dot(c, LUMA);
@@ -2951,7 +2951,7 @@ uniform float u_saturation;
 uniform vec3 u_tint;
 in vec2 v_uv;
 out vec4 out_color;
-const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 void main() {
   vec3 c = texture(u_image, v_uv).rgb;
   float l = dot(c, LUMA);
@@ -2981,7 +2981,7 @@ uniform float u_knee;
 uniform float u_saturation;
 in vec2 v_uv;
 out vec4 out_color;
-const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 void main() {
   vec3 c = texture(u_image, v_uv).rgb;
   float l = dot(c, LUMA);
