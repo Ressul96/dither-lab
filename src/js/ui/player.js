@@ -55,8 +55,8 @@ import {
   getPlayerEls,
   initPlayerElements,
 } from "./player-elements.js";
+import { initPlayerCompare } from "./player-compare.js";
 
-const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 const KEYFRAME_DRAG_THRESHOLD = 3;
 const GRAPH_EDITOR_WIDTH = 1000;
 const GRAPH_EDITOR_HEIGHT = 136;
@@ -152,7 +152,7 @@ export function initPlayer() {
     dispatch("playback", { loopEnabled: !playback.loopEnabled });
   });
 
-  wireCompare();
+  initPlayerCompare({ subscribe });
   wireAnimationTimeline();
   wireMoreMenu();
 
@@ -160,7 +160,6 @@ export function initPlayer() {
   wireTimelineDragHandle();
   subscribe("source", onSourceChange);
   subscribe("playback", onPlaybackChange);
-  subscribe("view", onViewChange);
   subscribe("timeline", (slot) => {
     renderAnimationTimeline(slot);
     // Keep the bezier popover SVG in sync with handle drags / undo / preset
@@ -255,26 +254,6 @@ function bindAction(action, handler, options = {}) {
       return;
     }
     invoke(event);
-  });
-}
-
-
-function wireCompare() {
-  const seg = document.querySelector(".compare-mode");
-  if (!seg) return;
-  seg.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-mode]");
-    if (!btn) return;
-    const prev = normalizeCompareMode(getState().view.compare);
-    const requested = normalizeCompareMode(btn.dataset.mode);
-    const next = prev === requested ? "processed" : requested;
-    if (prev === next) return;
-    dispatch("view", { compare: next });
-    pushHistory({
-      label: "Change compare mode",
-      undo: () => dispatch("view", { compare: prev }),
-      redo: () => dispatch("view", { compare: next }),
-    });
   });
 }
 
@@ -787,26 +766,6 @@ function onPlaybackChange(playback) {
 
   updateAnimationPlayhead(playback, duration);
 }
-
-function onViewChange(view) {
-  if (!playerEls.compareSeg) cachePlayerEls();
-  if (!playerEls.compareSeg) return;
-  const compare = normalizeCompareMode(view.compare);
-  if (compare !== view.compare) {
-    dispatch("view", { compare });
-    return;
-  }
-  for (const btn of playerEls.compareButtons) {
-    const active = btn.dataset.mode === compare;
-    btn.classList.toggle("active", active);
-    btn.setAttribute("aria-pressed", active ? "true" : "false");
-  }
-
-  for (const el of playerEls.compareReadouts) {
-    el.textContent = formatCompareMode(compare);
-  }
-}
-
 
 function renderAnimationTimeline() {
   if (!playerEls.propertyList) cachePlayerEls();
@@ -2993,15 +2952,4 @@ function getEffectiveTimelineZoom(timeline) {
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
-}
-
-function formatCompareMode(value) {
-  return normalizeCompareMode(value)
-    .split("-")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function normalizeCompareMode(value) {
-  return COMPARE_MODES.has(value) ? value : "processed";
 }
