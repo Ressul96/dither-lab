@@ -209,3 +209,93 @@ export function renderCheckboxField(label, key, checked) {
     </div>
   `;
 }
+
+export function renderRangeField(label, key, value, min, max, _readout) {
+  const safeKey = escapeHtml(key);
+  const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+  const fillPct = sliderFillPercent(numericValue, min, max);
+  return `
+    <div class="field range-field">
+      <label>
+        <span class="field-label-row">
+          ${renderParamSocketDot(safeKey, min, max)}
+          ${renderParamKeyframeButton(key)}
+          <span class="field-label-text">${escapeHtml(label)}</span>
+        </span>
+        <span class="field-suffix" data-param-readout="${safeKey}"></span>
+      </label>
+      <div class="range-row">
+        <input
+          type="range"
+          min="${min}"
+          max="${max}"
+          value="${numericValue}"
+          data-node-param="${safeKey}"
+          data-input-kind="range"
+          style="--slider-fill: ${fillPct}%"
+        />
+        <input
+          type="number"
+          class="num-edit"
+          min="${min}"
+          max="${max}"
+          value="${numericValue}"
+          data-node-param="${safeKey}"
+          data-input-kind="number"
+        />
+      </div>
+    </div>
+  `;
+}
+
+export function renderLayerRangeField(label, key, value, min, max, _readout) {
+  const safeKey = escapeHtml(key);
+  const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+  // Same fill-percent inline as renderRangeField — without it, the CSS
+  // default `--slider-fill: 50%` paints every layer property slider at
+  // mid-track on first render, contradicting the actual value (Opacity
+  // defaults to 100 but appeared half-full).
+  const fillPct = sliderFillPercent(numericValue, min, max);
+  return `
+    <div class="field range-field">
+      <label>
+        <span class="field-label-row">
+          ${renderLayerPropertyKeyframeButton(key)}
+          <span class="field-label-text">${escapeHtml(label)}</span>
+        </span>
+        <span class="field-suffix" data-property-readout="${safeKey}"></span>
+      </label>
+      <div class="range-row">
+        <input
+          type="range"
+          min="${min}"
+          max="${max}"
+          value="${numericValue}"
+          data-node-property="${safeKey}"
+          data-input-kind="range"
+          style="--slider-fill: ${fillPct}%"
+        />
+        <input
+          type="number"
+          class="num-edit"
+          min="${min}"
+          max="${max}"
+          value="${numericValue}"
+          data-node-property="${safeKey}"
+          data-input-kind="number"
+        />
+      </div>
+    </div>
+  `;
+}
+
+export function sliderFillPercent(value, min, max) {
+  const numericMin = Number(min);
+  const numericMax = Number(max);
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericMin) || !Number.isFinite(numericMax) || numericMax === numericMin) {
+    return 50;
+  }
+  const pct = ((numericValue - numericMin) / (numericMax - numericMin)) * 100;
+  return Math.max(0, Math.min(100, pct));
+}
