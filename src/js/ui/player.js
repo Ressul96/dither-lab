@@ -103,6 +103,12 @@ import {
   initPlayerMarquee,
   startMarqueeDrag,
 } from "./player-marquee.js";
+import {
+  handlePlayheadKeyDown,
+  initPlayerPlayhead,
+  startPlayheadDrag,
+  updateAnimationPlayhead,
+} from "./player-playhead.js";
 
 export {
   copySelectedKeyframes,
@@ -116,7 +122,6 @@ const KEYFRAME_DRAG_THRESHOLD = 3;
 const selectedKeyframes = getSelectedKeyframes();
 let keyframeDrag = null;
 let tangentDrag = null;
-let playheadDrag = null;
 
 const playerEls = getPlayerEls();
 
@@ -129,6 +134,12 @@ export function initPlayer() {
   initPlayerKeyframeActions();
   initPlayerTimelineItems({ timeToTimelinePercent });
   initPlayerMarquee({ renderAnimationTimeline });
+  initPlayerPlayhead({
+    clamp,
+    getEffectiveTimelineZoom,
+    resolveTimelineDuration,
+    timeToTimelinePercent,
+  });
   bindAction("restart", restart);
   bindAction("prev-frame", () => stepFrame(-1));
   bindAction("toggle-play", togglePlay, { pointerDown: true });
@@ -903,38 +914,6 @@ function onAnimationTimelineKeyDown(event) {
   if (playheadHandle && handlePlayheadKeyDown(event)) return;
 }
 
-function handlePlayheadKeyDown(event) {
-  if (
-    (event.key !== "ArrowLeft" && event.key !== "ArrowRight") ||
-    event.metaKey ||
-    event.ctrlKey
-  ) {
-    return false;
-  }
-
-  event.preventDefault();
-  event.stopPropagation();
-
-  const { source, timeline, playback } = getState();
-  const normalized = normalizeTimeline(timeline, {
-    duration: source.duration,
-    fps: source.fps,
-  });
-  const duration = resolveTimelineDuration(normalized, source);
-  if (duration <= 0) return true;
-
-  const fps = timelineFrameRate(normalized, source.fps);
-  const direction = event.key === "ArrowLeft" ? -1 : 1;
-  const multiplier = event.shiftKey ? 10 : event.altKey ? 0.1 : 1;
-  const trimStart = clamp(Number(playback.trimStart) || 0, 0, duration);
-  const trimEnd = clamp(Number(playback.trimEnd) || duration, trimStart, duration);
-  const maxTime = Math.max(trimStart, trimEnd - 1 / Math.max(1, fps));
-  const currentTime = Number.isFinite(Number(playback.currentTime)) ? Number(playback.currentTime) : 0;
-  pausePlayback();
-  seek(clamp(currentTime + (direction * multiplier) / Math.max(1, fps), trimStart, maxTime));
-  return true;
-}
-
 function onAnimationTimelinePointerMove(event) {
   if (!keyframeDrag) return;
   const dx = event.clientX - keyframeDrag.startX;
@@ -976,72 +955,6 @@ function onAnimationTimelinePointerUp() {
   document.removeEventListener("pointermove", onAnimationTimelinePointerMove);
   document.removeEventListener("pointerup", onAnimationTimelinePointerUp);
   document.removeEventListener("pointercancel", onAnimationTimelinePointerUp);
-}
-
-function startPlayheadDrag(handle, event) {
-  if (event.button !== 0 && event.button !== undefined) return;
-  event.preventDefault();
-  event.stopPropagation();
-
-  const { source, timeline, playback } = getState();
-  const normalized = normalizeTimeline(timeline, {
-    duration: source.duration,
-    fps: source.fps,
-  });
-  const duration = resolveTimelineDuration(normalized, source);
-  if (duration <= 0) return;
-
-  const body = handle.closest(".timeline-pane-body");
-  if (!body) return;
-
-  playheadDrag = {
-    body,
-    duration,
-    fps: timelineFrameRate(normalized, source.fps),
-    handle,
-    pointerId: event.pointerId,
-    wasPlaying: playback.playing === true,
-  };
-  if (playheadDrag.wasPlaying) pausePlayback();
-  try {
-    handle.setPointerCapture(event.pointerId);
-  } catch {}
-  document.body.classList.add("dragging-playhead");
-  updatePlayheadDragFromPointer(event);
-  document.addEventListener("pointermove", onPlayheadPointerMove);
-  document.addEventListener("pointerup", onPlayheadPointerUp);
-  document.addEventListener("pointercancel", onPlayheadPointerUp);
-}
-
-function onPlayheadPointerMove(event) {
-  if (!playheadDrag) return;
-  event.preventDefault();
-  updatePlayheadDragFromPointer(event);
-}
-
-function onPlayheadPointerUp() {
-  if (!playheadDrag) return;
-  try {
-    playheadDrag.handle?.releasePointerCapture(playheadDrag.pointerId);
-  } catch {}
-  playheadDrag = null;
-  document.body.classList.remove("dragging-playhead");
-  updatePlayheadTooltip(null);
-  document.removeEventListener("pointermove", onPlayheadPointerMove);
-  document.removeEventListener("pointerup", onPlayheadPointerUp);
-  document.removeEventListener("pointercancel", onPlayheadPointerUp);
-}
-
-function updatePlayheadDragFromPointer(event) {
-  const drag = playheadDrag;
-  if (!drag) return;
-  const rect = drag.body.getBoundingClientRect();
-  const contentWidth = Math.max(drag.body.scrollWidth, drag.body.clientWidth, 1);
-  const x = clamp(event.clientX - rect.left + drag.body.scrollLeft, 0, contentWidth);
-  const ratio = clamp(x / contentWidth, 0, 1);
-  const time = snapTimeToFrame(ratio * drag.duration, drag.fps);
-  seek(time);
-  updatePlayheadTooltip(time, drag.fps);
 }
 
 function startTangentDrag(handle, event) {
@@ -1270,33 +1183,6 @@ function getSelectedTimelineKeyframe(timeline = getState().timeline) {
   return selected;
 }
 
-function updateAnimationPlayhead(playback, sourceDuration) {
-  if (!playerEls.playerCard) return;
-  const { source, timeline } = getState();
-  const normalized = normalizeTimeline(timeline, {
-    duration: sourceDuration,
-    fps: source.fps,
-  });
-  const fps = timelineFrameRate(normalized, source.fps);
-  const duration = resolveTimelineDuration(normalized, { duration: sourceDuration });
-  const playhead = playerEls.playerCard.querySelector(".playhead");
-  if (!playhead) return;
-  const left = timeToTimelinePercent(playback.currentTime, duration, fps) * getEffectiveTimelineZoom(normalized);
-  playhead.style.left = `${left}%`;
-  syncPlayheadAccessibility(playhead, playback.currentTime, duration, fps);
-}
-
-function syncPlayheadAccessibility(playhead, time, duration, fps) {
-  const handle = playhead.querySelector(".playhead-handle");
-  if (!handle) return;
-  const totalFrames = durationToFrames(duration, fps);
-  const frame = timeToFrame(time, fps);
-  handle.setAttribute("aria-valuemin", "0");
-  handle.setAttribute("aria-valuemax", String(Math.max(0, totalFrames - 1)));
-  handle.setAttribute("aria-valuenow", String(clamp(frame, 0, Math.max(0, totalFrames - 1))));
-  handle.setAttribute("aria-valuetext", `F${frame} · ${formatRulerSecond(time)}`);
-}
-
 function resolveTimelineDuration(timeline, source) {
   const timelineDuration = Number(timeline?.duration);
   if (Number.isFinite(timelineDuration) && timelineDuration > 0) return timelineDuration;
@@ -1315,16 +1201,6 @@ function timeToTimelinePercent(time, duration, fps) {
   const totalFrames = durationToFrames(duration, fps);
   const frame = Math.min(totalFrames, timeToFrame(time, fps));
   return clamp((frame / totalFrames) * 100, 0, 100);
-}
-
-function updatePlayheadTooltip(time, fps = 30) {
-  const playhead = playerEls.playerCard?.querySelector(".playhead");
-  const tooltip = playhead?.querySelector(".playhead-tooltip");
-  if (!playhead || !tooltip) return;
-  const dragging = Number.isFinite(Number(time));
-  playhead.classList.toggle("is-dragging", dragging);
-  if (!dragging) return;
-  tooltip.textContent = `${formatRulerSecond(time)} · F${timeToFrame(time, fps)}`;
 }
 
 function getEffectiveTimelineZoom(timeline) {
