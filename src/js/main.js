@@ -1,5 +1,6 @@
 import { initShell } from "./ui/shell.js";
 import { initGraphShell } from "./ui/graph-shell.js";
+import { initSplash } from "./ui/splash.js";
 import {
   initPlayer,
   goToLastFrame,
@@ -10,7 +11,14 @@ import {
   pasteKeyframesAtPlayhead,
 } from "./ui/player.js";
 import { initStage, resetZoom, togglePixelInspector } from "./ui/stage.js";
-import { newProject, openProject, saveProject, saveProjectAs } from "./project.js";
+import {
+  getRecentProjects,
+  newProject,
+  openProject,
+  openRecentProject,
+  saveProject,
+  saveProjectAs,
+} from "./project.js";
 import { initExport, openExport } from "./export.js";
 import { initSource, openSource, togglePlay, stepFrame, restart } from "./source.js";
 import { undo, redo, syncHistoryButtons } from "./state.js";
@@ -25,6 +33,12 @@ initStage();
 initProjectButtons();
 initHistoryButtons();
 initKeyboard();
+initSplash({
+  getRecentProjects,
+  newProject,
+  openProject,
+  openRecentProject,
+});
 syncHistoryButtons();
 
 // Tear down registered listeners + observers before the window unloads.

@@ -10,6 +10,27 @@
 </head>
 
 <body>
+  <div class="splash-screen" id="splashScreen" role="dialog" aria-labelledby="splashTitle">
+    <div class="splash-panel">
+      <div class="splash-copy">
+        <p class="splash-kicker">Dither Lab</p>
+        <h1 id="splashTitle">Start a local project</h1>
+        <p>Open a saved graph or begin with the default Source to Viewer Output chain.</p>
+      </div>
+      <div class="splash-actions">
+        <button class="btn primary" type="button" data-splash-action="new">New Project</button>
+        <button class="btn" type="button" data-splash-action="open">Open Project</button>
+      </div>
+      <section class="splash-recent" aria-label="Recent projects">
+        <div class="splash-recent-head">
+          <span>Recent Projects</span>
+          <span data-splash-recent-count>0</span>
+        </div>
+        <ul class="splash-recent-list" data-splash-recent-list></ul>
+      </section>
+    </div>
+  </div>
+
   <div id="app">
     <aside class="inspector" id="inspector">
       <button class="panel-toggle" type="button" data-panel-toggle="left" aria-label="Hide left panel"

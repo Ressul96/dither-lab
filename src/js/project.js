@@ -13,6 +13,8 @@ import { selectedPath, tauriRemoveFile, tauriRenameFn } from "./tauri-compat.js"
 
 let currentProjectPath = "";
 const SUPPORTED_PROJECT_VERSIONS = new Set([1]);
+const RECENT_PROJECTS_KEY = "dither-lab:recent-projects";
+const MAX_RECENT_PROJECTS = 8;
 
 export function newProject() {
   currentProjectPath = "";
@@ -87,7 +89,46 @@ export async function openProject() {
   validateProject(project);
   await applyProject(project);
   currentProjectPath = path;
+  rememberRecentProject(path);
   return project;
+}
+
+export async function openRecentProject(path) {
+  const tauri = window.__TAURI__;
+  if (!path || !tauri?.fs?.readTextFile) {
+    console.warn("[project] recent project support is unavailable");
+    return null;
+  }
+
+  const raw = await tauri.fs.readTextFile(path);
+  let project;
+  try {
+    project = JSON.parse(raw);
+  } catch (error) {
+    console.error("[project] recent project file is not valid JSON", error);
+    throw new Error("Project file is corrupt or not valid JSON.");
+  }
+  validateProject(project);
+  await applyProject(project);
+  currentProjectPath = path;
+  rememberRecentProject(path);
+  return project;
+}
+
+export function getRecentProjects() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RECENT_PROJECTS_KEY) ?? "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((path) => typeof path === "string" && path.trim())
+      .slice(0, MAX_RECENT_PROJECTS)
+      .map((path) => ({
+        path,
+        name: path.split(/[/\\]/).pop() || path,
+      }));
+  } catch {
+    return [];
+  }
 }
 
 async function writeProjectFile(path) {
@@ -118,6 +159,7 @@ async function writeProjectFile(path) {
     await rename(tmpPath, path);
   }
 
+  rememberRecentProject(path);
   return project;
 }
 
@@ -220,4 +262,13 @@ function validateProject(project) {
   if (!SUPPORTED_PROJECT_VERSIONS.has(project.version)) {
     throw new Error(`Unsupported Dither Lab project version: ${project.version ?? "missing"}.`);
   }
+}
+
+function rememberRecentProject(path) {
+  if (!path) return;
+  const current = getRecentProjects().map((item) => item.path);
+  const next = [path, ...current.filter((item) => item !== path)].slice(0, MAX_RECENT_PROJECTS);
+  try {
+    localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next));
+  } catch {}
 }
