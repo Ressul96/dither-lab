@@ -92,6 +92,16 @@ import {
 let inspectorEl = null;
 let inspectorTitleEl = null;
 let renderedInspectorNodeId = null;
+// M.4 phase 2 inspector skip-when-unchanged. The inspector re-renders
+// on every graph / timeline / source dispatch (subject to the
+// `inspectorEditing` flag), but most of those dispatches produce the
+// exact same HTML — a timeline tick that didn't cross a keyframe, a
+// graph dispatch that touched a different node's params, a source
+// dispatch on a non-viewer selection. Caching the last-written HTML
+// lets us early-return before the contextual-fragment parse + DOM swap
+// when the body would be identical. Reset on a selection change so
+// the next render always paints once before the cache becomes useful.
+let lastRenderedInspectorHtml = "";
 
 export function initInspectorCore(refs) {
   inspectorEl = refs.inspectorEl ?? null;
@@ -107,28 +117,42 @@ export function renderInspector() {
   const { graph } = getState();
   const selectedNodeIds = getSelectedNodeIds(graph);
   if (selectedNodeIds.length > 1) {
-    renderedInspectorNodeId = selectedNodeIds.join(",");
+    const selectionKey = selectedNodeIds.join(",");
+    if (renderedInspectorNodeId !== selectionKey) lastRenderedInspectorHtml = "";
+    renderedInspectorNodeId = selectionKey;
     syncInspectorTitle(null, `${selectedNodeIds.length} nodes selected`);
-    setInnerHtml(inspectorEl, renderMultiSelectionInspector(selectedNodeIds));
+    writeInspectorHtml(renderMultiSelectionInspector(selectedNodeIds));
     return;
   }
 
   const node = getSelectedNode(graph);
-  renderedInspectorNodeId = node?.id ?? null;
+  const nextNodeId = node?.id ?? null;
+  if (nextNodeId !== renderedInspectorNodeId) lastRenderedInspectorHtml = "";
+  renderedInspectorNodeId = nextNodeId;
 
   if (!node) {
     syncInspectorTitle(null);
-    setInnerHtml(inspectorEl, renderEmptyInspector());
+    writeInspectorHtml(renderEmptyInspector());
     return;
   }
 
   syncInspectorTitle(node);
 
-  setInnerHtml(inspectorEl, `
+  writeInspectorHtml(`
     ${renderNodeActions(node)}
     ${renderLayerControls(node)}
     ${renderNodeSpecifics(node)}
   `);
+}
+
+// Single seam for the inspector DOM swap so the skip-when-unchanged
+// guard lives in one place. The cache is only valid for the current
+// selection (renderInspector resets it on selection change), so a
+// string equality check is enough — no need to hash.
+function writeInspectorHtml(html) {
+  if (html === lastRenderedInspectorHtml) return;
+  setInnerHtml(inspectorEl, html);
+  lastRenderedInspectorHtml = html;
 }
 
 function syncInspectorTitle(node, fallback = "No node selected") {
