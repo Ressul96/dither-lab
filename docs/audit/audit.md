@@ -1,10 +1,12 @@
 # Dither Lab — İyileştirme Yol Haritası
 
-**Tarih:** 2026-05-20
+**Tarih:** 2026-05-23 (M.1 / M.2 / M.4 / V.1 closure güncellemesi)
 **Girdiler:** [docs/audit/2026-05-18-code-audit.md](2026-05-18-code-audit.md) + [docs/antigravityauditreport.md](../antigravityauditreport.md)
 **Tip:** Audit raporu değil, uygulanabilir faz planı. Her faz "amaç → görev → dokunulacak dosya → başarı kriteri" biçiminde.
 
 > İki kaynak rapordaki bulgular kesişiyor. Bu doküman; Antigravity raporunun mantıklı maddelerini alır, 2026-05-18 auditindeki henüz kapatılmamış maddelerle birleştirir, son commit'lerde halledilenleri ayırır.
+>
+> **2026-05-23 notu:** Faz A-G sonrası kalan büyük mimari borçlar (M.1, M.2, M.4) + parity riski (V.1) Claude + Codex paralel iki-agent oturumunda kapandı. Faz D #3 (BT.601/709 drift), Faz E-equivalent (`graph-shell.js` split + `player.js` split + `innerHTML` migrasyonu) tamamlanmış sayılır. Faz D #1/#2 (renderFrame async disiplin) ile S.1 EXR scope kararı hâlâ açık.
 
 ---
 
@@ -21,10 +23,21 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
 | P2 #16 — `escapeHtml` çoğaltması | `3af1abe Extract shared UI escaping helper` |
 | P3 #19 — GPU renderer dispose | `affbb54 Add GPU renderer disposal hooks` |
 | P2 #21 — `subscribe(full-render)` (kısmi) | `8c2439a perf(graph): skip graph rebuild during inspector drags` |
-| F22 timeline minimise | `cf5f636 feat(timeline): collapsed by default + drag to reposition` |
-| F23 slider redesign | `dccd19f feat(inspector): After Effects-style slider + scrubbable number` |
+| F22 timeline minimise (eski) | `cf5f636 feat(timeline): collapsed by default + drag to reposition` |
+| F23 slider redesign (eski) | `dccd19f feat(inspector): After Effects-style slider + scrubbable number` |
 | F24 group I/O proxy | `bb61055 feat(group): virtual I/O proxy nodes inside groups` |
-| Default pan davranışı | `6e7dee5 feat(graph): default left-drag back to pan` |
+| Default pan davranışı (eski) | `6e7dee5 feat(graph): default left-drag back to pan` |
+| **M.3** image-ops.js split | `e470021` ve öncesi — kategori-bazlı modüller |
+| **M.5** Deep-clone azaltma (`graph.js`) | önceki oturumlar |
+| **A.1** Gizmo/playhead/bezier a11y | 2026-05-21 Codex çalışma ağacı |
+| **A.2** Dispose registry | önceki oturumlar |
+| **M.1** `graph-shell.js` split (7207 → 526 satır, 22 atomik commit, 13+ yeni UI modülü) | `6aa5552 Extract inspector event handlers` (final) |
+| **M.2** `player.js` split (2930 → 1111 satır, 14 yeni player-* modülü) | `1c3c3a5 Extract player track base helper` (final, Codex) |
+| **M.4 phase 1** 13 non-player `innerHTML` site → `setInnerHtml` helper (namespace-aware `createContextualFragment`) | `812dc68 Migrate non-player innerHTML sites to replaceChildren` |
+| **M.4 phase 2** `renderGraph` per-node diff + `renderInspector` skip-when-unchanged | `b1e4767`, `33b89b0` |
+| **V.1 GPU** 18 luma site `vec3(0.299,…)` → `vec3(0.2126,…)`; YIQ matrisi bırakıldı | `b465652 Switch GPU shader luma to BT.709` |
+| **V.1 CPU** 7 image-ops dosyası `luminanceBt601` → `luminanceBt709` (posterize / levels / duotone / rgb-curves / gradient / threshold / displace) | `ea81f17 Switch CPU image-ops luma to BT.709` |
+| **F22 (2. tur)** timeline minimise handle + default pan + slider redesign + splash screen | `6018fc5`, `bc14451`, `e43a75e`, `2a09cf9`, `a5b242d` (Codex) |
 
 ---
 
@@ -167,11 +180,10 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
    - Yapılacak: İki ayrı API: `getCommittedFrame()` (saf sync read, en son commit'lenen canvas), `renderFrame(opts)` (explicit render). Export pipeline `renderFrameForExport({await: true})` çağırır.
    - Başarı kriteri: Export session dışında still export 2x tıklanırsa ikinci tıklamada stale frame yok.
 
-3. **BT.601 vs BT.709 luma drift (eski audit P0 #1, hâlâ açık)**
-   - Sorun: `image-ops.js`'de bazı node'lar BT.601, bazıları BT.709 kullanıyor; aynı pixel iki node'dan farklı luminance dönüyor → preview/export parity riski.
-   - Yapılacak: [src/js/color.js](../../src/js/color.js) içinde `LUMA_BT709 = [0.2126, 0.7152, 0.0722]` ve `LUMA_BT601 = [0.299, 0.587, 0.114]` constant'ları; her node hangisini kullandığını comment'le belirtsin. **Önerilen kanon: Tüm dither/posterize/threshold/levels/duotone/gradient-map için BT.709.** GPU shader'ları da bu konvansiyona uyacak şekilde eşitle.
-   - Dosyalar: [src/js/image-ops.js](../../src/js/image-ops.js), [src/js/palettes.js](../../src/js/palettes.js), [src/js/palette-extraction.js](../../src/js/palette-extraction.js), [src/js/gpu-effects.js](../../src/js/gpu-effects.js) shader sabitleri.
-   - Başarı kriteri: Tek-pixel test grid'i (#FF0000, #00FF00, #0000FF + grayscale ramp) tüm node'larda aynı luminance üretiyor.
+3. **BT.601 vs BT.709 luma drift (eski audit P0 #1)** — ✅ **Tamamlandı 2026-05-23** (V.1)
+   - Çözüm: GPU shader'larda 18 luma site BT.709'a geçti (`b465652`). CPU tarafında 7 image-ops dosyası `luminanceBt601` → `luminanceBt709` (`ea81f17`). YIQ rotation matrisi kasıtlı bırakıldı — NTSC Y'IQ kapalı sistem.
+   - `color.js` her iki constant'ı da export ediyor; `LUMA_BT601` / `luminanceBt601` sadece rgb-to-bw'nin user-selectable BT.601 option'u için kalır.
+   - Eski sorun tanımı: `image-ops.js`'de bazı node'lar BT.601, bazıları BT.709 kullanıyor; aynı pixel iki node'dan farklı luminance dönüyor → preview/export parity riski. Audit "single biggest correctness smell" demişti.
 
 ---
 
@@ -214,22 +226,20 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
 
 ### Görevler
 
-1. **`graph-shell.js` (7202 satır) bölünmesi**
-   - Hedef parçalar: `graph-viewport.js` (pan/zoom/marquee), `graph-render.js` (node/edge DOM), `graph-inspector.js`, `palette-ui.js`, `graph-keyboard.js`. Faz F1'in tek başına bir PR olması doğru.
-   - Başarı kriteri: Hiçbir görsel/işlevsel regresyon yok; smoke + manuel preview testi geçiyor; her yeni dosya <1500 satır.
+1. **`graph-shell.js` (7202 satır) bölünmesi** — ✅ **Tamamlandı 2026-05-23** (M.1)
+   - 7207 → 526 satır, 22 atomik commit. 13+ yeni modül: graph-render, palette-swatch-locks, graph-color-math, graph-color-picker, graph-gradient-ramp, graph-curve-editor, graph-xy-pad, graph-inspector-{core,fields,utils,dither,gradient,geometry,source,color-grading,effects,stylize,misc,mix}, graph-palette-actions, graph-inspector-events. Son commit `6aa5552`.
 
-2. **`player.js` (2930 satır) bölünmesi**
-   - Hedef: `player-transport.js`, `player-timeline-render.js`, `player-keyframe-drag.js`, `player-bezier-popover.js`. Drag state'leri tek bir "active drag controller" altında topla (interleaving leak'i kapatır).
+2. **`player.js` (2930 satır) bölünmesi** — ✅ **Tamamlandı 2026-05-23** (M.2, Codex)
+   - 2930 → 1111 satır, 14+ yeni player-* modülü (player-elements, player-compare, player-selection, player-more-menu, player-timeline-targets, player-format, player-graph-editor, player-easing, player-bezier-popover, player-keyframe-actions, player-timeline-items, player-marquee, player-playhead, player-timeline-chrome, player-track-base). Son commit `1c3c3a5`.
 
-3. **`image-ops.js` (2602 satır) bölünmesi**
-   - Hedef: `image-ops/color.js`, `image-ops/geometry.js`, `image-ops/mix.js`, `image-ops/dither.js`, `image-ops/buffer-pool.js`. Ortak `mapImageData(input, perPixelFn)` helper'ı çıkar.
+3. **`image-ops.js` (2602 satır) bölünmesi** — ✅ **Tamamlandı** (M.3) — kategori-bazlı modüller. Son commit `e470021`.
 
-4. **`innerHTML = ...` → `replaceChildren` migrasyonu**
-   - Player timeline ve graph-shell'in tam rebuild'leri innerHTML kullanıyor — focus/scroll mid-drag kayıp. Per-element diff veya pre-built `DocumentFragment` ile değiştir.
-   - **Önce ölç:** Hangi subscribe'ler en sık tetikleniyor? `8c2439a` inspector drag'leri için zaten skip ediyor; sıradaki adaylar timeline scrub ve node drag.
+4. **`innerHTML = ...` → `replaceChildren` migrasyonu** — ✅ **Tamamlandı 2026-05-23** (M.4 phase 1 + 2)
+   - Phase 1 (`812dc68`): 13 non-player site `setInnerHtml` helper'a geçti. Helper `Range.createContextualFragment` ile parent-namespace-aware (SVG container'lar için kritik).
+   - Phase 2 (`b1e4767`, `33b89b0`): `renderGraph` per-node diff (`lastRenderedNodeHtml` cache → değişmeyen card'lar DOM kimliklerini korur), `renderInspector` skip-when-unchanged (HTML string compare ile dispatch erken döner).
+   - **Bonus task pending:** Player tier'da 10 innerHTML site (player.js: 6, player-timeline-chrome: 2, player-more-menu: 1, player-bezier-popover: 1). Codex'in F22 sonrası takip işi.
 
-5. **Deep-clone graph mutation azaltma**
-   - `graph.js`'de her mutation `graph.nodes.map(node => clone(node))` yapıyor. Sadece değişen node için clone, diğerleri için `[...graph.nodes]` (referans paylaşımı). Drag sırasındaki GC pressure'ı düşürür.
+5. **Deep-clone graph mutation azaltma** — ✅ **Tamamlandı** (M.5) — önceki oturumlar.
 
 6. **`tauri-compat.js` extract**
    - `selected.path` normalizasyonu, `tauri.fs.rename ?? renameFile`, `tauri.core.invoke ?? tauri.invoke` paternleri 4-5 dosyaya dağılmış. Tek bir compat modülü → Tauri 2.x → 3.x geçişinde tek dosya değişir.
@@ -245,15 +255,15 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
 
 ### Görevler
 
-1. **A11y — gizmo / playhead / bezier keyboard alternatifleri**
-   - Şu anda hepsi pointer-only. F23 scrubbable-number patern'ini bunlara da uygula: focus + ok tuşlarıyla nudge, Shift+ok 10x, Alt+ok 0.1x. `role` ve `aria-label` her handle'a.
+1. **A11y — gizmo / playhead / bezier keyboard alternatifleri** — ✅ **Tamamlandı 2026-05-21** (A.1, Codex çalışma ağacı)
+   - F23 scrubbable-number patern'i gizmo/playhead/bezier handle'larına genişledi. Focus + ok tuşları + Shift/Alt modifier'ları + ARIA label/role.
 
 2. **`webglcontextlost` / `webglcontextrestored` listener**
    - GPU sürücü swap'ında renderer ölü kalıyor. Listener ekle, context restore'da pipeline'ı yeniden kur.
    - Dosyalar: [src/js/gpu-effects.js](../../src/js/gpu-effects.js).
 
-3. **ResizeObserver ve global keyboard listener teardown**
-   - `graph-shell.js`, `viewer-gizmos.js`, `stage.js` global listener'larını init'te ekliyor, hiç sökmüyor. Multi-window veya hot reload başlarsa accumulate. Bir dispose registry kur (init → cleanup fn döndür).
+3. **ResizeObserver ve global keyboard listener teardown** — ✅ **Tamamlandı** (A.2) — önceki oturumlar
+   - Dispose registry pattern `lifecycle.js` (`listenWithDispose` / `registerDispose`) üzerinden kuruldu. ResizeObserver + keyboard + drop target init'leri symmetric teardown ile kuruluyor.
 
 4. **`pseudoBlueNoise` adlandırma honesty**
    - Aslında golden-ratio low-discrepancy sequence; UI "Blue Noise" diyor. Ya UI'da rename ("Golden Ratio") ya da küçük bir precomputed blue-noise tile (PNG, ~256x256) ship et ve gerçek blue noise olarak kullan.

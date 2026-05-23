@@ -1,11 +1,34 @@
 # Dither Lab — Code Quality Audit
 
-**Date:** 2026-05-18
+**Date:** 2026-05-18 (status update appended 2026-05-23)
 **Scope:** 52 source files — 35 JS, 10 Rust, 3 CSS, 1 HTML, 3 config
 **Method:** 7 parallel review agents covering logical module groups, single shared template per file (role / quality / issues / suggestions).
 **Project guardrails respected by suggestions:** vanilla JS only, no build step, preview/export parity, seed determinism, local-first.
 
 > Findings preserved verbatim from each agent's report. The "Top priorities" section at the end consolidates the highest-leverage items across all groups.
+
+---
+
+## 2026-05-23 status update
+
+Several of the audit's headline findings were closed in a Claude + Codex parallel two-agent session. Findings below are **preserved verbatim for historical reference** — they describe the state of the codebase on 2026-05-18, not today. Specifically:
+
+| Audit finding | Status (2026-05-23) |
+|---|---|
+| `src/js/ui/graph-shell.js` — 7202 lines / ~150 functions | **Resolved (M.1).** Split to 526 lines + 13 new UI modules. 22 atomic commits, final `6aa5552`. |
+| `src/js/ui/player.js` — 2930 lines / 6 drag-state singletons | **Resolved (M.2).** Split to 1111 lines + 14 new player-* modules. Codex, final `1c3c3a5`. |
+| `src/js/image-ops.js` — 2602 lines | **Resolved (M.3).** Category-based modules under `src/js/image-ops/`. Final `e470021`. |
+| `nodesEl.innerHTML = …` / `edgesEl.innerHTML = …` per dispatch (M.4 phase 1) | **Resolved.** 13 non-player sites migrated to the `setInnerHtml(el, html)` helper (`812dc68`); helper uses `Range.createContextualFragment` to keep SVG namespaces correct. |
+| Full graph rebuild on every dispatch (M.4 phase 2) | **Resolved.** `renderGraph` does per-node diff via `lastRenderedNodeHtml` cache; unchanged cards keep DOM identity (`b1e4767`). Inspector skips re-render when HTML unchanged (`33b89b0`). |
+| **BT.601 vs BT.709 luma drift** — "single biggest correctness smell on the JS side" | **Resolved (V.1).** GPU shaders (18 sites, `b465652`) and 7 CPU image-ops modules (`ea81f17`) now both use BT.709. YIQ rotation matrix intentionally left on BT.601 (NTSC closed system). User-selectable BT.601 option in `rgb-to-bw` kept by design. |
+| A.1 keyboard alternatives for gizmo/playhead/bezier | **Resolved 2026-05-21** (Codex working tree). |
+| A.2 dispose registry for ResizeObserver / global listeners | **Resolved** (`lifecycle.js`). |
+| F22 UI polish backlog (splash / slider redesign / timeline minimise / default pan) | **Resolved 2026-05-23** (Codex: `6018fc5`, `bc14451`, `e43a75e`, `2a09cf9`, `a5b242d`). |
+| M.5 deep-clone reduction in `graph.js` | **Resolved** (earlier session). |
+
+Open audit items as of 2026-05-23: Faz D #1/#2 (renderFrame async discipline), S.1 EXR sequence scope decision, F22 tail (group in/out node action, file drag-drop already implemented — manual test pending), M.4 phase 2 bonus (player-tier `innerHTML` → `setInnerHtml` migration).
+
+See [next-phases.md](next-phases.md) for the live "remaining work" tracker and [audit.md](audit.md) Section 0 for the full closure ledger.
 
 ---
 
