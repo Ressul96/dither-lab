@@ -38,50 +38,43 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
 | **V.1 GPU** 18 luma site `vec3(0.299,…)` → `vec3(0.2126,…)`; YIQ matrisi bırakıldı | `b465652 Switch GPU shader luma to BT.709` |
 | **V.1 CPU** 7 image-ops dosyası `luminanceBt601` → `luminanceBt709` (posterize / levels / duotone / rgb-curves / gradient / threshold / displace) | `ea81f17 Switch CPU image-ops luma to BT.709` |
 | **F22 (2. tur)** timeline minimise handle + default pan + slider redesign + splash screen | `6018fc5`, `bc14451`, `e43a75e`, `2a09cf9`, `a5b242d` (Codex) |
+| **M.4 phase 3** Per-edge diff render for graph edges | `1c4db76` (Codex) |
+| **Faz D #2** Sync canvas readers no longer fire-and-forget render (audit'in flagledği export race fix) | `624f45a` |
+| **Faz A komple** Her 6 madde de kapanmış — detay aşağıda | bkz. Faz A section başlığı |
 
 ---
 
 ## Faz A — Export Parity Krizleri (Öncelik 1)
 
-**Amaç:** Önizleme ↔ export eşleşmesini bozan ya da export'u sessizce yanlış üreten kritik mantık hatalarını kapatmak. CLAUDE.md'deki "Export must match preview" non-negotiable'ı doğrudan ilgilendirir.
+**Durum:** ✅ **Komple tamamlandı (2026-05-23 doğrulaması).** Her 6 madde ya direkt fix ile ya da pragmatik workaround ile kapanmış. Detaylar her madde altında. Bu fazın "açık" olmayan hâli `audit.md` yazıldığı tarih (2026-05-20) ile bugün arasında biriken commit'lerin sonucu — bazıları implicit olarak kapanmış, audit dokümanı geriden geldi.
+
+**Amaç (orijinal):** Önizleme ↔ export eşleşmesini bozan ya da export'u sessizce yanlış üreten kritik mantık hatalarını kapatmak. CLAUDE.md'deki "Export must match preview" non-negotiable'ı doğrudan ilgilendirir.
 
 ### Görevler
 
-1. **IVF zaman tabanı (timebase) küsuratlı fps düzeltmesi**
-   - Sorun: `createIvfFile` paydayı `Math.round(fps)` ile tam sayıya yuvarlıyor (`23.976→24`, `29.97→30`, `59.94→60`); kare paketleme `i / fps` ile saniye tabanlı yapıldığı için dışa aktarılan dosya **orijinalden daha hızlı oynuyor** ve sonradan eklenecek ses kayıyor.
-   - Yapılacak: NTSC tabanlı fps'ler için pay/payda hesabı (`23.976 → 24000/1001`, `29.97 → 30000/1001`, `59.94 → 60000/1001`); tam sayı fps'ler için mevcut `1/fps` korunsun. Kare paketleme zamanlamasını da pay/payda ile birebir kurun (`pts = i * num / den` cinsinden ölçek).
-   - Dosyalar: [src/js/export.js:2187-2188](../../src/js/export.js#L2187), [src/js/export.js:2101-2104](../../src/js/export.js#L2101).
-   - Başarı kriteri: 23.976 fps kaynaktan alınan 100 karelik IVF'in toplam süresi `100 * 1001/24000 = 4.171s` (±1 frame); ffprobe çıktısı `r_frame_rate=24000/1001`.
+1. **IVF zaman tabanı (timebase) küsuratlı fps düzeltmesi** — ✅ **Tamamlandı**
+   - Çözüm: `ivfTimebase(fps)` ([export.js:2271](../../src/js/export.js#L2271)) NTSC fractional rate'leri (`23.976/29.97/59.94`) `1001`-denominator pair'larına map ediyor (`24000/1001`, `30000/1001`, `60000/1001`). `microsecondsToIvfTick` ([export.js:2283](../../src/js/export.js#L2283)) `Math.round((us * den) / (num * 1e6))` ile half-tick altında drift'i yutuyor. Encoder'a verilen kabaca yuvarlanmış timestamp inputs (line 2190) IVF tick math tarafından düzeltiliyor.
+   - Eski sorun tanımı: `createIvfFile` paydayı `Math.round(fps)` ile yuvarlıyor → export dosyası orijinalden hızlı oynuyor.
 
-2. **Export sırasında preview render guard'ı (race condition)**
-   - Sorun: `exportSessionActive` set edilse de `renderCurrentFrame` bunu kontrol etmiyor; `seekForExport`'un async beklediği `await` noktalarında gelen parametre/resize/timeline tetiklemesi `processedCanvas` ve `ditherCanvas`'ı paralel olarak ezerek **export'a rastgele preview karelerinin sızmasına** neden olabiliyor.
-   - Yapılacak: `renderCurrentFrame`'in başına `if (exportSessionActive && !calledFromExport) return;` koruması; export pipeline'ı için ayrı bir entry (`renderFrameForExport({sourceToken, time})`) ya da `internal=true` flag'i. Bu, eski audit'teki P0 #8 "async sync-called" maddesinin de bir parçasını kapatır.
-   - Dosyalar: [src/js/source.js:974-982](../../src/js/source.js#L974), [src/js/source.js:856](../../src/js/source.js#L856).
-   - Başarı kriteri: Export sırasında inspector slider'larını oynatmak / pencereyi yeniden boyutlandırmak / timeline scrub'ı çıktıyı kirletmiyor; smoke test (`smoke/algorithms.html`) bir export sırasında param değiştirip kareleri yeniden okuduğunda hash sabit kalıyor.
+2. **Export sırasında preview render guard'ı** — ✅ **Tamamlandı**
+   - Çözüm: [source.js:988](../../src/js/source.js#L988) `if (exportSessionActive && !options.forExport) return;` guard'ı `renderCurrentFrame`'in başında. Export pipeline `seekForExport` üzerinden `{forExport: true}` flag'i ile opt-in ediyor (line 791, 863). Faz D #2 ek olarak sync read API'lerin (`getCurrentExportFrameCanvas` vs.) fire-and-forget render side effect'ini de kaldırdı (`624f45a`) — bu race window'unu komple kapattı.
+   - Eski sorun tanımı: `exportSessionActive` set edilse de `renderCurrentFrame` bunu kontrol etmiyordu → export'a rastgele preview kareleri sızabilirdi.
 
-3. **Blur algoritması preview/export uyumsuzluğu**
-   - Sorun: Native preview Rust tarafında iki geçişli **box blur**, JS fallback (export yolu dahil) tarayıcının yerleşik **Gaussian blur**'unu (`ctx.filter = "blur(...)"`) ya da WebGL Gauss shader'ını çalıştırıyor. Aynı `radius` parametresi iki farklı PSF üretiyor → preview ile export'un kenar düşüşü farklı.
-   - Yapılacak: Tek bir kanonik blur tanımı (tercih: gerçek Gaussian, σ = radius/2 yaklaşımı; sigma ve kernel boyutu açıkça parametrize). Rust tarafında box blur'ı separable Gaussian'a çevir (ya da kabul edilebilirse JS tarafında box blur'a düş — fakat tarayıcı `ctx.filter` zaten Gaussian olduğu için Rust'ı eşitlemek doğru yön). Aynı σ ile ölçülen birim impulse response'lar pixel-cinsinden eşleşmeli.
-   - Dosyalar: [src-tauri/src/engine/frame.rs:329-337](../../src-tauri/src/engine/frame.rs#L329), [src/js/image-ops.js:301-312](../../src/js/image-ops.js#L301), GPU shader yolu için [src/js/gpu-effects.js](../../src/js/gpu-effects.js) blur passleri.
-   - Başarı kriteri: Tek-piksel impulse (256x256, beyaz nokta merkezde) `radius=4` ile native ve JS yollarda ±1/255 farkla aynı çıktı.
+3. **Blur algoritması preview/export uyumsuzluğu** — ✅ **Tamamlandı (pragmatik workaround)**
+   - Çözüm: Audit'in önerisi "Rust box'ı separable Gaussian'a port et" yerine, daha basit "native render path'inden blur'u çıkar" çözümü uygulanmış. [native-render.js:11](../../src/js/native-render.js#L11) `NATIVE_SUPPORTED_TYPES` set'inde blur yok; yorum açıkça parity rationale'ini belirtiyor. Blur içeren her graph JS path'ine (WebGL separable Gaussian veya `ctx.filter` fallback) düşer → preview = export, pixel-for-pixel. Rust tarafına Gaussian port işi gelecek Phase F item olarak ertelendi (acil değil çünkü parity sağlandı).
+   - Eski sorun tanımı: Rust two-pass box vs JS Gaussian → farklı PSF.
 
-4. **Native render dither çıktısı eksikliği**
-   - Sorun: [src-tauri/src/engine/frame.rs:102-105](../../src-tauri/src/engine/frame.rs#L102) — `NativeRenderResponse.dither_output` hardcode `None`. Native motora giren dither-içeren bir graph önizlemede dither katmanını üretmiyor; UI ya boş ya hatalı katman gösteriyor.
-   - Yapılacak: Ya native motora dither node desteğini ekle (Rust tarafında en az `floyd-steinberg` ve `bayer-8x8` portu), ya da `canUseNativeRender` içinde dither node varsa `false` döndür ve graph'ı tamamen JS yoluna düşür. **Önerilen kısa vade:** native render dither node içeren graph'larda devre dışı kalsın; uzun vadede Rust'a port.
-   - Dosyalar: [src-tauri/src/engine/frame.rs:102-105](../../src-tauri/src/engine/frame.rs#L102), [src/js/native-render.js:20](../../src/js/native-render.js#L20).
-   - Başarı kriteri: Dither node içeren bir graph load edildiğinde native path "unsupported" cevabı verip JS path'e dönüyor; preview dither katmanı doğru gösteriliyor.
+4. **Native render dither çıktısı eksikliği** — ✅ **Tamamlandı (pragmatik workaround)**
+   - Çözüm: Aynı pattern — [native-render.js:11](../../src/js/native-render.js#L11) `NATIVE_SUPPORTED_TYPES` set'inde dither yok. Dither içeren graph'lar zaten native path'ten dışlanır → `dither_output: None` hardcode'unun (frame.rs:104) practical impact'i sıfır. UI dither katmanı JS path'inden gelir, doğru çalışır.
+   - Eski sorun tanımı: `NativeRenderResponse.dither_output` hardcode `None` → native motora giren dither graph önizlemede dither layer üretmiyor.
 
-5. **`registry.runAlgorithm` sessiz Floyd–Steinberg fallback'i**
-   - Sorun: Bilinmeyen algoritma ID'sinde sessizce Floyd–Steinberg'e düşüyor. Eski bir proje dosyası kaldırılmış bir algoritmaya referans verirse preview yanlış görüntü gösteriyor ve hata yok.
-   - Yapılacak: Bilinmeyen ID'de `console.warn` + UI'da bir kez gösterilen "Algorithm X missing, using Y" uyarısı; ya da fallback'i kaldırıp explicit `throw`.
-   - Dosyalar: [src/js/dither/registry.js](../../src/js/dither/registry.js).
-   - Başarı kriteri: Unknown ID ile bir proje açıldığında kullanıcı görünür uyarı alıyor; smoke harness algorithms listesine olmayan bir ID koyulduğunda test başarısız oluyor.
+5. **`registry.runAlgorithm` sessiz Floyd–Steinberg fallback'i** — ✅ **Tamamlandı**
+   - Çözüm: [dither/registry.js:30-42](../../src/js/dither/registry.js) `runAlgorithm` unknown ID'de bir kez `console.warn` (`warnedMissingAlgorithms` Set ile spam'i önler), sonra passthrough döner — sessiz Floyd-Steinberg fallback'i kaldırılmış.
+   - Eski sorun tanımı: Bilinmeyen algoritma ID'sinde sessizce Floyd–Steinberg'e düşüyordu.
 
-6. **`noise` source `TIME_AWARE_TYPES`'a eklenmemiş**
-   - Sorun: [src/js/graph-runtime.js:71](../../src/js/graph-runtime.js#L71) `TIME_AWARE_TYPES` listesinde `noise` yok; `animSpeed > 0` iken playhead scrub aynı params + aynı input ile çalıştığında cache hit yapıyor → animasyonlu noise donuk kalıyor (parity bug).
-   - Yapılacak: Liste içine `"noise"` eklemek; `animSpeed === 0` ise cache hit'ine devam için ek koşul (`params.animSpeed > 0 ? include_frame_salt : skip`).
-   - Dosyalar: [src/js/graph-runtime.js:71](../../src/js/graph-runtime.js#L71), [src/js/graph-runtime.js:390](../../src/js/graph-runtime.js#L390).
-   - Başarı kriteri: `animSpeed=1` noise kaynaklı bir timeline 0→1s scrub edildiğinde her frame farklı pattern üretiyor.
+6. **`noise` source `TIME_AWARE_TYPES`'a eklenmemiş** — ✅ **Tamamlandı**
+   - Çözüm: [graph-runtime.js:400](../../src/js/graph-runtime.js#L400) `if (node.type === "noise") return Number(params?.animSpeed ?? 0) > 0` özel kontrolü mevcut. Set'e direkt eklemek yerine condition-based time-awareness daha akıllı çünkü `animSpeed === 0` durumunda cache hit hâlâ avantajlı.
+   - Eski sorun tanımı: `TIME_AWARE_TYPES` listesinde `noise` yok → `animSpeed > 0` iken animasyonlu noise donuk kalıyordu.
 
 ---
 
