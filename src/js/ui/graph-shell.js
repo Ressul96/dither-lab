@@ -1,12 +1,10 @@
-import { dispatch, getState, subscribe } from "../state.js";
+import { getState, subscribe } from "../state.js";
 import {
   ensureBootGraph,
   getNodeById,
-  getNodeParentId,
   getSelectedNode,
   getSelectedNodeIds,
   insertNodeOnEdge,
-  resolveGraphParentId,
   selectNode,
   toggleNodeBypass,
   updateNodeLabel,
@@ -88,30 +86,15 @@ import {
   renderSocketRows,
 } from "./graph-render.js";
 import {
-  clearPaletteSwatchLocks,
-  getLockedSwatchIndexes,
-  isSwatchLocked,
-  prunePaletteLocks,
-  removeLockedSwatchIndex,
-  syncPaletteLocks,
-  toggleLockedSwatchIndex,
-} from "./palette-swatch-locks.js";
-import {
   initInspectorFields,
   syncTimelineButtons,
 } from "./graph-inspector-fields.js";
 import {
   initDitherInspector,
-  renderPaletteManager,
 } from "./graph-inspector-dither.js";
 import { initXyPad } from "./graph-xy-pad.js";
 import { initGradientInspector } from "./graph-inspector-gradient.js";
 import {
-  clamp,
-  clamp01,
-  formatFpsReadout,
-  formatSignedStops,
-  formatSignedValue,
   initInspectorUtils,
 } from "./graph-inspector-utils.js";
 import {
@@ -121,31 +104,19 @@ import {
 } from "./graph-inspector-core.js";
 import {
   getPaletteExtractionSize,
-  getSelectedDitherNode,
   initPaletteActions,
   onPaletteRegistryChange,
 } from "./graph-palette-actions.js";
 import {
   initColorPicker,
-  renderColorField,
-  renderColorPickerControl,
-  renderGradientStopColorField,
 } from "./graph-color-picker.js";
 import {
-  GRADIENT_RAMP_MAX_STOPS,
   commitGradientStopColorTarget,
   initGradientRamp,
-  normalizeGradientMapInspectorStops,
-  renderGradientRampField,
   syncGradientRampElements,
 } from "./graph-gradient-ramp.js";
 import {
-  curveChannelLabel,
   initCurveEditor,
-  normalizeCurveChannel,
-  readCurvePoints,
-  renderCurveChannelStrip,
-  renderCurveField,
 } from "./graph-curve-editor.js";
 import {
   isInspectorEditing,
