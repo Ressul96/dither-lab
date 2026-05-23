@@ -20,7 +20,6 @@ import {
   toSceneY,
 } from "./graph-geometry.js";
 import {
-  getCurrentGraphParentId,
   getVisibleGraphNodeIds,
   getVisibleGraphNodes,
 } from "./graph-view-scope.js";

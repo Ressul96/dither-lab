@@ -55,13 +55,11 @@ import {
 import {
   buildTimelineProperties,
   getTimelineTargetBaseValue,
-  getTrackBaseValue,
   initPlayerTimelineTargets,
 } from "./player-timeline-targets.js";
 import {
   GRAPH_EDITOR_HEIGHT,
   createGraphCurveModel,
-  getSegmentInterpolation,
   graphValueFromY,
   initPlayerGraphEditor,
   normalizeGraphTangent,
