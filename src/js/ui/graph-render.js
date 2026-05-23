@@ -16,14 +16,15 @@
 //     entry from the previous render and skips the DOM swap if they
 //     match. Stale entries are pruned for nodes that left the visible
 //     set; the map is cleared on a parent-change (full rebuild path).
+//   * lastRenderedEdgeHtml — Map<edgeId, html> M.4 phase 3 diff cache,
+//     same parent-change lifecycle as the node cache.
 //
 // Render strategy:
 //   * Parent changed → single `setInnerHtml` rebuild (fast, rare).
 //   * Same parent    → per-node diff: upsert changed, leave unchanged
 //     DOM in place (preserves focus / input selection / mid-drag state
-//     on the unchanged cards). Edges still rebuild as one SVG swap —
-//     during a drag every edge's path changes anyway, so per-edge diff
-//     wouldn't pay off.
+//     on the unchanged cards). Edges use the same cache/replace pattern
+//     so non-drag graph dispatches preserve unchanged SVG paths.
 //
 // `renderSocketRows` is exported because palette-ui's drop handler
 // needs to splice a freshly-created node's socket rows into the DOM
@@ -60,11 +61,16 @@ let nodesEl = null;
 let edgesEl = null;
 let getGraphRenameNodeId = () => null;
 let lastRenderedParentId = "";
+let lastRenderedEdgesParentId = "";
 // M.4 phase 2: per-node HTML cache used to skip the DOM swap when a
 // dispatch lands on a node whose rendered output hasn't changed. Keyed
 // by node.id. Cleared on parent-change (the fast-path full rebuild
 // below also resets it).
 const lastRenderedNodeHtml = new Map();
+// M.4 phase 3: per-edge HTML cache. Drag still changes most connected
+// paths, but selection/bypass/add/remove dispatches can leave most edge
+// markup untouched.
+const lastRenderedEdgeHtml = new Map();
 // Same idea for the group-proxy block as a whole — only ever two cards
 // (input + output) and they only appear inside a group, so a single
 // string compare is enough; no per-card diff bookkeeping.
@@ -248,16 +254,56 @@ export function renderEdges(parentId = getCurrentGraphParentId()) {
   if (!edgesEl) return;
   const { graph } = getState();
   const visibleNodeIds = getVisibleGraphNodeIds(graph, parentId);
+  const visibleEdges = graph.edges.filter(
+    (edge) => visibleNodeIds.has(edge.fromNode) && visibleNodeIds.has(edge.toNode)
+  );
   edgesEl.setAttribute("viewBox", `0 0 ${GRAPH_WORLD_SIZE} ${GRAPH_WORLD_SIZE}`);
   edgesEl.setAttribute("width", String(GRAPH_WORLD_SIZE));
   edgesEl.setAttribute("height", String(GRAPH_WORLD_SIZE));
-  setInnerHtml(
-    edgesEl,
-    graph.edges
-      .filter((edge) => visibleNodeIds.has(edge.fromNode) && visibleNodeIds.has(edge.toNode))
-      .map((edge) => renderEdge(edge, graph))
-      .join("")
-  );
+
+  if (parentId !== lastRenderedEdgesParentId) {
+    lastRenderedEdgeHtml.clear();
+    const html = visibleEdges.map((edge) => {
+      const edgeHtml = renderEdge(edge, graph);
+      lastRenderedEdgeHtml.set(edge.id, edgeHtml);
+      return edgeHtml;
+    }).join("");
+    setInnerHtml(edgesEl, html);
+    lastRenderedEdgesParentId = parentId;
+    syncInsertHighlight();
+    return;
+  }
+
+  const visibleIds = new Set();
+  let previousEdgeEl = null;
+  for (const edge of visibleEdges) {
+    visibleIds.add(edge.id);
+    const html = renderEdge(edge, graph);
+    const existing = edgesEl.querySelector(
+      `[data-edge-id="${escapeSelector(edge.id)}"]`
+    );
+    if (existing && lastRenderedEdgeHtml.get(edge.id) === html) {
+      previousEdgeEl = existing;
+      continue;
+    }
+    lastRenderedEdgeHtml.set(edge.id, html);
+    const fragment = parseHtmlInto(edgesEl, html);
+    const insertedEl = fragment.firstElementChild;
+    if (existing) {
+      existing.replaceWith(fragment);
+    } else if (previousEdgeEl?.parentNode === edgesEl) {
+      previousEdgeEl.after(fragment);
+    } else {
+      edgesEl.insertBefore(fragment, edgesEl.firstChild);
+    }
+    previousEdgeEl = insertedEl;
+  }
+  for (const el of edgesEl.querySelectorAll("[data-edge-id]")) {
+    if (!visibleIds.has(el.dataset.edgeId)) {
+      lastRenderedEdgeHtml.delete(el.dataset.edgeId);
+      el.remove();
+    }
+  }
   syncInsertHighlight();
 }
 
