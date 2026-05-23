@@ -926,13 +926,28 @@ export function setFps(fps) {
   setViewerOutputFps(nextFps);
 }
 
+// Sync read API for the most recently committed canvas. Earlier
+// versions of these three accessors used to fire-and-forget a
+// `requestRenderCurrentFrame()` to "freshen" the canvas before
+// returning, but that side-effect was always a lie: the new render
+// resolves asynchronously, so the sync return value never reflected
+// it — callers always got the same canvas they would have gotten
+// without the trigger. Dropping the side-effect makes the contract
+// honest (saf sync read; caller is responsible for awaiting a render
+// dispatch if it wants fresh pixels) and avoids the race the audit
+// flagged where the fire-and-forget could land between an export
+// pipeline's `await seekForExport()` and the encoder's
+// `getCurrentExportFrameCanvas()` read.
+//
+// Today's callers (export.js still + video + sequence pipelines,
+// graph-palette-actions.js palette extraction) all either run
+// after an awaited `seekForExport` or read the canvas the user is
+// currently looking at — both paths already have the desired
+// freshness without the trigger.
+
 export function getCurrentExportFrameCanvas(target = "viewer-output") {
   const { video: v } = ensureEls();
   if (!v || v.readyState < 2) return null;
-  // During export, seekForExport already awaited a fresh render — calling
-  // it again would be redundant work and silently fire-and-forget (this
-  // function is sync), risking that callers read a stale canvas.
-  if (!exportSessionActive) requestRenderCurrentFrame();
   if (target === "dither-only") {
     return hasDitherOutput ? ditherCanvas ?? null : null;
   }
@@ -942,14 +957,12 @@ export function getCurrentExportFrameCanvas(target = "viewer-output") {
 export function hasCurrentDitherFrame() {
   const { video: v } = ensureEls();
   if (!v || v.readyState < 2) return false;
-  if (!exportSessionActive) requestRenderCurrentFrame();
   return hasDitherOutput && Boolean(ditherCanvas?.width && ditherCanvas?.height);
 }
 
 export function getCurrentSourceFrameCanvas() {
   const { video: v } = ensureEls();
   if (!v || v.readyState < 2) return null;
-  if (!exportSessionActive) requestRenderCurrentFrame();
   return sourceCanvas ?? null;
 }
 
