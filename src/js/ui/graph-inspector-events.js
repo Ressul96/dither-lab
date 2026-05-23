@@ -21,6 +21,7 @@ import { pushHistory } from "../state.js";
 import {
   getNodeById,
   getSelectedNode,
+  removeEdgesById,
   toggleParamExposed,
   ungroupNode,
   updateNodeLayerProperties,
@@ -497,6 +498,14 @@ function handleGraphInspectorAction(control) {
     case "ungroup":
       ungroupNode(control.dataset.groupId);
       break;
+    case "remove-binding": {
+      // Group boundary bindings are derived from the underlying edge — the
+      // user-facing "Remove" action deletes that edge, and analyzeGroupBoundary
+      // recomputes the binding list on the next dispatch.
+      const edgeId = control.dataset.bindingEdgeId;
+      if (edgeId) removeEdgesById([edgeId]);
+      break;
+    }
     default:
       break;
   }

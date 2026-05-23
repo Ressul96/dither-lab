@@ -357,9 +357,26 @@ function renderGroupBoundaryRow(binding, direction) {
   const toNode = getNodeById(binding.toNode, graph);
   const from = `${fromNode?.label ?? binding.fromNode}.${binding.fromSocket}`;
   const to = `${toNode?.label ?? binding.toNode}.${binding.toSocket}`;
+  // Direction glyph distinguishes incoming (outer → inner) bindings from
+  // outgoing (inner → outer) ones at a glance — the section heading already
+  // says "Inputs" / "Outputs" but per-row reinforcement helps once the list
+  // is scrolled past the heading.
+  const arrow = direction === "input" ? "↳" : "↦";
+  const ariaLabel = `Remove ${direction === "input" ? "incoming" : "outgoing"} binding ${from} to ${to}`;
+  const edgeId = binding.edgeId ?? "";
   return `
     <div class="group-boundary-row">
-      ${escapeHtml(direction === "input" ? `${from} -> ${to}` : `${from} -> ${to}`)}
+      <span class="group-boundary-row__arrow" aria-hidden="true">${arrow}</span>
+      <span class="group-boundary-row__path">${escapeHtml(`${from} → ${to}`)}</span>
+      <button
+        type="button"
+        class="group-boundary-row__remove"
+        data-graph-action="remove-binding"
+        data-binding-edge-id="${escapeHtml(edgeId)}"
+        aria-label="${escapeHtml(ariaLabel)}"
+        title="Remove binding"
+        ${edgeId ? "" : "disabled"}
+      >×</button>
     </div>
   `;
 }

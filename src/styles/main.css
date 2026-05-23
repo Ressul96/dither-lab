@@ -3718,6 +3718,10 @@ body.dragging-keyframe .bezier-curve-handle,
 }
 
 .group-boundary-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
   padding: 6px 8px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -3725,7 +3729,40 @@ body.dragging-keyframe .bezier-curve-handle,
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 1.35;
+}
+
+.group-boundary-row__arrow {
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 12px;
+  line-height: 1;
+}
+
+.group-boundary-row__path {
   overflow-wrap: anywhere;
+}
+
+.group-boundary-row__remove {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs, 3px);
+  color: var(--text-tertiary, var(--text-secondary));
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.group-boundary-row__remove:hover:not(:disabled) {
+  background: rgba(255, 80, 80, 0.12);
+  border-color: rgba(255, 80, 80, 0.3);
+  color: #ff8080;
+}
+
+.group-boundary-row__remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
 }
 
 .curves-panel {
