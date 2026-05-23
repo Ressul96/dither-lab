@@ -1,5 +1,5 @@
 import { timeToFrame } from "../timeline.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, setInnerHtml } from "./utils.js";
 import { getPlayerEls } from "./player-elements.js";
 import {
   formatRulerSecond,
@@ -64,7 +64,7 @@ export function updateTimelineChrome(timeline) {
 export function renderTimeRuler(duration, fps, unit, zoom) {
   if (!playerEls.timeRuler) return;
   if (duration <= 0) {
-    playerEls.timeRuler.innerHTML = "";
+    playerEls.timeRuler.replaceChildren();
     return;
   }
   const majorStep = getMajorTickStep(duration / getEffectiveTimelineZoomValue({ zoom }));
@@ -102,7 +102,7 @@ export function renderTimeRuler(duration, fps, unit, zoom) {
       </div>
     `;
   }
-  playerEls.timeRuler.innerHTML = html;
+  setInnerHtml(playerEls.timeRuler, html);
   syncTimelineRulerScroll();
 }
 

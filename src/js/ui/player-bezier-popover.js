@@ -7,7 +7,7 @@ import {
   normalizeTimeline,
   updateTimelineKeyframe,
 } from "../timeline.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, setInnerHtml } from "./utils.js";
 import {
   clampBezierControlValue,
   formatBezierControlValue,
@@ -139,7 +139,7 @@ function renderBezierPopoverContent() {
   const focusedHandle = bezierPopover.el.contains(document.activeElement)
     ? document.activeElement?.dataset?.bezierHandle
     : null;
-  bezierPopover.el.innerHTML = renderBezierPopoverHTML(found.track, found.keyframe);
+  setInnerHtml(bezierPopover.el, renderBezierPopoverHTML(found.track, found.keyframe));
   if (focusedHandle) {
     bezierPopover.el.querySelector(`[data-bezier-handle="${focusedHandle}"]`)?.focus();
   }

@@ -34,6 +34,7 @@ import {
   updateTimelineTrack,
 } from "../timeline.js";
 import { listenWithDispose } from "./lifecycle.js";
+import { setInnerHtml } from "./utils.js";
 import {
   cachePlayerEls,
   getPlayerEls,
@@ -654,52 +655,59 @@ function renderAnimationTimeline() {
   const visibleTargets = targets.filter((target) => expandedIds.has(target.id));
   const visibleTracks = visibleTargets.map((target) => target.track);
 
-  playerEls.propertyList.innerHTML = targets.length === 0
-    ? `<li class="animation-timeline-empty">${graph.selectedNodeId ? "No animatable properties" : "Select a node"}</li>`
-    : targets
-        .map((target) =>
-          renderPropertyCard(target, {
-            graph,
-            timeline: normalized,
-            playback,
-            source,
-            activeId,
-            expandedIds,
-          })
-        )
-        .join("");
+  setInnerHtml(
+    playerEls.propertyList,
+    targets.length === 0
+      ? `<li class="animation-timeline-empty">${graph.selectedNodeId ? "No animatable properties" : "Select a node"}</li>`
+      : targets
+          .map((target) =>
+            renderPropertyCard(target, {
+              graph,
+              timeline: normalized,
+              playback,
+              source,
+              activeId,
+              expandedIds,
+            })
+          )
+          .join("")
+  );
 
   if (!playerEls.laneHost || !playerEls.emptyState) return;
   renderTimeRuler(duration, fps, normalized.durationUnit, normalized.zoom);
   const selected = getSelectedTimelineKeyframe(normalized);
 
   if (targets.length === 0) {
-    playerEls.laneHost.innerHTML = "";
+    playerEls.laneHost.replaceChildren();
     playerEls.emptyState.textContent = graph.selectedNodeId ? "No animatable properties" : "Select a node";
     playerEls.emptyState.classList.remove("hidden");
   } else if (normalized.viewMode === "graph") {
     const graphTrack = pickGraphTrack(activeTrack, visibleTracks);
     if (!graphTrack) {
-      playerEls.laneHost.innerHTML = "";
+      playerEls.laneHost.replaceChildren();
       playerEls.emptyState.textContent = "Select a track";
       playerEls.emptyState.classList.remove("hidden");
     } else {
-      playerEls.laneHost.innerHTML =
+      setInnerHtml(
+        playerEls.laneHost,
         renderRenderRangeOverlay(duration, playback) +
-        renderGraphEditor(graphTrack, duration, fps, selected, graph, playback, visibleTracks);
+          renderGraphEditor(graphTrack, duration, fps, selected, graph, playback, visibleTracks)
+      );
       playerEls.emptyState.classList.add("hidden");
     }
   } else if (visibleTracks.length === 0) {
-    playerEls.laneHost.innerHTML = "";
+    playerEls.laneHost.replaceChildren();
     playerEls.emptyState.textContent = "No lanes open";
     playerEls.emptyState.classList.remove("hidden");
   } else {
     playerEls.emptyState.classList.add("hidden");
-    playerEls.laneHost.innerHTML =
+    setInnerHtml(
+      playerEls.laneHost,
       renderRenderRangeOverlay(duration, playback) +
-      visibleTargets
-        .map((target) => renderAnimationLane(target, duration, fps, selected, graph))
-        .join("");
+        visibleTargets
+          .map((target) => renderAnimationLane(target, duration, fps, selected, graph))
+          .join("")
+    );
   }
 
   updateAnimationPlayhead(playback, duration);

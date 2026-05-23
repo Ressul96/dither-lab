@@ -11,7 +11,7 @@ import {
   timeToFrame,
   timelineFrameRate,
 } from "../timeline.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, setInnerHtml } from "./utils.js";
 
 const SPEED_PRESETS = [0.25, 0.5, 1, 2, 4];
 
@@ -109,7 +109,7 @@ function renderMorePopover() {
   const popover = document.createElement("div");
   popover.className = "player-more-popover";
   popover.setAttribute("role", "menu");
-  popover.innerHTML = `
+  setInnerHtml(popover, `
     <div class="popover-section">
       <div class="popover-label">Playback Speed</div>
       <div class="popover-segmented" data-popover-segmented="speed">
@@ -135,7 +135,7 @@ function renderMorePopover() {
       <button class="popover-row" data-popover-action="reset-trim">Reset render range</button>
       <button class="popover-row" data-popover-action="snap-playhead">Snap playhead</button>
     </div>
-  `;
+  `);
   renderPopoverState(popover);
   return popover;
 }
