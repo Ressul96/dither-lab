@@ -1,12 +1,12 @@
 # Dither Lab — İyileştirme Yol Haritası
 
-**Tarih:** 2026-05-23 (M.1 / M.2 / M.4 / V.1 closure güncellemesi)
+**Tarih:** 2026-05-23 (M.1 / M.2 / M.4 phase 1+2+3+4 + player bonus / V.1 closure güncellemesi)
 **Girdiler:** [docs/audit/2026-05-18-code-audit.md](2026-05-18-code-audit.md) + [docs/antigravityauditreport.md](../antigravityauditreport.md)
 **Tip:** Audit raporu değil, uygulanabilir faz planı. Her faz "amaç → görev → dokunulacak dosya → başarı kriteri" biçiminde.
 
 > İki kaynak rapordaki bulgular kesişiyor. Bu doküman; Antigravity raporunun mantıklı maddelerini alır, 2026-05-18 auditindeki henüz kapatılmamış maddelerle birleştirir, son commit'lerde halledilenleri ayırır.
 >
-> **2026-05-23 notu:** Faz A-G sonrası kalan büyük mimari borçlar (M.1, M.2, M.4) + parity riski (V.1) Claude + Codex paralel iki-agent oturumunda kapandı. Faz D #3 (BT.601/709 drift), Faz E-equivalent (`graph-shell.js` split + `player.js` split + `innerHTML` migrasyonu) tamamlanmış sayılır. Faz D #1/#2 (renderFrame async disiplin) ile S.1 EXR scope kararı hâlâ açık.
+> **2026-05-23 notu:** Faz A-G sonrası kalan büyük mimari borçlar (M.1, M.2, M.4) + parity riski (V.1) Claude + Codex paralel iki-agent oturumunda kapandı. Faz D #2/#3, Faz E-equivalent (`graph-shell.js` split + `player.js` split + `innerHTML` migrasyonu) ve Faz A komple closure tamamlanmış sayılır. Faz D #1 (renderFrame async disiplin) ile S.1 EXR scope kararı hâlâ açık.
 
 ---
 
@@ -35,12 +35,15 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
 | **M.2** `player.js` split (2930 → 1111 satır, 14 yeni player-* modülü) | `1c3c3a5 Extract player track base helper` (final, Codex) |
 | **M.4 phase 1** 13 non-player `innerHTML` site → `setInnerHtml` helper (namespace-aware `createContextualFragment`) | `812dc68 Migrate non-player innerHTML sites to replaceChildren` |
 | **M.4 phase 2** `renderGraph` per-node diff + `renderInspector` skip-when-unchanged | `b1e4767`, `33b89b0` |
+| **M.4 phase 1 player bonus** Player tier `innerHTML` siteleri `setInnerHtml` / `replaceChildren` pattern'ine taşındı | `a74b5c4 Migrate player tier innerHTML to setInnerHtml / replaceChildren` |
 | **V.1 GPU** 18 luma site `vec3(0.299,…)` → `vec3(0.2126,…)`; YIQ matrisi bırakıldı | `b465652 Switch GPU shader luma to BT.709` |
 | **V.1 CPU** 7 image-ops dosyası `luminanceBt601` → `luminanceBt709` (posterize / levels / duotone / rgb-curves / gradient / threshold / displace) | `ea81f17 Switch CPU image-ops luma to BT.709` |
 | **F22 (2. tur)** timeline minimise handle + default pan + slider redesign + splash screen | `6018fc5`, `bc14451`, `e43a75e`, `2a09cf9`, `a5b242d` (Codex) |
 | **M.4 phase 3** Per-edge diff render for graph edges | `1c4db76` (Codex) |
+| **M.4 phase 4** Hot render paths `performance.mark` / `performance.measure` ile ölçümlendi (`renderGraph`, `renderEdges`, `renderInspector`) | `6f10b3c Add performance.mark instrumentation to hot render paths` |
 | **Faz D #2** Sync canvas readers no longer fire-and-forget render (audit'in flagledği export race fix) | `624f45a` |
-| **Faz A komple** Her 6 madde de kapanmış — detay aşağıda | bkz. Faz A section başlığı |
+| **Faz A komple** Her 6 madde de kapanmış — detay aşağıda | `a6abe0d Mark Faz A entirely closed in audit.md` |
+| **Pre-existing dead import cleanup** Yalnız orphan import symbol'ları temizlendi; exports/private dead code'a dokunulmadı | `a8aa1b2`, `2771642` |
 
 ---
 
@@ -168,9 +171,9 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
    - Yapılacak: Tüm çağrı yerlerini denetle, ya `await` ya da explicit `.catch(noop)` + token guard. Worker yolu için de `renderVersion`/`sourceToken` epoch'unu native yoldakiyle aynı şekilde kontrol et.
    - Dosyalar: [src/js/source.js:966](../../src/js/source.js#L966), [src/js/source.js:1046](../../src/js/source.js#L1046).
 
-2. **`getCurrentExportFrameCanvas` / `hasCurrentDitherFrame` senkron read API**
-   - Sorun: Şu an `renderCurrentFrame()`'i `await`siz çağırıyor; export session dışında stale canvas dönüş riski var.
-   - Yapılacak: İki ayrı API: `getCommittedFrame()` (saf sync read, en son commit'lenen canvas), `renderFrame(opts)` (explicit render). Export pipeline `renderFrameForExport({await: true})` çağırır.
+2. **`getCurrentExportFrameCanvas` / `hasCurrentDitherFrame` senkron read API** — ✅ **Tamamlandı 2026-05-23**
+   - Sorun: `renderCurrentFrame()` await edilmeden çağrılıyordu; export session dışında stale canvas dönüş riski vardı.
+   - Çözüm: Sync canvas reader'ların fire-and-forget render side effect'i kaldırıldı (`624f45a`). Bu API'ler artık yalnız commit'lenmiş frame state'ini okur; explicit render işi çağıran akışa bırakılır.
    - Başarı kriteri: Export session dışında still export 2x tıklanırsa ikinci tıklamada stale frame yok.
 
 3. **BT.601 vs BT.709 luma drift (eski audit P0 #1)** — ✅ **Tamamlandı 2026-05-23** (V.1)
@@ -227,10 +230,12 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
 
 3. **`image-ops.js` (2602 satır) bölünmesi** — ✅ **Tamamlandı** (M.3) — kategori-bazlı modüller. Son commit `e470021`.
 
-4. **`innerHTML = ...` → `replaceChildren` migrasyonu** — ✅ **Tamamlandı 2026-05-23** (M.4 phase 1 + 2)
+4. **`innerHTML = ...` → `replaceChildren` migrasyonu** — ✅ **Tamamlandı 2026-05-23** (M.4 phase 1+2+3+4 + player bonus)
    - Phase 1 (`812dc68`): 13 non-player site `setInnerHtml` helper'a geçti. Helper `Range.createContextualFragment` ile parent-namespace-aware (SVG container'lar için kritik).
    - Phase 2 (`b1e4767`, `33b89b0`): `renderGraph` per-node diff (`lastRenderedNodeHtml` cache → değişmeyen card'lar DOM kimliklerini korur), `renderInspector` skip-when-unchanged (HTML string compare ile dispatch erken döner).
-   - **Bonus task pending:** Player tier'da 10 innerHTML site (player.js: 6, player-timeline-chrome: 2, player-more-menu: 1, player-bezier-popover: 1). Codex'in F22 sonrası takip işi.
+   - Phase 3 (`1c4db76`): `renderEdges` per-edge diff'e geçti; parent değişiminde full rebuild, aynı parent dispatch'lerinde değişmeyen SVG path DOM kimliği korunur.
+   - Player bonus (`a74b5c4`): Player tier'da 10 `innerHTML` site helper / `replaceChildren` pattern'ine taşındı.
+   - Phase 4 (`6f10b3c`): `renderGraph`, `renderEdges`, `renderInspector` User Timing ölçümleri eklendi. DevTools Performance tab kaydında `User Timing` track altında bu üç measure okunur.
 
 5. **Deep-clone graph mutation azaltma** — ✅ **Tamamlandı** (M.5) — önceki oturumlar.
 
