@@ -91,87 +91,94 @@ export function getLastRenderedGraphParentId() {
 }
 
 export function renderGraph() {
-  if (!nodesEl || !edgesEl) return;
-  const { graph } = getState();
-  const parentId = getCurrentGraphParentId();
-  const visibleNodes = getVisibleGraphNodes(graph, parentId);
-  const selectedNodeIds = new Set(getSelectedNodeIds(graph));
-  const soloNodeId = getSoloNodeId(graph);
-  nodesEl.style.width = `${GRAPH_WORLD_SIZE}px`;
-  nodesEl.style.height = `${GRAPH_WORLD_SIZE}px`;
+  performance.mark("renderGraph:start");
+  try {
+    if (!nodesEl || !edgesEl) return;
+    const { graph } = getState();
+    const parentId = getCurrentGraphParentId();
+    const visibleNodes = getVisibleGraphNodes(graph, parentId);
+    const selectedNodeIds = new Set(getSelectedNodeIds(graph));
+    const soloNodeId = getSoloNodeId(graph);
+    nodesEl.style.width = `${GRAPH_WORLD_SIZE}px`;
+    nodesEl.style.height = `${GRAPH_WORLD_SIZE}px`;
 
-  // F24 group I/O proxies: when the user has descended into a group, render
-  // virtual "Group Input" / "Group Output" cards on either side of the
-  // children so the boundary connections are visible from inside. These are
-  // DOM-only — not part of graph.nodes — and read straight from the parent
-  // group's pre-computed `group.inputBindings` / `outputBindings` arrays.
-  const proxiesHtml = parentId !== ROOT_PARENT_ID
-    ? renderGroupProxies(graph, parentId, visibleNodes)
-    : "";
+    // F24 group I/O proxies: when the user has descended into a group, render
+    // virtual "Group Input" / "Group Output" cards on either side of the
+    // children so the boundary connections are visible from inside. These are
+    // DOM-only — not part of graph.nodes — and read straight from the parent
+    // group's pre-computed `group.inputBindings` / `outputBindings` arrays.
+    const proxiesHtml = parentId !== ROOT_PARENT_ID
+      ? renderGroupProxies(graph, parentId, visibleNodes)
+      : "";
 
-  if (parentId !== lastRenderedParentId) {
-    // Full-rebuild fast path: the user navigated to a different parent
-    // (root <-> group), so almost everything changes. Doing this in one
-    // setInnerHtml is cheaper than the diff bookkeeping below, and it
-    // wipes the per-node cache cleanly.
-    lastRenderedNodeHtml.clear();
-    const nodeHtmls = visibleNodes.map((node) => {
-      const html = renderNode(node, selectedNodeIds, soloNodeId);
-      lastRenderedNodeHtml.set(node.id, html);
-      return html;
-    });
-    setInnerHtml(nodesEl, nodeHtmls.join("") + proxiesHtml);
-    lastRenderedProxiesHtml = proxiesHtml;
-  } else {
-    // Same parent: diff. For each visible node, compare its freshly-
-    // rendered HTML against the previous render. Unchanged nodes keep
-    // their DOM (preserves focus / input selection / mid-drag visuals
-    // on the cards that didn't change). Changed nodes get a single
-    // contextual-fragment replace. Stale DOM (graph nodes that left
-    // the visible set) is removed afterwards.
-    const visibleIds = new Set();
-    for (const node of visibleNodes) {
-      visibleIds.add(node.id);
-      const html = renderNode(node, selectedNodeIds, soloNodeId);
-      const existing = nodesEl.querySelector(
-        `[data-node-id="${escapeSelector(node.id)}"]`
-      );
-      if (existing && lastRenderedNodeHtml.get(node.id) === html) {
-        continue;
-      }
-      lastRenderedNodeHtml.set(node.id, html);
-      const fragment = parseHtmlInto(nodesEl, html);
-      if (existing) {
-        existing.replaceWith(fragment);
-      } else {
-        nodesEl.appendChild(fragment);
-      }
-    }
-    for (const el of nodesEl.querySelectorAll("[data-node-id]")) {
-      if (!visibleIds.has(el.dataset.nodeId)) {
-        lastRenderedNodeHtml.delete(el.dataset.nodeId);
-        el.remove();
-      }
-    }
-
-    // Group proxies — coarse compare on the combined HTML. They only
-    // appear inside a group and the two cards always move together
-    // (bbox-driven layout), so a per-card diff would over-spend on a
-    // path that's already cheap.
-    if (proxiesHtml !== lastRenderedProxiesHtml) {
-      for (const el of nodesEl.querySelectorAll("[data-group-proxy]")) {
-        el.remove();
-      }
-      if (proxiesHtml) {
-        nodesEl.appendChild(parseHtmlInto(nodesEl, proxiesHtml));
-      }
+    if (parentId !== lastRenderedParentId) {
+      // Full-rebuild fast path: the user navigated to a different parent
+      // (root <-> group), so almost everything changes. Doing this in one
+      // setInnerHtml is cheaper than the diff bookkeeping below, and it
+      // wipes the per-node cache cleanly.
+      lastRenderedNodeHtml.clear();
+      const nodeHtmls = visibleNodes.map((node) => {
+        const html = renderNode(node, selectedNodeIds, soloNodeId);
+        lastRenderedNodeHtml.set(node.id, html);
+        return html;
+      });
+      setInnerHtml(nodesEl, nodeHtmls.join("") + proxiesHtml);
       lastRenderedProxiesHtml = proxiesHtml;
-    }
-  }
+    } else {
+      // Same parent: diff. For each visible node, compare its freshly-
+      // rendered HTML against the previous render. Unchanged nodes keep
+      // their DOM (preserves focus / input selection / mid-drag visuals
+      // on the cards that didn't change). Changed nodes get a single
+      // contextual-fragment replace. Stale DOM (graph nodes that left
+      // the visible set) is removed afterwards.
+      const visibleIds = new Set();
+      for (const node of visibleNodes) {
+        visibleIds.add(node.id);
+        const html = renderNode(node, selectedNodeIds, soloNodeId);
+        const existing = nodesEl.querySelector(
+          `[data-node-id="${escapeSelector(node.id)}"]`
+        );
+        if (existing && lastRenderedNodeHtml.get(node.id) === html) {
+          continue;
+        }
+        lastRenderedNodeHtml.set(node.id, html);
+        const fragment = parseHtmlInto(nodesEl, html);
+        if (existing) {
+          existing.replaceWith(fragment);
+        } else {
+          nodesEl.appendChild(fragment);
+        }
+      }
+      for (const el of nodesEl.querySelectorAll("[data-node-id]")) {
+        if (!visibleIds.has(el.dataset.nodeId)) {
+          lastRenderedNodeHtml.delete(el.dataset.nodeId);
+          el.remove();
+        }
+      }
 
-  lastRenderedParentId = parentId;
-  renderEdges(parentId);
-  syncGraphBreadcrumb(parentId);
+      // Group proxies — coarse compare on the combined HTML. They only
+      // appear inside a group and the two cards always move together
+      // (bbox-driven layout), so a per-card diff would over-spend on a
+      // path that's already cheap.
+      if (proxiesHtml !== lastRenderedProxiesHtml) {
+        for (const el of nodesEl.querySelectorAll("[data-group-proxy]")) {
+          el.remove();
+        }
+        if (proxiesHtml) {
+          nodesEl.appendChild(parseHtmlInto(nodesEl, proxiesHtml));
+        }
+        lastRenderedProxiesHtml = proxiesHtml;
+      }
+    }
+
+    lastRenderedParentId = parentId;
+    renderEdges(parentId);
+    syncGraphBreadcrumb(parentId);
+  } finally {
+    performance.mark("renderGraph:end");
+    performance.clearMeasures("renderGraph");
+    performance.measure("renderGraph", "renderGraph:start", "renderGraph:end");
+  }
 }
 
 function escapeSelector(value) {
@@ -251,60 +258,67 @@ function renderGroupProxyBinding(kind, binding, graph) {
 }
 
 export function renderEdges(parentId = getCurrentGraphParentId()) {
-  if (!edgesEl) return;
-  const { graph } = getState();
-  const visibleNodeIds = getVisibleGraphNodeIds(graph, parentId);
-  const visibleEdges = graph.edges.filter(
-    (edge) => visibleNodeIds.has(edge.fromNode) && visibleNodeIds.has(edge.toNode)
-  );
-  edgesEl.setAttribute("viewBox", `0 0 ${GRAPH_WORLD_SIZE} ${GRAPH_WORLD_SIZE}`);
-  edgesEl.setAttribute("width", String(GRAPH_WORLD_SIZE));
-  edgesEl.setAttribute("height", String(GRAPH_WORLD_SIZE));
-
-  if (parentId !== lastRenderedEdgesParentId) {
-    lastRenderedEdgeHtml.clear();
-    const html = visibleEdges.map((edge) => {
-      const edgeHtml = renderEdge(edge, graph);
-      lastRenderedEdgeHtml.set(edge.id, edgeHtml);
-      return edgeHtml;
-    }).join("");
-    setInnerHtml(edgesEl, html);
-    lastRenderedEdgesParentId = parentId;
-    syncInsertHighlight();
-    return;
-  }
-
-  const visibleIds = new Set();
-  let previousEdgeEl = null;
-  for (const edge of visibleEdges) {
-    visibleIds.add(edge.id);
-    const html = renderEdge(edge, graph);
-    const existing = edgesEl.querySelector(
-      `[data-edge-id="${escapeSelector(edge.id)}"]`
+  performance.mark("renderEdges:start");
+  try {
+    if (!edgesEl) return;
+    const { graph } = getState();
+    const visibleNodeIds = getVisibleGraphNodeIds(graph, parentId);
+    const visibleEdges = graph.edges.filter(
+      (edge) => visibleNodeIds.has(edge.fromNode) && visibleNodeIds.has(edge.toNode)
     );
-    if (existing && lastRenderedEdgeHtml.get(edge.id) === html) {
-      previousEdgeEl = existing;
-      continue;
+    edgesEl.setAttribute("viewBox", `0 0 ${GRAPH_WORLD_SIZE} ${GRAPH_WORLD_SIZE}`);
+    edgesEl.setAttribute("width", String(GRAPH_WORLD_SIZE));
+    edgesEl.setAttribute("height", String(GRAPH_WORLD_SIZE));
+
+    if (parentId !== lastRenderedEdgesParentId) {
+      lastRenderedEdgeHtml.clear();
+      const html = visibleEdges.map((edge) => {
+        const edgeHtml = renderEdge(edge, graph);
+        lastRenderedEdgeHtml.set(edge.id, edgeHtml);
+        return edgeHtml;
+      }).join("");
+      setInnerHtml(edgesEl, html);
+      lastRenderedEdgesParentId = parentId;
+      syncInsertHighlight();
+      return;
     }
-    lastRenderedEdgeHtml.set(edge.id, html);
-    const fragment = parseHtmlInto(edgesEl, html);
-    const insertedEl = fragment.firstElementChild;
-    if (existing) {
-      existing.replaceWith(fragment);
-    } else if (previousEdgeEl?.parentNode === edgesEl) {
-      previousEdgeEl.after(fragment);
-    } else {
-      edgesEl.insertBefore(fragment, edgesEl.firstChild);
+
+    const visibleIds = new Set();
+    let previousEdgeEl = null;
+    for (const edge of visibleEdges) {
+      visibleIds.add(edge.id);
+      const html = renderEdge(edge, graph);
+      const existing = edgesEl.querySelector(
+        `[data-edge-id="${escapeSelector(edge.id)}"]`
+      );
+      if (existing && lastRenderedEdgeHtml.get(edge.id) === html) {
+        previousEdgeEl = existing;
+        continue;
+      }
+      lastRenderedEdgeHtml.set(edge.id, html);
+      const fragment = parseHtmlInto(edgesEl, html);
+      const insertedEl = fragment.firstElementChild;
+      if (existing) {
+        existing.replaceWith(fragment);
+      } else if (previousEdgeEl?.parentNode === edgesEl) {
+        previousEdgeEl.after(fragment);
+      } else {
+        edgesEl.insertBefore(fragment, edgesEl.firstChild);
+      }
+      previousEdgeEl = insertedEl;
     }
-    previousEdgeEl = insertedEl;
+    for (const el of edgesEl.querySelectorAll("[data-edge-id]")) {
+      if (!visibleIds.has(el.dataset.edgeId)) {
+        lastRenderedEdgeHtml.delete(el.dataset.edgeId);
+        el.remove();
+      }
+    }
+    syncInsertHighlight();
+  } finally {
+    performance.mark("renderEdges:end");
+    performance.clearMeasures("renderEdges");
+    performance.measure("renderEdges", "renderEdges:start", "renderEdges:end");
   }
-  for (const el of edgesEl.querySelectorAll("[data-edge-id]")) {
-    if (!visibleIds.has(el.dataset.edgeId)) {
-      lastRenderedEdgeHtml.delete(el.dataset.edgeId);
-      el.remove();
-    }
-  }
-  syncInsertHighlight();
 }
 
 function renderNode(node, selectedNodeIds, soloNodeId = null) {

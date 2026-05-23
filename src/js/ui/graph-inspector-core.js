@@ -113,36 +113,43 @@ export function getRenderedInspectorNodeId() {
 }
 
 export function renderInspector() {
-  if (!inspectorEl) return;
-  const { graph } = getState();
-  const selectedNodeIds = getSelectedNodeIds(graph);
-  if (selectedNodeIds.length > 1) {
-    const selectionKey = selectedNodeIds.join(",");
-    if (renderedInspectorNodeId !== selectionKey) lastRenderedInspectorHtml = "";
-    renderedInspectorNodeId = selectionKey;
-    syncInspectorTitle(null, `${selectedNodeIds.length} nodes selected`);
-    writeInspectorHtml(renderMultiSelectionInspector(selectedNodeIds));
-    return;
-  }
+  performance.mark("renderInspector:start");
+  try {
+    if (!inspectorEl) return;
+    const { graph } = getState();
+    const selectedNodeIds = getSelectedNodeIds(graph);
+    if (selectedNodeIds.length > 1) {
+      const selectionKey = selectedNodeIds.join(",");
+      if (renderedInspectorNodeId !== selectionKey) lastRenderedInspectorHtml = "";
+      renderedInspectorNodeId = selectionKey;
+      syncInspectorTitle(null, `${selectedNodeIds.length} nodes selected`);
+      writeInspectorHtml(renderMultiSelectionInspector(selectedNodeIds));
+      return;
+    }
 
-  const node = getSelectedNode(graph);
-  const nextNodeId = node?.id ?? null;
-  if (nextNodeId !== renderedInspectorNodeId) lastRenderedInspectorHtml = "";
-  renderedInspectorNodeId = nextNodeId;
+    const node = getSelectedNode(graph);
+    const nextNodeId = node?.id ?? null;
+    if (nextNodeId !== renderedInspectorNodeId) lastRenderedInspectorHtml = "";
+    renderedInspectorNodeId = nextNodeId;
 
-  if (!node) {
-    syncInspectorTitle(null);
-    writeInspectorHtml(renderEmptyInspector());
-    return;
-  }
+    if (!node) {
+      syncInspectorTitle(null);
+      writeInspectorHtml(renderEmptyInspector());
+      return;
+    }
 
-  syncInspectorTitle(node);
+    syncInspectorTitle(node);
 
-  writeInspectorHtml(`
+    writeInspectorHtml(`
     ${renderNodeActions(node)}
     ${renderLayerControls(node)}
     ${renderNodeSpecifics(node)}
   `);
+  } finally {
+    performance.mark("renderInspector:end");
+    performance.clearMeasures("renderInspector");
+    performance.measure("renderInspector", "renderInspector:start", "renderInspector:end");
+  }
 }
 
 // Single seam for the inspector DOM swap so the skip-when-unchanged
