@@ -83,7 +83,7 @@ body {
   padding: 32px;
   background:
     linear-gradient(rgba(12, 13, 17, 0.82), rgba(12, 13, 17, 0.92)),
-    url("../dither-lab_logo.svg") center 18% / min(520px, 72vw) no-repeat,
+    url("../../dither-lab_logo.svg") center 18% / min(520px, 72vw) no-repeat,
     var(--bg-canvas);
 }
 
