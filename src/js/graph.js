@@ -1,4 +1,4 @@
-import { getState, dispatch } from "./state.js";
+import { getState, dispatch, pushHistory } from "./state.js";
 import { normalizeHex, rgbToHex } from "./color.js";
 
 const NODE_SPACING_X = 252;
@@ -1197,6 +1197,36 @@ export function getValueNodeOutputBounds(nodeId, graph = getState().graph) {
   return { min, max };
 }
 
+export function snapshotGraphForHistory(graph = getState().graph) {
+  return clone(graph);
+}
+
+export function pushGraphHistoryFromSnapshot(before, label = "Edit graph") {
+  if (!before) return false;
+  const after = snapshotGraphForHistory();
+  if (graphSnapshotsEqual(before, after)) return false;
+  pushHistory({
+    label,
+    undo: () => restoreGraphHistorySnapshot(before),
+    redo: () => restoreGraphHistorySnapshot(after),
+  });
+  return true;
+}
+
+function restoreGraphHistorySnapshot(snapshot) {
+  const normalized = normalizeGraph(snapshotGraphForHistory(snapshot));
+  dispatch("graph", normalized);
+  const parentId = getState().graphView.currentParentId;
+  const resolvedParentId = resolveGraphParentId(normalized, parentId);
+  if (resolvedParentId !== parentId) {
+    dispatch("graphView", { currentParentId: resolvedParentId });
+  }
+}
+
+function graphSnapshotsEqual(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export function createBootGraph() {
   const nodes = [
     createNode("source-1", "source"),
@@ -1210,6 +1240,7 @@ export function createBootGraph() {
     edges: buildLinearEdges(nodes),
     selectedNodeId: "viewer-output-1",
     selectedNodeIds: ["viewer-output-1"],
+    solo: null,
   };
 }
 
@@ -1335,6 +1366,7 @@ function insertNodeIntoChain(type, extraEdgeFactory = null) {
   if (!definition || definition.chainable === false) return null;
 
   const graph = ensureBootGraph();
+  const before = snapshotGraphForHistory(graph);
   const chain = getMainChain(graph);
   const insertIndex = getInsertionIndex(chain, type);
   const prevNode = chain[insertIndex - 1];
@@ -1390,6 +1422,7 @@ function insertNodeIntoChain(type, extraEdgeFactory = null) {
     selectedNodeId: nodeId,
     selectedNodeIds: [nodeId],
   });
+  pushGraphHistoryFromSnapshot(before, "Add node");
 
   return nodeId;
 }
@@ -1399,6 +1432,7 @@ export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
   if (!definition || type === "source" || type === "viewer-output") return null;
 
   const graph = ensureBootGraph();
+  const before = snapshotGraphForHistory(graph);
   const nodeId = nextNodeId(type, graph);
   const newNode = createNode(nodeId, type, {
     x: position?.x ?? NODE_BASE_X,
@@ -1414,6 +1448,7 @@ export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
     selectedNodeId: nodeId,
     selectedNodeIds: [nodeId],
   });
+  pushGraphHistoryFromSnapshot(before, "Add node");
 
   return nodeId;
 }
@@ -1424,6 +1459,7 @@ export function duplicateNode(nodeId, options = {}) {
 
 export function duplicateNodes(nodeIds, options = {}) {
   const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const selectedIds = [...new Set(Array.isArray(nodeIds) ? nodeIds : [])];
   const sources = selectedIds
     .map((nodeId) => getNodeById(nodeId, graph))
@@ -1479,6 +1515,7 @@ export function duplicateNodes(nodeIds, options = {}) {
     selectedNodeId: duplicatedIds.at(-1) ?? null,
     selectedNodeIds: duplicatedIds,
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Duplicate node");
 
   return duplicatedIds;
 }
@@ -1488,6 +1525,7 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
   if (!definition || definition.chainable === false || type === "source" || type === "viewer-output") return null;
 
   const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const edge = graph.edges.find((item) => item.id === edgeId);
   if (!edge) return null;
 
@@ -1533,6 +1571,7 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
       selectedNodeId: nodeId,
       selectedNodeIds: [nodeId],
     });
+    if (before) pushGraphHistoryFromSnapshot(before, "Insert node");
 
     return nodeId;
   }
@@ -1583,6 +1622,7 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
     selectedNodeId: nodeId,
     selectedNodeIds: [nodeId],
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Insert node");
 
   return nodeId;
 }
@@ -1591,6 +1631,7 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
   if (!nodeId || !edgeId) return false;
 
   const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const edge = graph.edges.find((item) => item.id === edgeId);
   if (!edge || edge.fromNode === nodeId || edge.toNode === nodeId) return false;
 
@@ -1644,6 +1685,7 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
       selectedNodeId: nodeId,
       selectedNodeIds: [nodeId],
     });
+    if (before) pushGraphHistoryFromSnapshot(before, "Insert node");
 
     return true;
   }
@@ -1708,12 +1750,14 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
     selectedNodeId: nodeId,
     selectedNodeIds: [nodeId],
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Insert node");
 
   return true;
 }
 
 export function groupSelectedNodes(options = {}) {
   const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const selectedNodes = getGroupableSelectedNodes(graph, options.nodeIds);
   if (selectedNodes.length === 0) return null;
 
@@ -1749,13 +1793,15 @@ export function groupSelectedNodes(options = {}) {
     selectedNodeId: groupId,
     selectedNodeIds: [groupId],
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Group nodes");
 
   return groupId;
 }
 
-export function ungroupNode(groupId) {
+export function ungroupNode(groupId, options = {}) {
   if (!groupId) return false;
   const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const group = getNodeById(groupId, graph);
   if (!group || group.type !== "group") return false;
 
@@ -1791,6 +1837,7 @@ export function ungroupNode(groupId) {
   if (getState().graphView.currentParentId === groupId) {
     dispatch("graphView", { currentParentId: parentId });
   }
+  if (before) pushGraphHistoryFromSnapshot(before, "Ungroup nodes");
 
   return true;
 }
@@ -1808,10 +1855,11 @@ export function commitLayout() {
   dispatch("graph", {});
 }
 
-export function addEdge(fromNode, fromSocket, toNode, toSocket) {
+export function addEdge(fromNode, fromSocket, toNode, toSocket, options = {}) {
   if (!fromNode || !toNode || fromNode === toNode) return false;
 
   const graph = getState().graph;
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const fromDef = graph.nodes.find((node) => node.id === fromNode);
   const toDef = graph.nodes.find((node) => node.id === toNode);
   if (!fromDef || !toDef) return false;
@@ -1854,13 +1902,15 @@ export function addEdge(fromNode, fromSocket, toNode, toSocket) {
   const refreshedNodes = refreshGroupMetadataForNodes(nextNodes, nextEdges);
 
   dispatch("graph", { nodes: refreshedNodes, edges: nextEdges });
+  if (before) pushGraphHistoryFromSnapshot(before, "Connect nodes");
   return true;
 }
 
-export function removeNode(nodeId) {
+export function removeNode(nodeId, options = {}) {
   if (!nodeId) return false;
 
   const graph = getState().graph;
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const node = graph.nodes.find((item) => item.id === nodeId);
   if (!node || node.type === "source" || node.type === "viewer-output") return false;
 
@@ -1937,6 +1987,7 @@ export function removeNode(nodeId) {
   if (getState().graphView.currentParentId === nodeId) {
     dispatch("graphView", { currentParentId: fallbackParentId });
   }
+  if (before) pushGraphHistoryFromSnapshot(before, "Delete node");
   return true;
 }
 
@@ -1984,8 +2035,9 @@ export function updateNodeLayerProperties(nodeId, patch) {
   dispatch("graph", { nodes: nextNodes });
 }
 
-export function updateNodeLabel(nodeId, label) {
+export function updateNodeLabel(nodeId, label, options = {}) {
   const { graph } = getState();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const node = getNodeById(nodeId, graph);
   const definition = getNodeDefinition(node?.type);
   if (!node || !definition) return false;
@@ -2003,11 +2055,13 @@ export function updateNodeLabel(nodeId, label) {
         : item
     ),
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Rename node");
   return true;
 }
 
-export function toggleNodeBypass(nodeId) {
+export function toggleNodeBypass(nodeId, options = {}) {
   const { graph } = getState();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   let changed = false;
   const nextNodes = graph.nodes.map((node) => {
     if (node.id !== nodeId || node.type === "source" || node.type === "viewer-output" || node.type === "group") {
@@ -2022,13 +2076,15 @@ export function toggleNodeBypass(nodeId) {
 
   if (!changed) return false;
   dispatch("graph", { nodes: nextNodes });
+  if (before) pushGraphHistoryFromSnapshot(before, "Toggle bypass");
   return true;
 }
 
-export function toggleNodeSolo(nodeId) {
+export function toggleNodeSolo(nodeId, options = {}) {
   if (!nodeId) return false;
 
   let graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const activeSolo = normalizeSoloState(graph.solo);
   if (activeSolo) {
     const restoredEdges = restoreSoloEdges(graph, activeSolo);
@@ -2040,6 +2096,7 @@ export function toggleNodeSolo(nodeId) {
         edges: restoredEdges,
         solo: null,
       });
+      if (before) pushGraphHistoryFromSnapshot(before, "Toggle solo");
       return true;
     }
     graph = { ...graph, edges: restoredEdges, solo: null };
@@ -2084,6 +2141,7 @@ export function toggleNodeSolo(nodeId) {
       soloEdgeId: soloEdge.id,
     },
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Toggle solo");
   return true;
 }
 
@@ -2091,9 +2149,10 @@ export function getSoloNodeId(graph = getState().graph) {
   return normalizeSoloState(graph?.solo)?.nodeId ?? null;
 }
 
-export function setParamExposed(nodeId, paramKey, exposed, config = null) {
+export function setParamExposed(nodeId, paramKey, exposed, config = null, options = {}) {
   if (!nodeId || !paramKey) return false;
   const { graph } = getState();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   let changed = false;
   let removedSocket = false;
 
@@ -2147,6 +2206,7 @@ export function setParamExposed(nodeId, paramKey, exposed, config = null) {
     nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
     edges: nextEdges,
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Edit node sockets");
   return true;
 }
 
@@ -2157,10 +2217,11 @@ export function toggleParamExposed(nodeId, paramKey, config = null) {
   return setParamExposed(nodeId, paramKey, !exposed, config);
 }
 
-export function removeEdgesById(edgeIds) {
+export function removeEdgesById(edgeIds, options = {}) {
   if (!Array.isArray(edgeIds) || edgeIds.length === 0) return false;
   const ids = new Set(edgeIds);
   const { graph } = getState();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const nextEdges = graph.edges.filter((edge) => !ids.has(edge.id));
   if (nextEdges.length === graph.edges.length) return false;
   dispatch("graph", {
@@ -2168,6 +2229,7 @@ export function removeEdgesById(edgeIds) {
     nodes: refreshGroupMetadataForNodes(graph.nodes, nextEdges),
     edges: nextEdges,
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Disconnect nodes");
   return true;
 }
 
@@ -2326,6 +2388,7 @@ function normalizeGraph(graph) {
       edges: buildLinearEdges(chain),
       selectedNodeId: fallbackSelection,
       selectedNodeIds: normalizeSelectedNodeIds(graph.selectedNodeIds, chain, fallbackSelection),
+      solo: null,
     };
   }
 
@@ -2334,6 +2397,7 @@ function normalizeGraph(graph) {
     edges: nextEdges,
     selectedNodeId,
     selectedNodeIds,
+    solo: normalizeSoloState(graph.solo),
   };
 }
 
@@ -2375,7 +2439,7 @@ function normalizeSoloState(solo) {
     viewerNodeId,
     viewerInput,
     soloEdgeId,
-    previousEdges: Array.isArray(solo.previousEdges) ? solo.previousEdges : [],
+    previousEdges: Array.isArray(solo.previousEdges) ? solo.previousEdges.map((edge) => ({ ...edge })) : [],
   };
 }
 

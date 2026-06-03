@@ -5,6 +5,9 @@ import {
   getSelectedNodeIds,
   insertExistingNodeOnEdge,
   mutateNodePosition,
+  pushGraphHistoryFromSnapshot,
+  snapshotGraphForHistory,
+  commitLayout,
 } from "../graph.js";
 import { toSceneX, toSceneY } from "./graph-geometry.js";
 
@@ -31,6 +34,7 @@ export function startNodeDrag(e, nodeEl) {
   const originX = e.clientX;
   const originY = e.clientY;
   const startZoom = getState().graphView.zoom || 1;
+  const undoGraphSnapshot = snapshotGraphForHistory();
   const selectedAtStart = getSelectedNodeIds();
   const dragNodeIds = selectedAtStart.includes(nodeId) && selectedAtStart.length > 1
     ? selectedAtStart.filter((id) => {
@@ -101,7 +105,8 @@ export function startNodeDrag(e, nodeEl) {
     } else {
       const edge = dragNodeIds.length === 1 ? deps.findInsertTargetForNodeAt(nodeId, ev.clientX, ev.clientY) : null;
       deps.clearInsertHighlight();
-      if (edge?.edgeId && insertExistingNodeOnEdge(nodeId, edge.edgeId)) {
+      if (edge?.edgeId && insertExistingNodeOnEdge(nodeId, edge.edgeId, { history: false })) {
+        pushGraphHistoryFromSnapshot(undoGraphSnapshot, "Move node");
         return;
       }
 
@@ -109,6 +114,8 @@ export function startNodeDrag(e, nodeEl) {
         nodesEl?.querySelector(`[data-node-id="${deps.cssEscape(id)}"]`)?.classList.add("selected");
       }
       deps.selectNodesWithoutDispatch(dragNodeIds, nodeId);
+      commitLayout();
+      pushGraphHistoryFromSnapshot(undoGraphSnapshot, "Move node");
       deps.renderInspector();
       deps.renderEdges();
     }
