@@ -33,3 +33,6 @@ src-tauri/gen
 
 # Dither Lab project atomic writes
 *.ditherlab.tmp
+
+# Large local test media (kept out of the repo)
+smoke/test.mp4

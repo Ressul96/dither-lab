@@ -2,6 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "dither-lab",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "/Users/resulercan/Desktop/repolar/uygulama projeleri/dither-lab/smoke/nocache_server.py",
+        "/Users/resulercan/Desktop/repolar/uygulama projeleri/dither-lab",
+        "5178"
+      ],
+      "port": 5178
+    },
+    {
       "name": "smoke",
       "runtimeExecutable": "python3",
       "runtimeArgs": [
