@@ -7,7 +7,7 @@ import {
   writeRGB,
   isMonochromePalette,
 } from "./core.js";
-import { nearestColorInPalette } from "../palettes.js";
+import { createPaletteQuantizer } from "../palettes.js";
 
 const KERNELS = {
   "floyd-steinberg": {
@@ -138,6 +138,28 @@ const KERNELS = {
   },
 };
 
+// Pre-flatten a kernel's offsets into typed arrays so the per-pixel diffusion
+// loop avoids object-property reads, a function call, and a per-neighbour
+// divide. Two weight forms keep each path's exact float order (so output stays
+// pixel-identical):
+//   * weight (int)      — BW path computes (error * weight) / divisor
+//   * weightDiv (float) — RGB path computes err * (weight / divisor)
+function compileKernel(kernel) {
+  const count = kernel.offsets.length;
+  const dx = new Int32Array(count);
+  const dy = new Int32Array(count);
+  const weight = new Int32Array(count);
+  const weightDiv = new Float64Array(count);
+  for (let i = 0; i < count; i++) {
+    const offset = kernel.offsets[i];
+    dx[i] = offset.dx;
+    dy[i] = offset.dy;
+    weight[i] = offset.weight;
+    weightDiv[i] = offset.weight / kernel.divisor;
+  }
+  return { dx, dy, weight, weightDiv, divisor: kernel.divisor, count };
+}
+
 function runKernelDiffusion(imageData, params, palette, kernel) {
   if (isMonochromePalette(palette)) {
     runKernelDiffusionBW(imageData, params, kernel);
@@ -154,6 +176,7 @@ function runKernelDiffusionBW(imageData, params, kernel) {
   const invert = Boolean(params.invert);
   const errorStrength = clamp((params.errorStrength ?? 100) / 100, 0, 1);
   const serpentine = params.serpentine !== false;
+  const { dx, dy, weight, divisor, count } = kernel;
 
   const values = readLuminance(data, width, height);
 
@@ -171,13 +194,13 @@ function runKernelDiffusionBW(imageData, params, kernel) {
       const error = (oldValue - newValue) * errorStrength;
       values[index] = newValue;
 
-      for (const offset of kernel.offsets) {
-        const sx = x + offset.dx * forward;
-        const sy = y + offset.dy;
+      for (let k = 0; k < count; k++) {
+        const sx = x + dx[k] * forward;
+        const sy = y + dy[k];
         if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
         const targetIndex = sy * width + sx;
-        const next = values[targetIndex] + (error * offset.weight) / kernel.divisor;
-        values[targetIndex] = clamp(next, 0, 255);
+        const next = values[targetIndex] + (error * weight[k]) / divisor;
+        values[targetIndex] = next < 0 ? 0 : next > 255 ? 255 : next;
       }
     }
   }
@@ -194,6 +217,7 @@ function runKernelDiffusionRGB(imageData, params, palette, kernel) {
   const errorStrength = clamp((params.errorStrength ?? 100) / 100, 0, 1);
   const serpentine = params.serpentine !== false;
   const shift = threshold - 128;
+  const { dx, dy, weightDiv, count } = kernel;
 
   const { r, g, b } = readRGB(data, width, height);
   for (let i = 0; i < r.length; i++) {
@@ -210,6 +234,8 @@ function runKernelDiffusionRGB(imageData, params, palette, kernel) {
     b[i] = nb;
   }
 
+  const quantize = createPaletteQuantizer(palette);
+
   for (let y = 0; y < height; y++) {
     const reverse = serpentine && y % 2 === 1;
     const start = reverse ? width - 1 : 0;
@@ -222,7 +248,7 @@ function runKernelDiffusionRGB(imageData, params, palette, kernel) {
       const oldR = r[index];
       const oldG = g[index];
       const oldB = b[index];
-      const matched = nearestColorInPalette(oldR, oldG, oldB, palette);
+      const matched = quantize(oldR, oldG, oldB);
       const newR = matched[0];
       const newG = matched[1];
       const newB = matched[2];
@@ -234,15 +260,16 @@ function runKernelDiffusionRGB(imageData, params, palette, kernel) {
       const errG = (oldG - newG) * errorStrength;
       const errB = (oldB - newB) * errorStrength;
 
-      for (const offset of kernel.offsets) {
-        const sx = x + offset.dx * forward;
-        const sy = y + offset.dy;
+      for (let k = 0; k < count; k++) {
+        const sx = x + dx[k] * forward;
+        const sy = y + dy[k];
         if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
         const targetIndex = sy * width + sx;
-        const weight = offset.weight / kernel.divisor;
-        r[targetIndex] = clamp(r[targetIndex] + errR * weight, 0, 255);
-        g[targetIndex] = clamp(g[targetIndex] + errG * weight, 0, 255);
-        b[targetIndex] = clamp(b[targetIndex] + errB * weight, 0, 255);
+        const w = weightDiv[k];
+        let v;
+        v = r[targetIndex] + errR * w; r[targetIndex] = v < 0 ? 0 : v > 255 ? 255 : v;
+        v = g[targetIndex] + errG * w; g[targetIndex] = v < 0 ? 0 : v > 255 ? 255 : v;
+        v = b[targetIndex] + errB * w; b[targetIndex] = v < 0 ? 0 : v > 255 ? 255 : v;
       }
     }
   }
@@ -277,28 +304,28 @@ function runRiemersmaBW(imageData, params) {
     weightSum += weights[i];
   }
   const history = new Float32Array(HISTORY);
+  // Ring buffer: `head` is the oldest slot. history[(head+i) % HISTORY] is the
+  // i-th oldest error, pairing with weights[i] exactly as the old shift-down
+  // array did — so the weighted sum (and output) is bit-identical, but each
+  // pixel skips the 16-element array shift the previous version paid.
+  let head = 0;
 
-  const { size } = hilbertExtent(width, height);
-  const point = new Int32Array(2);
+  const order = hilbertOrder(width, height);
+  const orderLen = order.length;
 
-  const total = size * size;
-  for (let d = 0; d < total; d++) {
-    hilbertD2XY(size, d, point);
-    const x = point[0];
-    const y = point[1];
-    if (x >= width || y >= height) continue;
-    const index = y * width + x;
+  for (let p = 0; p < orderLen; p++) {
+    const index = order[p];
     let accumulated = 0;
     for (let i = 0; i < HISTORY; i++) {
-      accumulated += (history[i] * weights[i]) / weightSum;
+      accumulated += (history[(head + i) % HISTORY] * weights[i]) / weightSum;
     }
     const oldValue = values[index] + accumulated * errorStrength;
     const newValue = quantizeBW(oldValue, threshold, invert);
     const error = oldValue - newValue;
     values[index] = newValue;
 
-    for (let i = 0; i < HISTORY - 1; i++) history[i] = history[i + 1];
-    history[HISTORY - 1] = error;
+    history[head] = error;
+    head = (head + 1) % HISTORY;
   }
 
   writeValuesMonochrome(data, values);
@@ -336,51 +363,51 @@ function runRiemersmaRGB(imageData, params, palette) {
     weights[i] = Math.pow(RATIO, (HISTORY - 1 - i) / (HISTORY - 1));
     weightSum += weights[i];
   }
+  // Pre-divide the weights once. Float64 keeps the exact value the per-pixel
+  // loop produced (weights[i] / weightSum), so output is identical — the RGB
+  // path already used this `history * (weight / sum)` form, we just hoist the
+  // divide out of the 48-iterations-per-pixel inner loop.
+  const normWeights = new Float64Array(HISTORY);
+  for (let i = 0; i < HISTORY; i++) normWeights[i] = weights[i] / weightSum;
+
   const historyR = new Float32Array(HISTORY);
   const historyG = new Float32Array(HISTORY);
   const historyB = new Float32Array(HISTORY);
+  const quantize = createPaletteQuantizer(palette);
+  // Ring buffer (see runRiemersmaBW): history[(head+i) % HISTORY] is the i-th
+  // oldest error, pairing with normWeights[i] just like the old shift-down
+  // array — output is identical, but each pixel skips three 16-element shifts.
+  let head = 0;
 
-  const { size } = hilbertExtent(width, height);
-  const point = new Int32Array(2);
+  const order = hilbertOrder(width, height);
+  const orderLen = order.length;
 
-  const total = size * size;
-  for (let d = 0; d < total; d++) {
-    hilbertD2XY(size, d, point);
-    const x = point[0];
-    const y = point[1];
-    if (x >= width || y >= height) continue;
-    const index = y * width + x;
+  for (let p = 0; p < orderLen; p++) {
+    const index = order[p];
 
     let accR = 0;
     let accG = 0;
     let accB = 0;
     for (let i = 0; i < HISTORY; i++) {
-      const w = weights[i] / weightSum;
-      accR += historyR[i] * w;
-      accG += historyG[i] * w;
-      accB += historyB[i] * w;
+      const slot = (head + i) % HISTORY;
+      const w = normWeights[i];
+      accR += historyR[slot] * w;
+      accG += historyG[slot] * w;
+      accB += historyB[slot] * w;
     }
 
     const oldR = clamp(r[index] + accR * errorStrength, 0, 255);
     const oldG = clamp(g[index] + accG * errorStrength, 0, 255);
     const oldB = clamp(b[index] + accB * errorStrength, 0, 255);
-    const matched = nearestColorInPalette(oldR, oldG, oldB, palette);
+    const matched = quantize(oldR, oldG, oldB);
     r[index] = matched[0];
     g[index] = matched[1];
     b[index] = matched[2];
 
-    const errR = oldR - matched[0];
-    const errG = oldG - matched[1];
-    const errB = oldB - matched[2];
-
-    for (let i = 0; i < HISTORY - 1; i++) {
-      historyR[i] = historyR[i + 1];
-      historyG[i] = historyG[i + 1];
-      historyB[i] = historyB[i + 1];
-    }
-    historyR[HISTORY - 1] = errR;
-    historyG[HISTORY - 1] = errG;
-    historyB[HISTORY - 1] = errB;
+    historyR[head] = oldR - matched[0];
+    historyG[head] = oldG - matched[1];
+    historyB[head] = oldB - matched[2];
+    head = (head + 1) % HISTORY;
   }
 
   writeRGB(data, r, g, b);
@@ -406,7 +433,10 @@ function hilbertD2XY(n, d, out) {
   let x = 0;
   let y = 0;
   for (let s = 1; s < n; s *= 2) {
-    rx = 1 & (Math.floor(t / 2));
+    // d < size*size <= 2^30 for any realistic frame, so t stays well within the
+    // 32-bit range where >> 1 / >> 2 equal Math.floor(t / 2) / Math.floor(t / 4)
+    // — same result, no Math.floor call per step.
+    rx = 1 & (t >> 1);
     ry = 1 & (t ^ rx);
     if (ry === 0) {
       if (rx === 1) {
@@ -419,13 +449,47 @@ function hilbertD2XY(n, d, out) {
     }
     x += s * rx;
     y += s * ry;
-    t = Math.floor(t / 4);
+    t = t >> 2;
   }
   out[0] = x;
   out[1] = y;
 }
 
+// Riemersma walks pixels along a Hilbert curve. The curve only depends on the
+// frame size, so the visit order (in-bounds pixel indices, in curve sequence)
+// is computed once per size and cached — during video playback every frame
+// after the first skips the ~size² hilbertD2XY calls entirely. Bounded LRU so a
+// few distinct sizes (source + export) can coexist without unbounded growth.
+const HILBERT_ORDER_CACHE = new Map();
+const HILBERT_ORDER_CACHE_LIMIT = 4;
+
+function hilbertOrder(width, height) {
+  const key = `${width}x${height}`;
+  const cached = HILBERT_ORDER_CACHE.get(key);
+  if (cached) return cached;
+
+  const { size } = hilbertExtent(width, height);
+  const total = size * size;
+  const order = new Int32Array(width * height);
+  const point = new Int32Array(2);
+  let n = 0;
+  for (let d = 0; d < total; d++) {
+    hilbertD2XY(size, d, point);
+    const x = point[0];
+    const y = point[1];
+    if (x >= width || y >= height) continue;
+    order[n++] = y * width + x;
+  }
+
+  if (HILBERT_ORDER_CACHE.size >= HILBERT_ORDER_CACHE_LIMIT) {
+    HILBERT_ORDER_CACHE.delete(HILBERT_ORDER_CACHE.keys().next().value);
+  }
+  HILBERT_ORDER_CACHE.set(key, order);
+  return order;
+}
+
 function makeKernelAlgorithm(id, name, kernelKey) {
+  const compiled = compileKernel(KERNELS[kernelKey]);
   return {
     id,
     name,
@@ -434,7 +498,7 @@ function makeKernelAlgorithm(id, name, kernelKey) {
     supportsSerpentine: true,
     supportsErrorStrength: true,
     run: (imageData, params, palette) =>
-      runKernelDiffusion(imageData, params, palette, KERNELS[kernelKey]),
+      runKernelDiffusion(imageData, params, palette, compiled),
   };
 }
 

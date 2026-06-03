@@ -6,7 +6,7 @@ import {
   writePixel,
   isMonochromePalette,
 } from "./core.js";
-import { nearestColorInPalette } from "../palettes.js";
+import { createPaletteQuantizer } from "../palettes.js";
 
 function runSimpleThreshold(imageData, params, palette) {
   if (isMonochromePalette(palette)) {
@@ -43,6 +43,7 @@ function runThresholdRGB(imageData, params, palette) {
   const threshold = clamp(Math.round(params.threshold ?? 128), 0, 255);
   const invert = Boolean(params.invert);
   const shift = threshold - 128;
+  const quantize = createPaletteQuantizer(palette);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -55,7 +56,7 @@ function runThresholdRGB(imageData, params, palette) {
         g = 255 - g;
         b = 255 - b;
       }
-      const matched = nearestColorInPalette(r, g, b, palette);
+      const matched = quantize(r, g, b);
       writePixel(data, offset, matched[0], matched[1], matched[2]);
     }
   }

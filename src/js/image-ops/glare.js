@@ -26,7 +26,7 @@ export function applyGlareNode(input, params) {
   // threshold and 0-400 mix down to the bloom shader's 0-100 / 0-400 ranges
   // so the inspector keeps a single consistent set of sliders across types.
   if (type === "bloom-gpu") {
-    return applyBloomGpu(input, {
+    const bloom = applyBloomGpu(input, {
       opacity: 100,
       saturation: Number(params.saturation ?? 100),
       threshold: clamp(Number(params.threshold ?? 180) / 2.55, 0, 100),
@@ -34,6 +34,11 @@ export function applyGlareNode(input, params) {
       intensity: Number(params.mix ?? 100),
       radius: clamp(Number(params.size ?? 16), 0, 64),
     });
+    // Same fallback contract as star-gpu below: when WebGL2 is unavailable
+    // (notably inside a Worker, which has no `document`), fall through to the
+    // CPU bloom type so the glare stays visible instead of vanishing.
+    if (bloom) return bloom;
+    return applyGlareNode(input, { ...params, type: "bloom" });
   }
 
   // Star Glow is the F4.4 GPU-first glare variant: directional streaks from

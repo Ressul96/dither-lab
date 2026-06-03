@@ -262,6 +262,10 @@ export function renderEdges(parentId = getCurrentGraphParentId()) {
   try {
     if (!edgesEl) return;
     const { graph } = getState();
+    // Build the selection set once for the whole pass — renderEdge used to
+    // rebuild it per edge, which is O(edges × nodes) for a value that never
+    // changes within a single render.
+    const selectedNodeIds = new Set(getSelectedNodeIds(graph));
     const visibleNodeIds = getVisibleGraphNodeIds(graph, parentId);
     const visibleEdges = graph.edges.filter(
       (edge) => visibleNodeIds.has(edge.fromNode) && visibleNodeIds.has(edge.toNode)
@@ -273,7 +277,7 @@ export function renderEdges(parentId = getCurrentGraphParentId()) {
     if (parentId !== lastRenderedEdgesParentId) {
       lastRenderedEdgeHtml.clear();
       const html = visibleEdges.map((edge) => {
-        const edgeHtml = renderEdge(edge, graph);
+        const edgeHtml = renderEdge(edge, graph, selectedNodeIds);
         lastRenderedEdgeHtml.set(edge.id, edgeHtml);
         return edgeHtml;
       }).join("");
@@ -287,7 +291,7 @@ export function renderEdges(parentId = getCurrentGraphParentId()) {
     let previousEdgeEl = null;
     for (const edge of visibleEdges) {
       visibleIds.add(edge.id);
-      const html = renderEdge(edge, graph);
+      const html = renderEdge(edge, graph, selectedNodeIds);
       const existing = edgesEl.querySelector(
         `[data-edge-id="${escapeSelector(edge.id)}"]`
       );
@@ -459,7 +463,7 @@ function familySlug(value) {
   return String(value ?? "node").toLowerCase().replace(/[^a-z0-9]+/g, "-") || "node";
 }
 
-function renderEdge(edge, graph) {
+function renderEdge(edge, graph, selectedNodeIds) {
   const fromNode = getNodeById(edge.fromNode, graph);
   const toNode = getNodeById(edge.toNode, graph);
   if (!fromNode || !toNode) return "";
@@ -473,7 +477,6 @@ function renderEdge(edge, graph) {
     `${end.x - controlOffset} ${end.y}`,
     `${end.x} ${end.y}`,
   ].join(" ");
-  const selectedNodeIds = new Set(getSelectedNodeIds(graph));
   const active =
     selectedNodeIds.has(fromNode.id) || selectedNodeIds.has(toNode.id) ? " active" : "";
 
