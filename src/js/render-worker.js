@@ -6,19 +6,28 @@
 // ImageBitmap so the main thread can drawImage it onto the viewer canvas
 // in one frame.
 //
-// GPU shader passes still fall back to CPU here because gpu-effects.js
-// short-circuits when `typeof document === "undefined"` (F8.3 guard); a
-// later phase will swap the WebGL2 renderer for an OffscreenCanvas one
-// and lift that guard. ASCII / fonts also stay on the main thread until
-// the atlas-as-ImageBitmap path lands.
+// GPU shader passes need a WebGL2 renderer in this scope; if unavailable, the
+// host reroutes the request to the main thread. ASCII / fonts stay on the main
+// thread until the atlas-as-ImageBitmap path lands.
 
-import { clearGraphCache, evaluateGraphOutputs } from "./graph-runtime.js";
+import {
+  clearGraphCache,
+  evaluateGraphOutputs,
+  graphContainsGpuEffect,
+  graphRequiresMainThreadRender,
+} from "./graph-runtime.js";
+import { isGpuRendererAvailable } from "./gpu-effects.js";
+import { applyCustomPalettes } from "./palettes.js";
 
 self.addEventListener("message", (event) => {
   const msg = event.data;
   if (!msg || typeof msg !== "object") return;
   if (msg.type === "render") handleRender(msg);
   else if (msg.type === "clearCache") clearGraphCache();
+  else if (msg.type === "syncPalettes") {
+    applyCustomPalettes(msg.entries ?? []);
+    clearGraphCache();
+  }
 });
 
 self.addEventListener("messageerror", (event) => {
@@ -26,6 +35,40 @@ self.addEventListener("messageerror", (event) => {
 });
 
 function handleRender({ requestId, graph, context, sourceBitmap }) {
+  if (graphRequiresMainThreadRender(graph)) {
+    if (sourceBitmap) {
+      try {
+        sourceBitmap.close();
+      } catch (_) {}
+    }
+    self.postMessage({
+      type: "result",
+      requestId,
+      fallbackToMainThread: true,
+      fallbackReason: "mainThreadOnly",
+    });
+    return;
+  }
+
+  // A graph with GPU-only stylize nodes needs a WebGL2 renderer. If this worker
+  // scope can't create one (no OffscreenCanvas WebGL2 — e.g. some WebViews),
+  // those effects would silently pass through and the result wouldn't match a
+  // main-thread export. Bail so the host re-renders on the main thread.
+  if (graphContainsGpuEffect(graph) && !isGpuRendererAvailable()) {
+    if (sourceBitmap) {
+      try {
+        sourceBitmap.close();
+      } catch (_) {}
+    }
+    self.postMessage({
+      type: "result",
+      requestId,
+      fallbackToMainThread: true,
+      fallbackReason: "gpuUnsupported",
+    });
+    return;
+  }
+
   let sourceImage = null;
   let viewerBitmap = null;
   let ditherBitmap = null;

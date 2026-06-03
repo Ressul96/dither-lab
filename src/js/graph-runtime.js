@@ -89,6 +89,50 @@ export function evaluateViewerOutput(graph, context) {
   return evaluateGraphOutputs(graph, context).viewerOutput;
 }
 
+// GPU stylize nodes (vhs, crt, bloom, ascii, …) have no CPU fallback: when the
+// renderer is unavailable, stylize-gpu.js passes the input straight through and
+// the effect silently vanishes — a worker frame that wouldn't match a main-
+// thread export. render-worker.js uses this to decide whether to fall back to
+// the main thread (paired with isGpuRendererAvailable in gpu-effects.js). glare
+// is intentionally absent: every glare type runs on the CPU or has a CPU
+// fallback, so it stays worker-safe.
+const WORKER_UNSAFE_GPU_TYPES = new Set([
+  "halftone",
+  "led-screen",
+  "modulation",
+  "pixel-sorting",
+  "depth-of-field",
+  "vhs",
+  "crt",
+  "analog",
+  "bloom",
+  "halation",
+  "ascii",
+  "pattern-dither",
+]);
+
+const MAIN_THREAD_ONLY_TYPES = new Set([
+  "ascii",
+]);
+
+export function graphContainsGpuEffect(graph) {
+  if (!graph?.nodes?.length) return false;
+  for (const node of graph.nodes) {
+    if (!node || node.bypassed || isNodeHidden(node)) continue;
+    if (WORKER_UNSAFE_GPU_TYPES.has(node.type)) return true;
+  }
+  return false;
+}
+
+export function graphRequiresMainThreadRender(graph) {
+  if (!graph?.nodes?.length) return false;
+  for (const node of graph.nodes) {
+    if (!node || node.bypassed || isNodeHidden(node)) continue;
+    if (MAIN_THREAD_ONLY_TYPES.has(node.type)) return true;
+  }
+  return false;
+}
+
 export function isNodeHidden(node) {
   return Boolean(node && node.visible === false);
 }
