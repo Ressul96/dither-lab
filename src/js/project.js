@@ -9,6 +9,7 @@ import {
 import { clearSource, openSourcePath, pausePlayback, seek, setFps } from "./source.js";
 import { applyCustomPalettes, serializeCustomPalettes } from "./palettes.js";
 import { createDefaultTimeline, serializeTimeline } from "./timeline.js";
+import { isEmptyComposition, normalizeComposition, serializeComposition } from "./composition.js";
 import { selectedPath, tauriRemoveFile, tauriRenameFn } from "./tauri-compat.js";
 
 let currentProjectPath = "";
@@ -187,6 +188,7 @@ function buildProjectPayload() {
     },
     graph: serializeGraph(state.graph),
     timeline: serializeTimeline(state.timeline),
+    composition: serializeComposition(state.composition),
     customPalettes: serializeCustomPalettes(),
   };
 }
@@ -234,6 +236,13 @@ async function applyProject(project) {
       fps: getState().source.fps,
     })
   );
+  // Restore the saved composition AFTER openSourcePath — that call ran the
+  // single-clip migration, so a richer saved composition (multi-clip, later
+  // phases) must overwrite it here. An empty/absent saved composition leaves
+  // the migration result in place (backward compat for pre-v3 projects).
+  if (project?.composition && !isEmptyComposition(project.composition)) {
+    dispatch("composition", serializeComposition(normalizeComposition(project.composition)));
+  }
   const graph = replaceGraph(project?.graph);
   dispatch("graphView", {
     zoom: requestedGraphView.zoom,

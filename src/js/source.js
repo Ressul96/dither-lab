@@ -1,12 +1,21 @@
 import { getState, dispatch, subscribe } from "./state.js";
 import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
-import { clearGraphCache, evaluateGraphOutputs, isOutputCached } from "./graph-runtime.js";
+import { serializeCustomPalettes, subscribePalettes } from "./palettes.js";
+import {
+  clearGraphCache,
+  evaluateGraphOutputs,
+  graphContainsGpuEffect,
+  graphRequiresMainThreadRender,
+  isOutputCached,
+} from "./graph-runtime.js";
 import { canUseNativeRender, evaluateNativeGraphOutputs } from "./native-render.js";
 import { acquireBuffer, releaseBuffer } from "./image-ops.js";
 import {
   isWorkerAvailable,
   requestWorkerRender,
   clearWorkerCache,
+  syncWorkerPalettes,
+  workerKnownGpuUnsupported,
 } from "./render-adapter.js";
 import {
   applyTimelineToGraph,
@@ -16,6 +25,12 @@ import {
 } from "./timeline.js";
 import { selectedPath } from "./tauri-compat.js";
 import { listenWithDispose } from "./ui/lifecycle.js";
+import {
+  compositionFromSource,
+  createDefaultComposition,
+  getActiveVideoClip,
+  serializeComposition,
+} from "./composition.js";
 
 const FRAME_CACHE_TARGET_BYTES = 150_000_000;
 const FRAME_CACHE_MIN = 8;
@@ -145,6 +160,12 @@ export function initSource() {
   subscribe("view", () => presentPreview());
   subscribe("graph", () => scheduleRender());
   subscribe("timeline", () => scheduleRender());
+  syncWorkerPalettes(serializeCustomPalettes());
+  subscribePalettes(() => {
+    clearGraphCache();
+    syncWorkerPalettes(serializeCustomPalettes());
+    scheduleRender();
+  });
 }
 
 // Coalesce multiple render requests within the same animation frame. Slider
@@ -259,6 +280,19 @@ async function loadMedia(src, path, isImage, options = {}) {
     videoHeight: v.videoHeight,
   });
   dispatch("timeline", { duration: v.duration, fps: sourceFps });
+  // V3: mirror the freshly-loaded source into a single-clip composition so the
+  // clip timeline and composition-aware render path have a valid model. Ship 1
+  // is single-source, so a new load replaces the composition (matches the
+  // pre-v3 "one source at a time" behaviour).
+  dispatch("composition", serializeComposition(compositionFromSource({
+    loaded: true,
+    path,
+    duration: v.duration,
+    sourceFps,
+    fps: sourceFps,
+    videoWidth: v.videoWidth,
+    videoHeight: v.videoHeight,
+  })));
   applyPlaybackSpeed(v);
   setViewerOutputFps(sourceFps);
   dispatch("playback", {
@@ -332,6 +366,7 @@ export function clearSource() {
     videoWidth: 0,
     videoHeight: 0,
   });
+  dispatch("composition", createDefaultComposition());
   dispatch("playback", {
     playing: false,
     currentTime: 0,
@@ -612,7 +647,7 @@ function clampFps(fps) {
 export function graphContainsDither(graph) {
   if (!graph?.nodes?.length) return false;
   for (const node of graph.nodes) {
-    if (!node || node.bypassed) continue;
+    if (!node || node.bypassed || node.visible === false) continue;
     if (node.type === "dither" || node.type === "pattern-dither") return true;
   }
   return false;
@@ -1075,6 +1110,10 @@ async function renderCurrentFrame(options = {}) {
   const useWorker =
     !exportSessionActive &&
     shouldUseWorkerForPreview(getState().view?.workerRender, v) &&
+    !graphRequiresMainThreadRender(graph) &&
+    // GPU-effect graphs are sent to the worker optimistically; once it reports
+    // it can't build a WebGL2 renderer, they stay on the main thread (parity).
+    (!graphContainsGpuEffect(graph) || !workerKnownGpuUnsupported()) &&
     isWorkerAvailable();
 
   if (useWorker) {
@@ -1311,7 +1350,11 @@ function sourceFrameKey(v) {
   if (!v?.src || !Number.isFinite(v.currentTime)) return null;
   const fps = getState().source.sourceFps || 30;
   if (!fps) return null;
-  return `${frameCacheStamp}|${timeToFrame(v.currentTime, fps)}`;
+  // Salt the cache key with the active clip's source id so frames from
+  // different sources cannot collide once multi-source decode lands. Ship 1
+  // has one source, so this resolves to a constant suffix and behaves as before.
+  const sourceId = getActiveVideoClip(getState().composition, v.currentTime)?.clip.sourceId ?? "live";
+  return `${frameCacheStamp}|${sourceId}|${timeToFrame(v.currentTime, fps)}`;
 }
 
 function cacheCurrentFrame(key) {
@@ -1380,14 +1423,24 @@ function commitDitherFrame(image) {
 function createTimelineRenderContext(v) {
   const state = getState();
   const fps = state.source.fps || 30;
+  const timeSeconds = normalizePlaybackTime(
+    Number.isFinite(v?.currentTime) ? v.currentTime : state.playback.currentTime,
+    fps
+  );
+  // V3: resolve the active media clip at this composition time. Ship 1 is
+  // single-source (the load-time migration makes one clip at start=0/in=0, so
+  // its sourceTime === timeSeconds and the existing single-<video> render path
+  // stays pixel-identical). The resolved clip is attached to the context so the
+  // clip-cache key and later multi-source/compositing phases can consume it
+  // without changing this call site. Both preview and export go through here,
+  // keeping them in parity.
+  const activeClip = getActiveVideoClip(state.composition, timeSeconds);
   return {
     timeline: state.timeline,
-    timeSeconds: normalizePlaybackTime(
-      Number.isFinite(v?.currentTime) ? v.currentTime : state.playback.currentTime,
-      fps
-    ),
+    timeSeconds,
     durationSeconds: state.source.duration || v?.duration || 0,
     fps,
+    activeClip,
   };
 }
 

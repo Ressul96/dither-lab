@@ -109,6 +109,18 @@ import {
   syncTimelineRulerScroll,
   updateTimelineChrome,
 } from "./player-timeline-chrome.js";
+import {
+  initPlayerMediaClips,
+  renderMediaClipLanes,
+} from "./player-media-clips.js";
+import {
+  initPlayerMediaClipDrag,
+  startClipMove,
+  startClipTrim,
+  splitSelectedClipAtPlayhead,
+  deleteSelectedClip,
+  getSelectedClipId,
+} from "./player-media-clip-drag.js";
 
 export {
   copySelectedKeyframes,
@@ -133,6 +145,8 @@ export function initPlayer() {
   initPlayerBezierPopover();
   initPlayerKeyframeActions();
   initPlayerTimelineItems({ timeToTimelinePercent });
+  initPlayerMediaClips({ timeToTimelinePercent });
+  initPlayerMediaClipDrag({ seek, rerender: renderAnimationTimeline });
   initPlayerMarquee({ renderAnimationTimeline });
   initPlayerPlayhead({
     clamp,
@@ -181,6 +195,9 @@ export function initPlayer() {
     syncBezierPopover();
   });
   subscribe("graph", renderAnimationTimeline);
+  // The Clips view reads state.composition, so re-render when it changes
+  // (source load migration, clip edits in later ships, project load).
+  subscribe("composition", renderAnimationTimeline);
 }
 
 function wireTimelineDragHandle() {
@@ -675,6 +692,27 @@ function renderAnimationTimeline() {
   renderTimeRuler(duration, fps, normalized.durationUnit, normalized.zoom);
   const selected = getSelectedTimelineKeyframe(normalized);
 
+  // Clips view is independent of node selection — it reads state.composition,
+  // not the animatable-property targets, so it is handled before the
+  // targets-empty / layers / graph branches below.
+  if (normalized.viewMode === "clips") {
+    const composition = getState().composition;
+    const clipLanes = renderMediaClipLanes(composition, duration, fps, getSelectedClipId());
+    if (!clipLanes) {
+      playerEls.laneHost.replaceChildren();
+      playerEls.emptyState.textContent = "Load a source to see clips";
+      playerEls.emptyState.classList.remove("hidden");
+    } else {
+      playerEls.emptyState.classList.add("hidden");
+      setInnerHtml(
+        playerEls.laneHost,
+        renderRenderRangeOverlay(duration, playback) + clipLanes
+      );
+    }
+    updateAnimationPlayhead(playback, duration);
+    return;
+  }
+
   if (targets.length === 0) {
     playerEls.laneHost.replaceChildren();
     playerEls.emptyState.textContent = graph.selectedNodeId ? "No animatable properties" : "Select a node";
@@ -715,6 +753,24 @@ function onAnimationTimelinePointerDown(event) {
   const playheadHandle = event.target.closest(".playhead-handle");
   if (playheadHandle) {
     startPlayheadDrag(playheadHandle, event);
+    return;
+  }
+
+  // Clips view: trim handles take priority over the clip body so grabbing an
+  // edge resizes rather than moves. Selecting/dragging a clip is independent of
+  // the keyframe machinery below.
+  const clipHandle = event.target.closest("[data-media-clip-handle]");
+  if (clipHandle) {
+    event.preventDefault();
+    event.stopPropagation();
+    startClipTrim(clipHandle, event, clipHandle.dataset.mediaClipHandle);
+    return;
+  }
+  const clipBody = event.target.closest(".media-clip");
+  if (clipBody) {
+    event.preventDefault();
+    event.stopPropagation();
+    startClipMove(clipBody, event);
     return;
   }
 
@@ -816,6 +872,23 @@ function onAnimationTimelinePointerDown(event) {
 function onAnimationTimelineKeyDown(event) {
   const playheadHandle = event.target.closest(".playhead-handle");
   if (playheadHandle && handlePlayheadKeyDown(event)) return;
+
+  // Clips-view clip shortcuts. Ignore while typing in a field so they don't
+  // hijack input. All require a selected clip.
+  const target = event.target;
+  const typing = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+  if (getState().timeline.viewMode !== "clips" || typing || !getSelectedClipId()) return;
+
+  // "S" splits the selected clip at the playhead.
+  if ((event.key === "s" || event.key === "S") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (splitSelectedClipAtPlayhead()) event.preventDefault();
+    return;
+  }
+
+  // Delete / Backspace removes the selected clip; Shift closes the gap (ripple).
+  if (event.key === "Delete" || event.key === "Backspace") {
+    if (deleteSelectedClip({ ripple: event.shiftKey })) event.preventDefault();
+  }
 }
 
 function onAnimationTimelinePointerMove(event) {

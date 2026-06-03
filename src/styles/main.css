@@ -2950,6 +2950,100 @@ body.cutting-edges * {
   background: rgba(255, 255, 255, 0.04);
 }
 
+/* V3 media-clip lanes (Clips view). Read-only in Ship 1: one row per media
+   track, one rectangle per clip, positioned on the shared timeline axis. */
+.media-track-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.media-track-row.is-disabled {
+  opacity: 0.45;
+}
+
+.media-track-label {
+  min-width: 0;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-dim, rgba(230, 230, 235, 0.65));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media-track-lane {
+  position: relative;
+  height: 26px;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.media-clip {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  min-width: 2px;
+  box-sizing: border-box;
+  border-radius: var(--radius-sm);
+  background: rgba(74, 158, 255, 0.32);
+  border: 1px solid rgba(74, 158, 255, 0.65);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  cursor: default;
+}
+
+.media-track-row--audio .media-clip {
+  background: rgba(120, 200, 120, 0.28);
+  border-color: rgba(120, 200, 120, 0.6);
+}
+
+.media-clip.is-disabled {
+  opacity: 0.4;
+}
+
+.media-clip.is-selected {
+  border-color: rgba(146, 221, 255, 0.95);
+  box-shadow: 0 0 0 1px rgba(146, 221, 255, 0.6), 0 0 6px rgba(74, 158, 255, 0.4);
+  z-index: 2;
+}
+
+.media-clip-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  z-index: 3;
+}
+
+.media-clip-handle--start {
+  left: -1px;
+}
+
+.media-clip-handle--end {
+  right: -1px;
+}
+
+.media-clip-handle:hover {
+  background: rgba(146, 221, 255, 0.55);
+}
+
+.media-clip-label {
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.92);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
 .timeline-graph-placeholder {
   min-height: 72px;
   display: flex;

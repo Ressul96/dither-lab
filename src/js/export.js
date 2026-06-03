@@ -15,6 +15,7 @@ import {
 } from "./tauri-compat.js";
 import { listenWithDispose } from "./ui/lifecycle.js";
 import { setInnerHtml } from "./ui/utils.js";
+import { compositionDuration } from "./composition.js";
 
 const STILL_FORMATS = Object.freeze([
   { id: "png", label: "PNG", extension: "png", mime: "image/png" },
@@ -1648,16 +1649,27 @@ function getActiveSourceFps() {
 
 function getSequenceRangeSeconds(range) {
   const { source, playback } = getState();
-  const duration = Math.max(0, Number(source.duration) || 0);
+  const duration = exportTimelineDuration();
   if (range === "full" || !playback) return duration;
   const start = clampTime(playback.trimStart, duration);
   const end = clampTime(playback.trimEnd, duration);
   return Math.max(0, end - start);
 }
 
+// The full export length. Prefer the composition extent (multi-clip aware) and
+// fall back to the single source duration. In Ship 1 the single-clip migration
+// makes these equal, so this is regression-safe; later phases (multiple clips
+// past the source length) get the correct longer timeline automatically.
+function exportTimelineDuration() {
+  const { source, composition } = getState();
+  const sourceDuration = Math.max(0, Number(source.duration) || 0);
+  const compDuration = Math.max(0, compositionDuration(composition) || 0);
+  return Math.max(sourceDuration, compDuration);
+}
+
 function getSequenceStartTime(range) {
-  const { source, playback } = getState();
-  const duration = Math.max(0, Number(source.duration) || 0);
+  const { playback } = getState();
+  const duration = exportTimelineDuration();
   if (range === "full" || !playback) return 0;
   return clampTime(playback.trimStart, duration);
 }
