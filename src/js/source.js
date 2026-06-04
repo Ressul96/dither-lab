@@ -952,7 +952,14 @@ export function pausePlayback() {
   playRequestToken += 1;
   pendingPlayPromise = null;
   v.pause();
-  syncPlaybackState(v, { playing: false });
+  if (isSimpleSingleSource()) {
+    syncPlaybackState(v, { playing: false });
+  } else {
+    // Multi-clip but not actively playing (paused/scrubbing): the transport's
+    // currentTime is not the timeline clock, so don't let syncPlaybackState pull
+    // it in — just clear the playing flag and keep the composition clock.
+    dispatch("playback", { playing: false });
+  }
 }
 
 // ---------- multi-clip composition playback (Phase B) ----------
@@ -1214,15 +1221,24 @@ export function stepFrame(direction) {
   if (!v?.src) return;
   const { source, playback, timeline } = getState();
   const fps = timelineFrameRate(timeline, source.fps);
-  const duration = Number.isFinite(v.duration) ? v.duration : 0;
   pausePlayback();
-  const currentFrame = timeToFrame(v.currentTime || 0, fps);
-  const next = clamp(
-    (currentFrame + direction) / fps,
-    playback.trimStart,
-    Math.max(playback.trimStart, (playback.trimEnd || duration) - 1 / fps)
-  );
-  seek(next);
+  if (isSimpleSingleSource()) {
+    // Single-source: step over the transport clock within the trim range
+    // (byte-identical to the pre-composition behaviour).
+    const duration = Number.isFinite(v.duration) ? v.duration : 0;
+    const currentFrame = timeToFrame(v.currentTime || 0, fps);
+    const next = clamp(
+      (currentFrame + direction) / fps,
+      playback.trimStart,
+      Math.max(playback.trimStart, (playback.trimEnd || duration) - 1 / fps)
+    );
+    seek(next);
+    return;
+  }
+  // Multi-clip: step over the composition clock across the full timeline.
+  const currentFrame = timeToFrame(currentTimelineTime(), fps);
+  const limit = Math.max(0, timelineClockDuration() - 1 / fps);
+  seek(clamp((currentFrame + direction) / fps, 0, limit));
 }
 
 export function snapPlayhead() {
