@@ -28,6 +28,7 @@ import { listenWithDispose } from "./ui/lifecycle.js";
 import {
   addSource,
   compositionFromSource,
+  compositionDuration,
   createDefaultComposition,
   getActiveVideoClip,
   serializeComposition,
@@ -788,6 +789,28 @@ function normalizePlaybackTime(seconds, fps) {
   return snapTimeToFrame(seconds, grid);
 }
 
+// Authoritative timeline (composition) time in seconds. The transport video's
+// currentTime is capped at the primary source's duration, so it cannot address
+// composition times past the first clip; playback.currentTime is the clock of
+// record (written by seek and the play tick, mirrored by syncPlaybackState).
+// Single-source: the lone clip is start:0/in:0 on the transport, so this equals
+// the transport's currentTime and render/seek stay byte-identical.
+function currentTimelineTime() {
+  return Number(getState().playback.currentTime) || 0;
+}
+
+// Full traversable timeline length: the composition extent, but never shorter
+// than the source/user-set timeline duration (procedural tails). Used to clamp
+// seeks and size the playable range.
+function timelineClockDuration() {
+  const { composition, source, timeline } = getState();
+  return Math.max(
+    compositionDuration(composition) || 0,
+    Number(source?.duration) || 0,
+    Number(timeline?.duration) || 0
+  );
+}
+
 function syncPlaybackState(v, patch = {}) {
   const time = normalizePlaybackTime(Number.isFinite(v.currentTime) ? v.currentTime : 0);
   dispatch("playback", {
@@ -911,17 +934,37 @@ export function pausePlayback() {
 export function seek(seconds) {
   const { video: v } = ensureEls();
   if (!v?.src) return;
-  const duration = Number.isFinite(v.duration) ? v.duration : 0;
-  const target = normalizePlaybackTime(Math.max(0, Math.min(duration, Number(seconds) || 0)));
-  const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
-  try {
-    if (Math.abs(before - target) > 0.0005) {
-      v.currentTime = target;
-    } else {
-      requestRenderCurrentFrame();
-    }
-  } catch {}
-  syncPlaybackState(v, { currentTime: target });
+  // `seconds` is composition (timeline) time. Clamp to the full traversable
+  // range — the composition extent, not the transport's duration — so the
+  // playhead can reach clips past the primary source.
+  const timelineTime = normalizePlaybackTime(
+    Math.max(0, Math.min(timelineClockDuration(), Number(seconds) || 0))
+  );
+  // Resolve which clip plays here and which element decodes it.
+  const active = getActiveVideoClip(getState().composition, timelineTime);
+  const el = active ? decodeVideoForSourceId(active.clip.sourceId) : v;
+
+  // Advance the timeline clock first so the render below reads the new position.
+  syncPlaybackState(v, { currentTime: timelineTime });
+
+  if (el === v) {
+    // Primary / single-source: seek the transport element directly; its 'seeked'
+    // handler renders. With one clip (start:0/in:0) this seeks the transport to
+    // `timelineTime`, byte-identical to the pre-composition path.
+    const duration = Number.isFinite(v.duration) ? v.duration : 0;
+    const elTarget = normalizePlaybackTime(
+      Math.max(0, Math.min(duration, active ? active.sourceTime : timelineTime))
+    );
+    const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+    try {
+      if (Math.abs(before - elTarget) > 0.0005) v.currentTime = elTarget;
+      else requestRenderCurrentFrame();
+    } catch {}
+  } else {
+    // Non-primary clip: renderCurrentFrame's decode sync seeks the pooled element
+    // to its in-source time and waits for paint, so just render at the new clock.
+    requestRenderCurrentFrame();
+  }
 }
 
 export function beginExportSession() {
@@ -1035,12 +1078,12 @@ export async function seekForExport(seconds) {
   const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
 
   if (Math.abs(before - target) <= 0.0005) {
-    await renderCurrentFrame({ forExport: true });
+    await renderCurrentFrame({ forExport: true, timeOverride: Number(seconds) || 0 });
     return true;
   }
 
   const ok = await seekVideoAndWaitForPaint(v, target);
-  if (ok) await renderCurrentFrame({ forExport: true });
+  if (ok) await renderCurrentFrame({ forExport: true, timeOverride: Number(seconds) || 0 });
   return ok;
 }
 
@@ -1200,18 +1243,26 @@ async function renderCurrentFrame(options = {}) {
 
   const currentRenderVersion = ++renderVersion;
   const currentSourceToken = sourceToken;
+  // Authoritative composition time for this render. Preview reads the timeline
+  // clock (playback.currentTime); export passes the exact frame time through
+  // options.timeOverride (seekForExport doesn't write playback state). Single-
+  // source: playback.currentTime === transport currentTime, byte-identical to
+  // the old v.currentTime path.
+  const timelineTime = options.timeOverride != null
+    ? Number(options.timeOverride) || 0
+    : currentTimelineTime();
   // Decode element for the clip under the playhead. With one source this is the
   // transport element `v` itself (byte-identical to the old path); with several
   // sources it's the pooled element for the active clip's file.
-  const activeEntry = getActiveVideoClip(getState().composition, v.currentTime);
+  const activeEntry = getActiveVideoClip(getState().composition, timelineTime);
   const decodeVideo = (activeEntry ? decodeVideoForSourceId(activeEntry.clip.sourceId) : v) || v;
   const decodeWidth = decodeVideo.videoWidth || v.videoWidth;
   const decodeHeight = decodeVideo.videoHeight || v.videoHeight;
   ensureFrameBuffers(decodeWidth, decodeHeight);
-  // Cache key is derived from the TIMELINE time (transport `v`) + the active
-  // clip's source id, never from the decode element's own currentTime (which is
-  // the clip's in-source time and would collide across clips of one file).
-  const frameKey = compositionFrameKey(v.currentTime, activeEntry?.clip.sourceId);
+  // Cache key is derived from the TIMELINE clock + the active clip's source id,
+  // never from the decode element's own currentTime (which is the clip's in-
+  // source time and would collide across clips of one file).
+  const frameKey = compositionFrameKey(timelineTime, activeEntry?.clip.sourceId);
   // Multi-source preview: a clip backed by a pooled (non-transport) element
   // isn't driven by the transport clock, so its element sits at whatever time
   // it was last left on. Seek it to the clip's in-source time and wait for the
@@ -1270,7 +1321,7 @@ async function renderCurrentFrame(options = {}) {
     ? `${baseSourceVersion}@${PLAYBACK_PREVIEW_SCALE}`
     : baseSourceVersion;
 
-  const timelineContext = createTimelineRenderContext(v);
+  const timelineContext = createTimelineRenderContext(v, timelineTime);
   const nativeRenderGraph = applyTimelineToGraph(
     graph,
     timelineContext.timeline,
@@ -1598,13 +1649,13 @@ function commitDitherFrame(image) {
   ditherCtx.drawImage(image, 0, 0, ditherCanvas.width, ditherCanvas.height);
 }
 
-function createTimelineRenderContext(v) {
+function createTimelineRenderContext(v, timelineTime) {
   const state = getState();
   const fps = state.source.fps || 30;
-  const timeSeconds = normalizePlaybackTime(
-    Number.isFinite(v?.currentTime) ? v.currentTime : state.playback.currentTime,
-    fps
-  );
+  const rawTime = timelineTime != null
+    ? timelineTime
+    : (Number.isFinite(v?.currentTime) ? v.currentTime : state.playback.currentTime);
+  const timeSeconds = normalizePlaybackTime(rawTime, fps);
   // V3: resolve the active media clip at this composition time. Ship 1 is
   // single-source (the load-time migration makes one clip at start=0/in=0, so
   // its sourceTime === timeSeconds and the existing single-<video> render path

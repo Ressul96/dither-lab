@@ -33,6 +33,7 @@ import {
   updateTimelineKeyframe,
   updateTimelineTrack,
 } from "../timeline.js";
+import { compositionDuration } from "../composition.js";
 import { listenWithDispose } from "./lifecycle.js";
 import { setInnerHtml } from "./utils.js";
 import {
@@ -1180,9 +1181,18 @@ function getSelectedTimelineKeyframe(timeline = getState().timeline) {
 
 function resolveTimelineDuration(timeline, source) {
   const timelineDuration = Number(timeline?.duration);
-  if (Number.isFinite(timelineDuration) && timelineDuration > 0) return timelineDuration;
   const sourceDuration = Number(source?.duration);
-  return Number.isFinite(sourceDuration) && sourceDuration > 0 ? sourceDuration : 0;
+  const base = Number.isFinite(timelineDuration) && timelineDuration > 0
+    ? timelineDuration
+    : Number.isFinite(sourceDuration) && sourceDuration > 0
+      ? sourceDuration
+      : 0;
+  // The ruler/playhead/clip lanes must cover the whole composition, so never
+  // report shorter than the composition extent. Single-source: the extent
+  // equals the primary duration (== timeline.duration set at load), so this is
+  // the same value as before.
+  const compositionExtent = compositionDuration(getState().composition) || 0;
+  return Math.max(base, compositionExtent);
 }
 
 function formatTrackCount(count) {
