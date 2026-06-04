@@ -26,6 +26,7 @@ import {
 import { selectedPath } from "./tauri-compat.js";
 import { listenWithDispose } from "./ui/lifecycle.js";
 import {
+  addSource,
   compositionFromSource,
   createDefaultComposition,
   getActiveVideoClip,
@@ -46,6 +47,15 @@ const PLAYBACK_LOOP_EPSILON = 1 / 120;
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
 
 let video;
+// Multi-source decode pool (Ship 4). Maps a composition sourceId to the
+// HTMLVideoElement that decodes it, so the playhead can switch between distinct
+// video files without re-loading one shared element. The transport element
+// (`video`, the DOM #sourceVideo that also drives play/pause/FPS) is registered
+// here under the primary source id, so the single-source path resolves to the
+// exact same element it always used — behaviour stays byte-identical until a
+// second source actually exists.
+const videoPool = new Map(); // sourceId -> { el, path }
+let primarySourceId = null;  // sourceId backed by the transport `video` element
 let canvas;
 let ctx;
 let splitCanvas;
@@ -208,11 +218,82 @@ export async function openSourcePath(path, options = {}) {
   const tauri = window.__TAURI__;
   if (!tauri || !path) return;
   const src = tauri.core.convertFileSrc(path);
-  
+
   const ext = path.split(".").pop()?.toLowerCase();
   const isImage = ext ? IMAGE_EXTENSIONS.includes(ext) : false;
 
   await loadMedia(src, path, isImage, options);
+}
+
+// Ship 4: open the file picker and ADD the chosen media as a new source in the
+// composition (without replacing the current one, unlike openSource). Returns
+// the new sourceId or null. The Assets panel calls this.
+export async function addSourceViaPicker() {
+  const tauri = window.__TAURI__;
+  if (!tauri?.dialog?.open) {
+    console.warn("[add-source] file dialog unavailable");
+    return null;
+  }
+  let selected;
+  try {
+    selected = await tauri.dialog.open({
+      title: "Add Media",
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Media", extensions: MEDIA_EXTENSIONS }],
+    });
+  } catch (err) {
+    console.error("[add-source] dialog failed", err);
+    return null;
+  }
+  const path = selectedPath(selected);
+  if (!path) return null;
+  return addSourceFromPath(path);
+}
+
+// Load a media file into the decode pool and register it as a new composition
+// source — does NOT touch the current composition's clips or reset playback.
+// Video sources get a dedicated hidden <video> in the pool; the metadata
+// (duration/dimensions) is read once on loadeddata. Returns the new sourceId.
+export async function addSourceFromPath(path) {
+  const tauri = window.__TAURI__;
+  if (!tauri || !path) return null;
+  const ext = path.split(".").pop()?.toLowerCase();
+  // Ship 4 covers video sources; image-as-clip is a later step.
+  if (ext && IMAGE_EXTENSIONS.includes(ext)) {
+    console.warn("[add-source] image sources are not addable as clips yet");
+    return null;
+  }
+  const src = tauri.core.convertFileSrc(path);
+
+  // Dedicated hidden decode element for this source.
+  const el = document.createElement("video");
+  el.muted = true;
+  el.playsInline = true;
+  el.preload = "auto";
+  el.src = src;
+  el.load();
+  try {
+    await waitFor(el, "loadeddata");
+  } catch (err) {
+    console.error("[add-source] media load failed", err);
+    try { el.removeAttribute("src"); el.load(); } catch (_) {}
+    return null;
+  }
+
+  const sourceFps = await detectSourceFps(el);
+  const { composition, sourceId } = addSource(getState().composition, {
+    path,
+    kind: "video",
+    duration: el.duration,
+    fps: sourceFps,
+    width: el.videoWidth,
+    height: el.videoHeight,
+    hasAudio: false,
+  });
+  videoPool.set(sourceId, { el, path });
+  dispatch("composition", serializeComposition(composition));
+  return sourceId;
 }
 
 async function loadMedia(src, path, isImage, options = {}) {
@@ -284,7 +365,7 @@ async function loadMedia(src, path, isImage, options = {}) {
   // clip timeline and composition-aware render path have a valid model. Ship 1
   // is single-source, so a new load replaces the composition (matches the
   // pre-v3 "one source at a time" behaviour).
-  dispatch("composition", serializeComposition(compositionFromSource({
+  const migrated = compositionFromSource({
     loaded: true,
     path,
     duration: v.duration,
@@ -292,7 +373,13 @@ async function loadMedia(src, path, isImage, options = {}) {
     fps: sourceFps,
     videoWidth: v.videoWidth,
     videoHeight: v.videoHeight,
-  })));
+  });
+  dispatch("composition", serializeComposition(migrated));
+  // Loading a fresh source replaces the composition, so any extra pooled
+  // decode elements from a previous project are stale — drop them and bind the
+  // transport element to the new primary source id.
+  resetVideoPool();
+  registerPrimarySource(migrated.sources[0]?.id ?? "source-1");
   applyPlaybackSpeed(v);
   setViewerOutputFps(sourceFps);
   dispatch("playback", {
@@ -335,6 +422,7 @@ export function clearSource() {
   hasDitherOutput = false;
   sampleLayout = null;
   clearFrameCache();
+  resetVideoPool();
 
   if (v) {
     try {
@@ -514,6 +602,47 @@ function ensureEls() {
     ditherCanvas,
     ditherCtx,
   };
+}
+
+// ---------- multi-source decode pool (Ship 4) ----------
+
+// Register the transport <video> element as the decoder for `sourceId`. Called
+// when a source is loaded into the shared #sourceVideo, so the pool and the
+// single-source path point at the same element.
+function registerPrimarySource(sourceId) {
+  const { video: v } = ensureEls();
+  if (!sourceId || !v) return;
+  primarySourceId = sourceId;
+  videoPool.set(sourceId, { el: v, path: v.src || "" });
+}
+
+// Resolve the <video> element that decodes a given sourceId. The primary source
+// is the transport element; any other source uses its own pooled element. In
+// the single-source case this always returns the transport `video`, so the
+// existing render/seek path is unchanged.
+function decodeVideoForSourceId(sourceId) {
+  if (!sourceId) return ensureEls().video;
+  const entry = videoPool.get(sourceId);
+  if (entry?.el) return entry.el;
+  return ensureEls().video;
+}
+
+// Tear down every pooled decode element EXCEPT the transport element (which the
+// DOM owns and loadMedia reuses). Non-primary elements get their src released
+// so the browser frees the decoder. Called on source load / clearSource.
+function resetVideoPool() {
+  for (const [sourceId, entry] of videoPool) {
+    if (sourceId === primarySourceId) continue;
+    if (entry?.el && entry.el !== video) {
+      try {
+        entry.el.pause();
+        entry.el.removeAttribute("src");
+        entry.el.load();
+      } catch (_) {}
+    }
+  }
+  videoPool.clear();
+  primarySourceId = null;
 }
 
 function ensureFrameBuffers(width, height) {
@@ -815,29 +944,20 @@ export function endExportSession() {
   if (v) syncPlaybackState(v);
 }
 
-export async function seekForExport(seconds) {
-  const { video: v } = ensureEls();
-  if (!v?.src) return false;
-  const duration = Number.isFinite(v.duration) ? v.duration : 0;
-  const target = Math.max(0, Math.min(duration, Number(seconds) || 0));
-  const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
-
-  if (Math.abs(before - target) <= 0.0005) {
-    await renderCurrentFrame({ forExport: true });
-    return true;
-  }
-
-  // `seeked` alone is not enough: it tells us the position updated, but
-  // the <video>'s drawImage source can still hold the previous decoded
-  // frame. After `seeked` we wait one more paint — via
-  // requestVideoFrameCallback when available, with a double-rAF fallback
-  // because some WebViews (notably WKWebView for paused video) don't
-  // fire rVFC reliably.
+// Seek a <video> to `target` (in-element seconds) and resolve once a fresh
+// frame has actually painted. `seeked` alone is not enough: it reports the
+// position update, but the <video>'s drawImage source can still hold the
+// previous decoded frame. After `seeked` we wait one more paint — via
+// requestVideoFrameCallback when available, with a double-rAF fallback because
+// some WebViews (notably WKWebView for paused video) don't fire rVFC reliably.
+// Resolves true on success, false on decode error / timeout. Shared by the
+// export seek and the multi-source preview seek so both wait identically.
+function seekVideoAndWaitForPaint(v, target) {
   const supportsVFC =
     typeof v.requestVideoFrameCallback === "function" &&
     v instanceof HTMLVideoElement;
 
-  const ok = await new Promise((resolve) => {
+  return new Promise((resolve) => {
     let settled = false;
 
     const cleanup = () => {
@@ -855,10 +975,9 @@ export async function seekForExport(seconds) {
       if (settled) return;
       settled = true;
       cleanup();
-      console.warn("[seekForExport] failed", {
+      console.warn("[seek-video] failed", {
         reason,
         target,
-        before,
         readyState: v.readyState,
         videoError: v.error && { code: v.error.code, message: v.error.message },
       });
@@ -894,7 +1013,33 @@ export async function seekForExport(seconds) {
       fail("set-currentTime-throw:" + (e?.message || e));
     }
   });
+}
 
+export async function seekForExport(seconds) {
+  const transport = ensureEls().video;
+  // `seconds` is composition (timeline) time. Resolve which source plays there
+  // and seek THAT element to the clip's in-source time. Single-source: the
+  // active clip starts at 0/in 0, so v === transport and sourceTime === seconds
+  // (byte-identical to the old single-element seek).
+  const active = getActiveVideoClip(getState().composition, seconds);
+  const v = active ? decodeVideoForSourceId(active.clip.sourceId) : transport;
+  if (!v?.src) return false;
+  // Keep the transport element's clock on the timeline so playback UI / export
+  // progress stay correct, even when a different element is being decoded.
+  if (transport && transport !== v) {
+    try { transport.currentTime = Math.max(0, Number(seconds) || 0); } catch (_) {}
+  }
+  const sourceSeconds = active ? active.sourceTime : Number(seconds) || 0;
+  const duration = Number.isFinite(v.duration) ? v.duration : 0;
+  const target = Math.max(0, Math.min(duration, sourceSeconds));
+  const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+
+  if (Math.abs(before - target) <= 0.0005) {
+    await renderCurrentFrame({ forExport: true });
+    return true;
+  }
+
+  const ok = await seekVideoAndWaitForPaint(v, target);
   if (ok) await renderCurrentFrame({ forExport: true });
   return ok;
 }
@@ -1055,13 +1200,47 @@ async function renderCurrentFrame(options = {}) {
 
   const currentRenderVersion = ++renderVersion;
   const currentSourceToken = sourceToken;
-  ensureFrameBuffers(v.videoWidth, v.videoHeight);
-  drawSourceFrame(v);
+  // Decode element for the clip under the playhead. With one source this is the
+  // transport element `v` itself (byte-identical to the old path); with several
+  // sources it's the pooled element for the active clip's file.
+  const activeEntry = getActiveVideoClip(getState().composition, v.currentTime);
+  const decodeVideo = (activeEntry ? decodeVideoForSourceId(activeEntry.clip.sourceId) : v) || v;
+  const decodeWidth = decodeVideo.videoWidth || v.videoWidth;
+  const decodeHeight = decodeVideo.videoHeight || v.videoHeight;
+  ensureFrameBuffers(decodeWidth, decodeHeight);
+  // Cache key is derived from the TIMELINE time (transport `v`) + the active
+  // clip's source id, never from the decode element's own currentTime (which is
+  // the clip's in-source time and would collide across clips of one file).
+  const frameKey = compositionFrameKey(v.currentTime, activeEntry?.clip.sourceId);
+  // Multi-source preview: a clip backed by a pooled (non-transport) element
+  // isn't driven by the transport clock, so its element sits at whatever time
+  // it was last left on. Seek it to the clip's in-source time and wait for the
+  // frame to paint before drawing — but only when that frame isn't already
+  // cached and the element has actually moved. Single-source / primary-source
+  // clips keep decodeVideo === v and skip this entirely (byte-identical to the
+  // pre-multi-source path). During live playback this seeks the secondary clip
+  // per frame (lower fps, still correct); primary playback is untouched.
+  if (
+    decodeVideo !== v &&
+    activeEntry &&
+    !exportSessionActive &&
+    decodeVideo.readyState >= 1 &&
+    frameKey !== null &&
+    !frameCache.has(frameKey)
+  ) {
+    const dur = Number.isFinite(decodeVideo.duration) ? decodeVideo.duration : 0;
+    const target = Math.max(0, dur ? Math.min(dur, activeEntry.sourceTime) : activeEntry.sourceTime);
+    if (Math.abs((decodeVideo.currentTime || 0) - target) > 0.001) {
+      const ok = await seekVideoAndWaitForPaint(decodeVideo, target);
+      if (!ok || isStaleRender(currentRenderVersion, currentSourceToken)) return;
+    }
+  }
+  drawSourceFrame(decodeVideo, frameKey);
 
   // sourceVersion is the cache identity of the current source frame. It only
   // changes when the painted contents change (new frame, new source), so the
   // node memo cache can hit on paused-video param tweaks.
-  const baseSourceVersion = sourceFrameKey(v) ?? `live-${currentRenderVersion}`;
+  const baseSourceVersion = frameKey ?? `live-${currentRenderVersion}`;
 
   // During playback, evaluate the effect chain on a downscaled copy of the
   // source. The processed/dither commits already scale the result back up to
@@ -1320,7 +1499,7 @@ function buildPreviewSource(fullSource) {
   return previewSourceCanvas;
 }
 
-function drawSourceFrame(v) {
+function drawSourceFrame(v, key = null) {
   if (!sourceCtx || !sourceCanvas) return;
   // Export drives back-to-back seeks where `<video>.drawImage` can briefly
   // read the previous decoded frame. Caching those pixels under the new
@@ -1331,7 +1510,6 @@ function drawSourceFrame(v) {
     sourceCtx.drawImage(v.drawable || v, 0, 0, sourceCanvas.width, sourceCanvas.height);
     return;
   }
-  const key = sourceFrameKey(v);
   if (key !== null) {
     const cached = frameCache.get(key);
     if (cached) {
@@ -1346,15 +1524,15 @@ function drawSourceFrame(v) {
   if (key !== null) cacheCurrentFrame(key);
 }
 
-function sourceFrameKey(v) {
-  if (!v?.src || !Number.isFinite(v.currentTime)) return null;
+// Frame-cache identity for composition time `timelineTime`. Keyed by the active
+// clip's source id + the frame index, so frames from different source files
+// can't collide. Single-source resolves to a constant source id, matching the
+// pre-multi-source behaviour.
+function compositionFrameKey(timelineTime, sourceId) {
+  if (!Number.isFinite(timelineTime)) return null;
   const fps = getState().source.sourceFps || 30;
   if (!fps) return null;
-  // Salt the cache key with the active clip's source id so frames from
-  // different sources cannot collide once multi-source decode lands. Ship 1
-  // has one source, so this resolves to a constant suffix and behaves as before.
-  const sourceId = getActiveVideoClip(getState().composition, v.currentTime)?.clip.sourceId ?? "live";
-  return `${frameCacheStamp}|${sourceId}|${timeToFrame(v.currentTime, fps)}`;
+  return `${frameCacheStamp}|${sourceId ?? "live"}|${timeToFrame(timelineTime, fps)}`;
 }
 
 function cacheCurrentFrame(key) {

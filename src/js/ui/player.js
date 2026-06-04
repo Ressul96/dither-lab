@@ -119,6 +119,7 @@ import {
   startClipTrim,
   splitSelectedClipAtPlayhead,
   deleteSelectedClip,
+  addClipFromDrop,
   getSelectedClipId,
 } from "./player-media-clip-drag.js";
 
@@ -292,6 +293,23 @@ function wireAnimationTimeline() {
   if (!timelineEl) return;
   timelineEl.addEventListener("pointerdown", onAnimationTimelinePointerDown);
   listenWithDispose(timelineEl, "keydown", onAnimationTimelineKeyDown);
+
+  // Asset drag-drop: accept a source dropped onto a Clips-view track lane and
+  // add a clip there. dragover must preventDefault to allow the drop.
+  timelineEl.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer?.types?.includes("application/x-dither-source-id")) return;
+    if (!event.target.closest?.(".media-track-lane")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  });
+  timelineEl.addEventListener("drop", (event) => {
+    const lane = event.target.closest?.(".media-track-lane");
+    if (!lane) return;
+    const sourceId = event.dataTransfer?.getData("application/x-dither-source-id");
+    if (!sourceId) return;
+    event.preventDefault();
+    addClipFromDrop(lane, sourceId, event.clientX);
+  });
   timelineEl.addEventListener("click", (event) => {
     if (event.target.closest("[data-tangent-handle]")) {
       event.preventDefault();

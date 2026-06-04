@@ -17,6 +17,7 @@ import {
   splitClip,
   removeClip,
   rippleDeleteClip,
+  addClip,
   snapClipTime,
   serializeComposition,
   normalizeComposition,
@@ -260,6 +261,29 @@ export function deleteSelectedClip({ ripple = false } = {}) {
   dispatch("composition", next);
   selectedClipId = null;
   pushCompositionHistory(before, ripple ? "Ripple delete clip" : "Delete clip");
+  rerender();
+  return true;
+}
+
+// Add a clip from an asset drop. `laneEl` is the .media-track-lane dropped onto,
+// `sourceId` comes from the drag payload, `clientX` gives the drop position.
+// Snaps the drop time to the frame grid, adds the clip via the reducer (which
+// finds a free slot), and pushes one history entry. Returns true on success.
+export function addClipFromDrop(laneEl, sourceId, clientX) {
+  if (!laneEl || !sourceId) return false;
+  const trackId = laneEl.dataset.mediaLane;
+  if (!trackId) return false;
+  const composition = getState().composition;
+  const rect = laneEl.getBoundingClientRect();
+  const duration = timelineDuration();
+  const dropTime = rect.width > 0 && duration > 0
+    ? Math.max(0, ((clientX - rect.left) / rect.width) * duration)
+    : 0;
+  const before = snapshotComposition();
+  const next = addClip(composition, { trackId, sourceId, start: dropTime });
+  if (next === composition) return false;
+  dispatch("composition", next);
+  pushCompositionHistory(before, "Add clip");
   rerender();
   return true;
 }

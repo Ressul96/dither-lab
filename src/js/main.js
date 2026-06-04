@@ -11,6 +11,7 @@ import {
   pasteKeyframesAtPlayhead,
 } from "./ui/player.js";
 import { initStage, resetZoom, togglePixelInspector } from "./ui/stage.js";
+import { initAssetPanel } from "./ui/asset-panel.js";
 import {
   getRecentProjects,
   newProject,
@@ -30,6 +31,7 @@ initExport();
 initGraphShell();
 initPlayer();
 initStage();
+initAssetPanel();
 initProjectButtons();
 initHistoryButtons();
 initKeyboard();

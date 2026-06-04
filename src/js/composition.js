@@ -390,6 +390,77 @@ export function splitClip(composition, { trackId, clipId, time }) {
   });
 }
 
+// Register a new source (a loaded media file) in the composition. Returns
+// { composition, sourceId }. No clips are created — addClip places them.
+export function addSource(composition, source) {
+  const base = composition ?? createDefaultComposition();
+  const existing = new Set((base.sources ?? []).map((s) => s.id));
+  const id = typeof source?.id === "string" && !existing.has(source.id)
+    ? source.id
+    : nextId("src", existing);
+  const sources = [...(base.sources ?? []), { ...source, id }];
+  const next = normalizeComposition({ ...base, sources });
+  return { composition: next, sourceId: id };
+}
+
+// Add a clip for `sourceId` to a track. `start` defaults to the end of the
+// track (append). Duration defaults to the source's full length. If the chosen
+// start would overlap an existing clip, the clip is pushed to the first free
+// slot at/after that start so clips never overlap (matches moveClip's rule).
+export function addClip(composition, { trackId, sourceId, start, duration } = {}) {
+  const base = composition ?? createDefaultComposition();
+  const track = base.tracks?.find((t) => t.id === trackId);
+  const source = getSourceById(base, sourceId);
+  if (!track || !source) return composition;
+
+  const fps = base.fps;
+  const clipDuration = snapToFrame(
+    duration != null ? Math.max(frameStep(fps), duration) : Math.max(frameStep(fps), source.duration || 0),
+    fps
+  );
+  if (!(clipDuration > 0)) return composition;
+
+  // Desired start: explicit, else append after the last clip on the track.
+  const trackEnd = track.clips.reduce((max, c) => Math.max(max, c.start + c.duration), 0);
+  let desired = snapToFrame(start != null ? Math.max(0, start) : trackEnd, fps);
+  desired = findFreeSlot(track, desired, clipDuration, fps);
+
+  const existingIds = new Set();
+  for (const t of base.tracks ?? []) for (const c of t.clips ?? []) existingIds.add(c.id);
+  const clipId = nextId("clip", existingIds);
+
+  const newClip = {
+    id: clipId,
+    sourceId,
+    start: desired,
+    duration: clipDuration,
+    in: 0,
+    out: clipDuration,
+    enabled: true,
+    graphId: null,
+  };
+  const tracks = base.tracks.map((t) =>
+    t.id === trackId ? { ...t, clips: [...t.clips, newClip] } : t
+  );
+  return normalizeComposition({ ...base, tracks });
+}
+
+// First start >= desired where a clip of `duration` fits without overlapping an
+// existing clip on the track. Walks the sorted clips, jumping past each one the
+// candidate would collide with.
+function findFreeSlot(track, desired, duration, fps) {
+  const clips = [...(track.clips ?? [])].sort((a, b) => a.start - b.start);
+  let start = desired;
+  for (const c of clips) {
+    const cEnd = c.start + c.duration;
+    // Overlap if the candidate interval [start, start+duration) intersects [c.start, cEnd).
+    if (start < cEnd && c.start < start + duration) {
+      start = snapToFrame(cEnd, fps);
+    }
+  }
+  return start;
+}
+
 // Remove a clip, leaving a gap where it sat (other clips keep their start).
 export function removeClip(composition, { trackId, clipId }) {
   const { track, clip } = findTrackAndClip(composition, trackId, clipId);
