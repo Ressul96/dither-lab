@@ -223,6 +223,49 @@ export function getSourceById(composition, sourceId) {
   return composition?.sources?.find((s) => s.id === sourceId) ?? null;
 }
 
+// Playback helpers (pure) — the source.js play tick crosses clip boundaries with
+// these. They return { track, clip, sourceTime } shaped like getActiveClips so
+// the caller can seek the right element to the clip's in-point.
+
+// The first enabled video clip on the timeline (smallest start). Where playback
+// begins / loops back to. Null when there are no video clips.
+export function firstVideoClip(composition) {
+  let best = null;
+  for (const track of composition?.tracks ?? []) {
+    if (track.kind !== "video" || !track.enabled) continue;
+    for (const clip of track.clips ?? []) {
+      if (!clip.enabled) continue;
+      if (!best || clip.start < best.clip.start) best = { track, clip, sourceTime: clip.in };
+    }
+  }
+  return best;
+}
+
+// The next enabled video clip to roll to after `clipId`: the one with the
+// smallest start strictly greater than the current clip's start. Null at the end
+// of the timeline. Sequential, non-overlapping clips advance in order; gaps are
+// skipped (the playhead jumps to the next clip's start).
+export function nextVideoClipAfter(composition, clipId) {
+  let currentStart = null;
+  for (const track of composition?.tracks ?? []) {
+    for (const clip of track.clips ?? []) {
+      if (clip.id === clipId) currentStart = clip.start;
+    }
+  }
+  if (currentStart == null) return null;
+  let best = null;
+  for (const track of composition?.tracks ?? []) {
+    if (track.kind !== "video" || !track.enabled) continue;
+    for (const clip of track.clips ?? []) {
+      if (!clip.enabled) continue;
+      if (clip.start > currentStart && (!best || clip.start < best.clip.start)) {
+        best = { track, clip, sourceTime: clip.in };
+      }
+    }
+  }
+  return best;
+}
+
 // ---------- edit reducers (pure) ----------
 //
 // Each reducer takes a composition + an edit and returns a NEW normalized

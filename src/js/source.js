@@ -30,7 +30,9 @@ import {
   compositionFromSource,
   compositionDuration,
   createDefaultComposition,
+  firstVideoClip,
   getActiveVideoClip,
+  nextVideoClipAfter,
   serializeComposition,
 } from "./composition.js";
 
@@ -75,6 +77,12 @@ let hasDitherOutput = false;
 let playbackSyncSuspended = false;
 let pendingPlayPromise = null;
 let playRequestToken = 0;
+// Multi-clip composition playback (Phase B). When set, the play tick is driven
+// by `playbackEl` (the element decoding `playbackClip`) instead of the single
+// transport video, advancing across clip boundaries. Null for the classic
+// single-source path, which is left completely untouched.
+let playbackClip = null;
+let playbackEl = null;
 let renderVersion = 0;
 let sourceToken = 0;
 let nativeRenderInFlight = false;
@@ -904,6 +912,17 @@ export async function togglePlay() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
 
+  if (!isSimpleSingleSource()) {
+    // Multi-clip composition: toggle the element-driven playback tick.
+    if (playbackClip) {
+      stopCompositionPlayback();
+      dispatchCompositionPlayhead(currentTimelineTime(), false);
+    } else {
+      startCompositionPlayback();
+    }
+    return;
+  }
+
   if (pendingPlayPromise || (!v.paused && !v.ended)) {
     playRequestToken += 1;
     pendingPlayPromise = null;
@@ -925,15 +944,118 @@ export function restart() {
 export function pausePlayback() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
+  if (playbackClip) {
+    stopCompositionPlayback();
+    dispatchCompositionPlayhead(currentTimelineTime(), false);
+    return;
+  }
   playRequestToken += 1;
   pendingPlayPromise = null;
   v.pause();
   syncPlaybackState(v, { playing: false });
 }
 
+// ---------- multi-clip composition playback (Phase B) ----------
+
+// The classic single-source case: zero or one clip, and that clip is backed by
+// the primary transport source. These keep the untouched native-playback path;
+// any real composition (extra clips, or a single non-primary clip) uses the
+// tick below. This gate is what guarantees single-source playback is unchanged.
+function isSimpleSingleSource() {
+  const clips = (getState().composition?.tracks ?? []).flatMap((t) => t.clips ?? []);
+  if (clips.length === 0) return true;
+  if (clips.length > 1) return false;
+  return clips[0].sourceId === primarySourceId;
+}
+
+// Write the composition playhead. Unlike syncPlaybackState (which reads the
+// transport's paused/ended), `playing` is explicit because the playing element
+// may be a pooled one the transport knows nothing about.
+function dispatchCompositionPlayhead(t, playing = true) {
+  dispatch("playback", { currentTime: normalizePlaybackTime(t), playing });
+}
+
+// Make `clip` the playing clip: pause the previous element if it differs, point
+// the new element at `sourceTarget` (in-source seconds) and start it.
+function setActiveCompositionClip(clip, sourceTarget) {
+  const nextEl = decodeVideoForSourceId(clip.sourceId);
+  if (playbackEl && playbackEl !== nextEl) {
+    try { playbackEl.pause(); } catch {}
+  }
+  playbackClip = clip;
+  playbackEl = nextEl;
+  try { playbackEl.currentTime = Math.max(0, sourceTarget || 0); } catch {}
+  try { playbackEl.play(); } catch {}
+}
+
+function startCompositionPlayback() {
+  const t = currentTimelineTime();
+  let active = getActiveVideoClip(getState().composition, t);
+  const within = !!active && t >= active.clip.start && t < active.clip.start + active.clip.duration;
+  if (!within) {
+    // Playhead past the end / in a gap: (re)start from the first clip.
+    active = firstVideoClip(getState().composition);
+  }
+  if (!active) return;
+  // Suppress the transport's trim/sync handlers — the tick owns the clock now.
+  playbackSyncSuspended = true;
+  setActiveCompositionClip(active.clip, within ? active.sourceTime : active.clip.in);
+  dispatchCompositionPlayhead(within ? t : active.clip.start);
+  if (!rafId) startDrawLoop();
+}
+
+function stopCompositionPlayback() {
+  if (playbackEl) {
+    try { playbackEl.pause(); } catch {}
+  }
+  playbackClip = null;
+  playbackEl = null;
+  playbackSyncSuspended = false;
+  stopDrawLoop();
+}
+
+// One frame of composition playback. The playing element's currentTime is the
+// clock: timelineTime = clip.start + (el.currentTime - clip.in). At the clip's
+// out point we roll to the next clip (or loop / stop at the composition end).
+// Returns false when playback should stop. Steppable for tests by setting
+// playbackEl.currentTime and calling directly.
+function compositionPlaybackTick() {
+  const clip = playbackClip;
+  const el = playbackEl;
+  if (!clip || !el) return false;
+  const elTime = Number.isFinite(el.currentTime) ? el.currentTime : 0;
+  const clipOut = clip.in + clip.duration;
+  if (elTime >= clipOut - PLAYBACK_LOOP_EPSILON || el.ended) {
+    const next = nextVideoClipAfter(getState().composition, clip.id);
+    if (next) {
+      setActiveCompositionClip(next.clip, next.clip.in);
+      dispatchCompositionPlayhead(next.clip.start);
+      requestRenderCurrentFrame();
+      return true;
+    }
+    if (getState().playback.loopEnabled !== false) {
+      const first = firstVideoClip(getState().composition);
+      if (first) {
+        setActiveCompositionClip(first.clip, first.clip.in);
+        dispatchCompositionPlayhead(first.clip.start);
+        requestRenderCurrentFrame();
+        return true;
+      }
+    }
+    stopCompositionPlayback();
+    dispatchCompositionPlayhead(timelineClockDuration(), false);
+    return false;
+  }
+  dispatchCompositionPlayhead(clip.start + (elTime - clip.in));
+  requestRenderCurrentFrame();
+  return true;
+}
+
 export function seek(seconds) {
   const { video: v } = ensureEls();
   if (!v?.src) return;
+  // Scrubbing pauses multi-clip playback so the clock follows the pointer.
+  if (playbackClip) stopCompositionPlayback();
   // `seconds` is composition (timeline) time. Clamp to the full traversable
   // range — the composition extent, not the transport's duration — so the
   // playhead can reach clips past the primary source.
@@ -1789,6 +1911,12 @@ function clearSplitCanvas() {
 function startDrawLoop() {
   const { video: v } = ensureEls();
   const tick = () => {
+    // Multi-clip composition playback drives its own clock and clip boundaries.
+    // Single-source leaves playbackClip null and runs the untouched body below.
+    if (playbackClip) {
+      rafId = compositionPlaybackTick() ? requestAnimationFrame(tick) : 0;
+      return;
+    }
     if (!playbackSyncSuspended) {
       if (!enforceTrimPlayback(v)) {
         syncPlaybackState(v);
