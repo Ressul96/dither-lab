@@ -206,7 +206,11 @@ function scheduleRender() {
 
 export async function openSource() {
   const tauri = window.__TAURI__;
-  if (!tauri) return;
+  if (!tauri?.dialog?.open) {
+    // Browser (no Tauri): load a primary source via a file input + blob URL.
+    await loadMediaFromFile(await pickFileViaInput("video/*,image/*"));
+    return;
+  }
 
   let selected;
   try {
@@ -244,8 +248,10 @@ export async function openSourcePath(path, options = {}) {
 export async function addSourceViaPicker() {
   const tauri = window.__TAURI__;
   if (!tauri?.dialog?.open) {
-    console.warn("[add-source] file dialog unavailable");
-    return null;
+    // Browser (no Tauri): add a source via a file input + blob URL.
+    const file = await pickFileViaInput("video/*");
+    if (!file) return null;
+    return addSourceFromSrc(URL.createObjectURL(file), file.name);
   }
   let selected;
   try {
@@ -277,8 +283,14 @@ export async function addSourceFromPath(path) {
     console.warn("[add-source] image sources are not addable as clips yet");
     return null;
   }
-  const src = tauri.core.convertFileSrc(path);
+  return addSourceFromSrc(tauri.core.convertFileSrc(path), path);
+}
 
+// Core: load a media URL into the decode pool and register it as a new
+// composition source. `src` is a ready-to-use URL (a Tauri asset URL, or in a
+// plain browser a blob: URL); `path` is the display name. Does NOT touch the
+// current composition's clips. Returns the new sourceId.
+async function addSourceFromSrc(src, path) {
   // Dedicated hidden decode element for this source.
   const el = document.createElement("video");
   el.muted = true;
@@ -307,6 +319,42 @@ export async function addSourceFromPath(path) {
   videoPool.set(sourceId, { el, path });
   dispatch("composition", serializeComposition(composition));
   return sourceId;
+}
+
+// Open a hidden <input type=file> and resolve with the chosen File. The no-Tauri
+// browser fallback for the native file dialog, so media can be loaded when the
+// frontend runs outside the desktop shell (e.g. localhost in a browser).
+function pickFileViaInput(accept) {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.style.display = "none";
+    input.addEventListener(
+      "change",
+      () => {
+        const file = input.files && input.files[0] ? input.files[0] : null;
+        input.remove();
+        resolve(file);
+      },
+      { once: true }
+    );
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+// Load a browser File as the primary source via a blob: URL.
+async function loadMediaFromFile(file) {
+  if (!file) return;
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  const isImage = ext ? IMAGE_EXTENSIONS.includes(ext) : false;
+  await loadMedia(URL.createObjectURL(file), file.name, isImage);
+}
+
+function isMediaFile(file) {
+  const ext = file?.name?.split(".").pop()?.toLowerCase();
+  return Boolean(ext && MEDIA_EXTENSIONS.includes(ext));
 }
 
 async function loadMedia(src, path, isImage, options = {}) {
@@ -551,7 +599,15 @@ function wireSourceDropTarget() {
     if (!hasFilePayload(event.dataTransfer)) return;
     event.preventDefault();
     showDropzone(false);
-    await loadDroppedPaths(extractDomDropPaths(event.dataTransfer));
+    const paths = extractDomDropPaths(event.dataTransfer);
+    if (paths.length > 0) {
+      await loadDroppedPaths(paths);
+      return;
+    }
+    // Browser: filesystem paths aren't exposed on File, so load the dropped
+    // File directly via a blob: URL.
+    const file = Array.from(event.dataTransfer.files || []).find(isMediaFile);
+    if (file) await loadMediaFromFile(file);
   });
 
   const tauriEvent = window.__TAURI__?.event;
