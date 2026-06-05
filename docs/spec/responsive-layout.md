@@ -4,20 +4,37 @@
 
 Caddis feature #6: composition elements bind to the composition bounds
 (proportionally / by anchor) and reflow when the output aspect changes
-(16:9 → 9:16). Today the geometry nodes (`transform`, `crop`, `scale`) use
-absolute pixel params, so changing the output size does not reposition anything.
-This doc designs the anchor/constraint layer. It is the design pass the roadmap
-requires before code; no code is implied by writing it.
+(16:9 → 9:16).
+
+**Reality check (verified in code and at two output sizes).** The original
+premise of this doc — "the geometry nodes use absolute pixel params" — is wrong.
+The `transform` node's `translateX/Y` are a **percentage of the frame measured
+from the center** (`ctx.translate(width/2 + (translateX/100)*width, …)` in
+`image-ops/transform.js`), and scale (`x`/`y`) and crop insets are percentages
+too. So full-frame content **already reflows proportionally** when the output
+aspect changes — confirmed by rendering `translateX=50` at 384×216 and 216×384
+and seeing the boundary land at frame center in both. The *proportional* half of
+this feature already ships. What is genuinely missing is the **anchor** half
+(pin to a corner/edge instead of center), and that is only meaningful for
+*discrete elements*, not a full-frame transform — which needs an element model
+the app does not have yet. The increments below are re-scoped around that.
 
 ## What Already Exists
 
 - The viewer/export already know the composition size (`source.videoWidth/Height`,
   the viewer-output target), so the *input* to a layout solve exists.
-- Geometry nodes (`transform` = translate/rotate/scale, `crop`, `scale`) consume
-  absolute params at eval time in `image-ops/` via `graph-runtime`.
+- `transform` translate (`translateX/Y`, −100..100) is a **percentage of the
+  frame from center**, and scale (`x`/`y`) is a percentage — both already reflow
+  proportionally when the frame size changes (confirmed at 384×216 vs 216×384).
+- `crop` uses percentage insets (`left/right/top/bottom`), also already relative.
 
-What is missing is the *indirection*: a way to express a param as a fraction of
-the output, plus an anchor, resolved against the current dimensions.
+So the *proportional* indirection already exists for the transform node. What is
+missing is **anchor choice** (measure a param from a corner/edge, not center) and
+an optional **px (absolute, non-reflowing) unit** — both of which only pay off
+once there is a discrete element model to anchor. Forcing a `{value, unit,
+anchor}` layer onto the transform node today would *conflict* with its existing
+proportional-from-center semantics and could not honour a "default px =
+byte-identical" rule (the default is already pct, not px).
 
 ## Model: Anchored Params
 
@@ -61,14 +78,29 @@ No wall-clock, no playback state.
 
 ## Build Increments
 
-1. **Resolver + model** — `resolveAnchoredParam` (pure) + accept `{value, unit,
-   anchor}` on `transform` translate/scale params; resolve at the render
-   chokepoint. Default px → zero behavior change. Verify: pct/anchor resolves
-   correctly at two output sizes; bare numbers unchanged; preview == export.
-2. **Inspector** — px/% toggle + anchor grid on the transform node. Verify: toggle
-   round-trips, reflow on output-size change.
-3. **More geometry nodes** — extend to `crop` / `scale`; later a constraint solver
-   (needs an element model — deferred).
+Re-scoped after the reality check. The proportional reflow this feature wanted
+already ships via the transform node's percentage params, so there is **no
+non-speculative increment to build against the current node set** — the remaining
+responsive work is gated on a discrete element model (positioned sub-frame
+layers). Without it, "anchor to a corner" and "px vs %" have no element to apply
+to and would only bolt a conflicting unit layer onto a node whose params are
+already proportional.
+
+Deferred until an element model exists:
+
+1. **Anchored element params** — `resolveAnchoredParam(meta, outW, outH, axis)`
+   (pure) + `{value, unit, anchor}` on *element* position/size, resolved at the
+   render chokepoint (the `resolveGraphTokens` precedent) so both render paths
+   and export agree. The default mirrors today's proportional-from-center
+   behavior so existing projects stay byte-identical.
+2. **Inspector** — px/% toggle + 3×3 anchor grid per element.
+3. **Constraint solver** — inter-element relations (A.right = B.left).
+
+Shippable in isolation later (small, non-breaking) if a use case appears: an
+explicit `anchor` dropdown on the transform node that moves the translate origin
+off center. Left unbuilt here because, for full-frame content, center-anchored
+proportional translate already covers the headline reflow and a corner anchor has
+no discrete element to pin.
 
 ## Risks
 
