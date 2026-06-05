@@ -5,6 +5,7 @@
 // same building blocks promoted to first-class graph nodes.
 
 import { getSelectedNode } from "../graph.js";
+import { getState } from "../state.js";
 import {
   renderRangeField,
   renderSelectField,
@@ -14,13 +15,37 @@ import {
   formatSignedValue,
 } from "./graph-inspector-utils.js";
 
+// Basename of a source's path, or its id when no path (matches the Assets panel).
+function sourceLabel(source) {
+  return source.path ? source.path.split(/[/\\]/).pop() : source.id;
+}
+
+// Options for the Source binding dropdown: "Composition" (unbound — follows the
+// active clip) plus one entry per loaded asset. An unbound node renders the
+// timeline frame; a bound node renders its asset at the timeline time.
+function sourceBindingOptions(boundId) {
+  const sources = getState().composition?.sources ?? [];
+  const options = [["", "Composition (timeline)"]];
+  for (const source of sources) options.push([source.id, sourceLabel(source)]);
+  // Keep a stale binding visible instead of silently snapping to "Composition".
+  if (boundId && !sources.some((s) => s.id === boundId)) {
+    options.push([boundId, `${boundId} (missing)`]);
+  }
+  return options;
+}
+
 export function renderSourceNode() {
   const node = getSelectedNode();
   const params = node?.params ?? {};
   const bwMode = String(params.bwMode ?? "off");
   const invert = String(params.invert ?? "off");
   const invertChannels = String(params.invertChannels ?? "rgb");
+  const boundId = String(params.sourceId ?? "");
   return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Source</header>
+      ${renderSelectField("Bound media", "sourceId", boundId, sourceBindingOptions(boundId))}
+    </section>
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Adjust</header>
       ${renderRangeField("Brightness", "brightness", params.brightness ?? 0, -100, 100, formatSignedValue(params.brightness ?? 0))}
