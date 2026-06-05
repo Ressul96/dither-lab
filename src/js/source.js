@@ -32,6 +32,7 @@ import {
   createDefaultComposition,
   firstVideoClip,
   getActiveVideoClip,
+  getCompositingLayers,
   nextVideoClipAfter,
   serializeComposition,
 } from "./composition.js";
@@ -1189,6 +1190,31 @@ function seekVideoAndWaitForPaint(v, target) {
 
 export async function seekForExport(seconds) {
   const transport = ensureEls().video;
+  // Composite export: when 2+ video layers are active, seek EVERY layer's
+  // element to its in-source time so the composite draws the right frames.
+  // Preview seeks all layers via renderCurrentFrame's decode sync; export must
+  // match for parity. Single-layer / procedural keeps the original path below.
+  const layers = getCompositingLayers(getState().composition, seconds);
+  if (layers.length >= 2) {
+    let allOk = true;
+    for (const layer of layers) {
+      const el = decodeVideoForSourceId(layer.clip.sourceId);
+      if (!el?.src) continue;
+      const dur = Number.isFinite(el.duration) ? el.duration : 0;
+      const tgt = Math.max(0, dur ? Math.min(dur, layer.sourceTime) : layer.sourceTime);
+      const cur = Number.isFinite(el.currentTime) ? el.currentTime : 0;
+      if (Math.abs(cur - tgt) <= 0.0005) continue;
+      const ok = await seekVideoAndWaitForPaint(el, tgt);
+      if (!ok) allOk = false;
+    }
+    // Keep the transport clock on the timeline for export progress.
+    try {
+      const tdur = Number.isFinite(transport.duration) ? transport.duration : 0;
+      transport.currentTime = Math.max(0, tdur ? Math.min(tdur, Number(seconds) || 0) : Number(seconds) || 0);
+    } catch (_) {}
+    await renderCurrentFrame({ forExport: true, timeOverride: Number(seconds) || 0 });
+    return allOk;
+  }
   // `seconds` is composition (timeline) time. Resolve which source plays there
   // and seek THAT element to the clip's in-source time. Single-source: the
   // active clip starts at 0/in 0, so v === transport and sourceTime === seconds
@@ -1389,42 +1415,74 @@ async function renderCurrentFrame(options = {}) {
   const timelineTime = options.timeOverride != null
     ? Number(options.timeOverride) || 0
     : currentTimelineTime();
-  // Decode element for the clip under the playhead. With one source this is the
-  // transport element `v` itself (byte-identical to the old path); with several
-  // sources it's the pooled element for the active clip's file.
-  const activeEntry = getActiveVideoClip(getState().composition, timelineTime);
-  const decodeVideo = (activeEntry ? decodeVideoForSourceId(activeEntry.clip.sourceId) : v) || v;
-  const decodeWidth = decodeVideo.videoWidth || v.videoWidth;
-  const decodeHeight = decodeVideo.videoHeight || v.videoHeight;
-  ensureFrameBuffers(decodeWidth, decodeHeight);
-  // Cache key is derived from the TIMELINE clock + the active clip's source id,
-  // never from the decode element's own currentTime (which is the clip's in-
-  // source time and would collide across clips of one file).
-  const frameKey = compositionFrameKey(timelineTime, activeEntry?.clip.sourceId);
-  // Multi-source preview: a clip backed by a pooled (non-transport) element
-  // isn't driven by the transport clock, so its element sits at whatever time
-  // it was last left on. Seek it to the clip's in-source time and wait for the
-  // frame to paint before drawing — but only when that frame isn't already
-  // cached and the element has actually moved. Single-source / primary-source
-  // clips keep decodeVideo === v and skip this entirely (byte-identical to the
-  // pre-multi-source path). During live playback this seeks the secondary clip
-  // per frame (lower fps, still correct); primary playback is untouched.
-  if (
-    decodeVideo !== v &&
-    activeEntry &&
-    !exportSessionActive &&
-    decodeVideo.readyState >= 1 &&
-    frameKey !== null &&
-    !frameCache.has(frameKey)
-  ) {
-    const dur = Number.isFinite(decodeVideo.duration) ? decodeVideo.duration : 0;
-    const target = Math.max(0, dur ? Math.min(dur, activeEntry.sourceTime) : activeEntry.sourceTime);
-    if (Math.abs((decodeVideo.currentTime || 0) - target) > 0.001) {
-      const ok = await seekVideoAndWaitForPaint(decodeVideo, target);
-      if (!ok || isStaleRender(currentRenderVersion, currentSourceToken)) return;
+  // Resolve the active video clips bottom-to-top. With 0 or 1 layer this runs
+  // the original single-element path verbatim (byte-identical); with 2+ layers
+  // it composites them with per-track blend/opacity. Both paths write
+  // sourceCanvas + a frame-cache key, so everything downstream (graph, worker,
+  // export) is unchanged and preview/export stay in parity.
+  const layers = getCompositingLayers(getState().composition, timelineTime);
+  let frameKey;
+  if (layers.length >= 2) {
+    // --- multi-layer compositing ---
+    // The bottom layer's element sizes the canvas; upper layers scale to fit.
+    const baseEl = decodeVideoForSourceId(layers[0].clip.sourceId) || v;
+    ensureFrameBuffers(baseEl.videoWidth || v.videoWidth, baseEl.videoHeight || v.videoHeight);
+    frameKey = compositeFrameKey(timelineTime, layers);
+    if (!exportSessionActive && frameKey !== null && !frameCache.has(frameKey)) {
+      // Seek every pooled (non-transport) layer to its in-source time and wait
+      // for paint before compositing. The primary layer rides the transport
+      // clock and needs no seek.
+      for (const layer of layers) {
+        const el = decodeVideoForSourceId(layer.clip.sourceId);
+        if (!el || el === v || el.readyState < 1) continue;
+        const dur = Number.isFinite(el.duration) ? el.duration : 0;
+        const target = Math.max(0, dur ? Math.min(dur, layer.sourceTime) : layer.sourceTime);
+        if (Math.abs((el.currentTime || 0) - target) > 0.001) {
+          const ok = await seekVideoAndWaitForPaint(el, target);
+          if (!ok || isStaleRender(currentRenderVersion, currentSourceToken)) return;
+        }
+      }
     }
+    drawCompositeFrame(layers, frameKey);
+  } else {
+    // --- single-layer path (verbatim pre-compositing behaviour) ---
+    // Decode element for the clip under the playhead. With one source this is
+    // the transport element `v` itself (byte-identical to the old path); with
+    // several sources it's the pooled element for the active clip's file.
+    const activeEntry = getActiveVideoClip(getState().composition, timelineTime);
+    const decodeVideo = (activeEntry ? decodeVideoForSourceId(activeEntry.clip.sourceId) : v) || v;
+    const decodeWidth = decodeVideo.videoWidth || v.videoWidth;
+    const decodeHeight = decodeVideo.videoHeight || v.videoHeight;
+    ensureFrameBuffers(decodeWidth, decodeHeight);
+    // Cache key is derived from the TIMELINE clock + the active clip's source id,
+    // never from the decode element's own currentTime (which is the clip's in-
+    // source time and would collide across clips of one file).
+    frameKey = compositionFrameKey(timelineTime, activeEntry?.clip.sourceId);
+    // Multi-source preview: a clip backed by a pooled (non-transport) element
+    // isn't driven by the transport clock, so its element sits at whatever time
+    // it was last left on. Seek it to the clip's in-source time and wait for the
+    // frame to paint before drawing — but only when that frame isn't already
+    // cached and the element has actually moved. Single-source / primary-source
+    // clips keep decodeVideo === v and skip this entirely (byte-identical to the
+    // pre-multi-source path). During live playback this seeks the secondary clip
+    // per frame (lower fps, still correct); primary playback is untouched.
+    if (
+      decodeVideo !== v &&
+      activeEntry &&
+      !exportSessionActive &&
+      decodeVideo.readyState >= 1 &&
+      frameKey !== null &&
+      !frameCache.has(frameKey)
+    ) {
+      const dur = Number.isFinite(decodeVideo.duration) ? decodeVideo.duration : 0;
+      const target = Math.max(0, dur ? Math.min(dur, activeEntry.sourceTime) : activeEntry.sourceTime);
+      if (Math.abs((decodeVideo.currentTime || 0) - target) > 0.001) {
+        const ok = await seekVideoAndWaitForPaint(decodeVideo, target);
+        if (!ok || isStaleRender(currentRenderVersion, currentSourceToken)) return;
+      }
+    }
+    drawSourceFrame(decodeVideo, frameKey);
   }
-  drawSourceFrame(decodeVideo, frameKey);
 
   // sourceVersion is the cache identity of the current source frame. It only
   // changes when the painted contents change (new frame, new source), so the
@@ -1722,6 +1780,65 @@ function compositionFrameKey(timelineTime, sourceId) {
   const fps = getState().source.sourceFps || 30;
   if (!fps) return null;
   return `${frameCacheStamp}|${sourceId ?? "live"}|${timeToFrame(timelineTime, fps)}`;
+}
+
+// Frame-cache identity for a composited stack: every layer's source id + frame
+// index + opacity + blend mode, in paint order. Distinct from the single-clip
+// key so composited and un-composited frames never collide in the cache.
+function compositeFrameKey(timelineTime, layers) {
+  if (!Number.isFinite(timelineTime) || !layers?.length) return null;
+  const fps = getState().source.sourceFps || 30;
+  if (!fps) return null;
+  const parts = layers.map((l) => {
+    const frame = timeToFrame(l.sourceTime, fps);
+    const op = Math.round(l.track.opacity ?? 100);
+    const blend = l.track.blendMode || "normal";
+    return `${l.clip.sourceId}:${frame}:${op}:${blend}`;
+  });
+  return `${frameCacheStamp}|comp|${parts.join("|")}`;
+}
+
+// Canvas2D globalCompositeOperation names that double as composition blend
+// modes (they share names with CSS mix-blend-mode). "normal" and anything
+// unknown fall back to source-over.
+const CANVAS_BLEND_MODES = new Set([
+  "multiply", "screen", "overlay", "darken", "lighten", "color-dodge",
+  "color-burn", "hard-light", "soft-light", "difference", "exclusion",
+  "hue", "saturation", "color", "luminosity",
+]);
+function blendModeToCanvas(mode) {
+  return CANVAS_BLEND_MODES.has(mode) ? mode : "source-over";
+}
+
+// Composite `layers` (bottom-to-top) into sourceCanvas with per-track opacity
+// (globalAlpha) and blend mode (globalCompositeOperation). The base layer always
+// paints source-over; upper layers use their track's blend mode. Mirrors
+// drawSourceFrame's cache + export-fresh behaviour so preview and export match.
+function drawCompositeFrame(layers, key = null) {
+  if (!sourceCtx || !sourceCanvas) return;
+  if (!exportSessionActive && key !== null) {
+    const cached = frameCache.get(key);
+    if (cached) {
+      frameCache.delete(key);
+      frameCache.set(key, cached);
+      sourceCtx.drawImage(cached, 0, 0, sourceCanvas.width, sourceCanvas.height);
+      return;
+    }
+  }
+  const w = sourceCanvas.width;
+  const h = sourceCanvas.height;
+  sourceCtx.clearRect(0, 0, w, h);
+  sourceCtx.save();
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
+    const el = decodeVideoForSourceId(layer.clip.sourceId);
+    if (!el) continue;
+    sourceCtx.globalAlpha = clamp((layer.track.opacity ?? 100) / 100, 0, 1);
+    sourceCtx.globalCompositeOperation = i === 0 ? "source-over" : blendModeToCanvas(layer.track.blendMode);
+    sourceCtx.drawImage(el.drawable || el, 0, 0, w, h);
+  }
+  sourceCtx.restore();
+  if (!exportSessionActive && key !== null) cacheCurrentFrame(key);
 }
 
 function cacheCurrentFrame(key) {

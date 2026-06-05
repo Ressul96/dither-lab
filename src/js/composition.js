@@ -223,6 +223,16 @@ export function getSourceById(composition, sourceId) {
   return composition?.sources?.find((s) => s.id === sourceId) ?? null;
 }
 
+// Active video clips at time t in BOTTOM-to-top paint order, for compositing.
+// getActiveClips returns top-most first; compositing paints the base first and
+// upper layers over it, so reverse. Each entry is { track, clip, sourceTime } —
+// the track carries blendMode/opacity, the clip's sourceTime says where to seek.
+export function getCompositingLayers(composition, timeSeconds) {
+  return getActiveClips(composition, timeSeconds)
+    .filter((entry) => entry.track.kind === "video")
+    .reverse();
+}
+
 // Playback helpers (pure) — the source.js play tick crosses clip boundaries with
 // these. They return { track, clip, sourceTime } shaped like getActiveClips so
 // the caller can seek the right element to the clip's in-point.
