@@ -18,6 +18,8 @@ import {
   removeClip,
   rippleDeleteClip,
   addClip,
+  addVideoTrack,
+  updateTrack,
   snapClipTime,
   serializeComposition,
   normalizeComposition,
@@ -284,6 +286,34 @@ export function addClipFromDrop(laneEl, sourceId, clientX) {
   if (next === composition) return false;
   dispatch("composition", next);
   pushCompositionHistory(before, "Add clip");
+  rerender();
+  return true;
+}
+
+// Add a new empty video track on top of the stack (for compositing). One
+// history entry.
+export function addVideoTrackAction() {
+  const composition = getState().composition;
+  const before = snapshotComposition();
+  const next = addVideoTrack(composition);
+  if (next === composition) return false;
+  dispatch("composition", next);
+  pushCompositionHistory(before, "Add track");
+  rerender();
+  return true;
+}
+
+// Update a track's compositing props (opacity / blendMode). One history entry
+// per commit — the UI fires this on change (slider release, select change), so
+// the snapshot taken here is the pre-change state.
+export function setTrackProp(trackId, patch) {
+  if (!trackId || !patch) return false;
+  const composition = getState().composition;
+  const before = snapshotComposition();
+  const next = updateTrack(composition, { trackId, patch });
+  if (next === composition) return false;
+  dispatch("composition", next);
+  pushCompositionHistory(before, "Update track");
   rerender();
   return true;
 }

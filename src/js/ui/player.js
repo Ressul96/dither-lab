@@ -121,6 +121,8 @@ import {
   splitSelectedClipAtPlayhead,
   deleteSelectedClip,
   addClipFromDrop,
+  addVideoTrackAction,
+  setTrackProp,
   getSelectedClipId,
 } from "./player-media-clip-drag.js";
 
@@ -311,10 +313,32 @@ function wireAnimationTimeline() {
     event.preventDefault();
     addClipFromDrop(lane, sourceId, event.clientX);
   });
+
+  // Track compositing controls (Clips view): commit opacity/blend on change
+  // (slider release / select change) so each edit is one atomic history entry.
+  timelineEl.addEventListener("change", (event) => {
+    const opacityEl = event.target.closest?.("[data-track-opacity]");
+    if (opacityEl) {
+      setTrackProp(opacityEl.dataset.trackId, { opacity: Number(opacityEl.value) });
+      return;
+    }
+    const blendEl = event.target.closest?.("[data-track-blend]");
+    if (blendEl) {
+      setTrackProp(blendEl.dataset.trackId, { blendMode: blendEl.value });
+    }
+  });
   timelineEl.addEventListener("click", (event) => {
     if (event.target.closest("[data-tangent-handle]")) {
       event.preventDefault();
       event.stopPropagation();
+      return;
+    }
+
+    const addTrack = event.target.closest('[data-action="add-video-track"]');
+    if (addTrack) {
+      event.preventDefault();
+      event.stopPropagation();
+      addVideoTrackAction();
       return;
     }
 

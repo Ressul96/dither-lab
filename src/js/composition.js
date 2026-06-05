@@ -456,6 +456,36 @@ export function addSource(composition, source) {
   return { composition: next, sourceId: id };
 }
 
+// Append a new empty video track on top of the stack. Returns the new
+// composition (normalized). The track has no clips — drag a source onto its
+// lane to populate it.
+export function addVideoTrack(composition) {
+  const base = composition ?? createDefaultComposition();
+  const tracks = base.tracks ?? [];
+  const id = nextId("vt", new Set(tracks.map((t) => t.id)));
+  const videoCount = tracks.filter((t) => t.kind === "video").length;
+  const track = {
+    id,
+    kind: "video",
+    name: `V${videoCount + 1}`,
+    enabled: true,
+    blendMode: "normal",
+    opacity: 100,
+    clips: [],
+  };
+  return normalizeComposition({ ...base, tracks: [...tracks, track] });
+}
+
+// Update a track's compositing props (opacity, blendMode, enabled, name).
+// Returns a new normalized composition, or the same one when the track is
+// missing. normalizeTrack clamps the values.
+export function updateTrack(composition, { trackId, patch } = {}) {
+  const tracks = composition?.tracks ?? [];
+  if (!patch || !tracks.some((t) => t.id === trackId)) return composition;
+  const nextTracks = tracks.map((t) => (t.id === trackId ? { ...t, ...patch } : t));
+  return normalizeComposition({ ...composition, tracks: nextTracks });
+}
+
 // Add a clip for `sourceId` to a track. `start` defaults to the end of the
 // track (append). Duration defaults to the source's full length. If the chosen
 // start would overlap an existing clip, the clip is pushed to the first free

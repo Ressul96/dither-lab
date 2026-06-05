@@ -180,6 +180,9 @@ export function initSource() {
   subscribe("view", () => presentPreview());
   subscribe("graph", () => scheduleRender());
   subscribe("timeline", () => scheduleRender());
+  // Composition changes (clip edits, track opacity/blend) change what the stage
+  // draws, so re-render the preview when the composition slice updates.
+  subscribe("composition", () => scheduleRender());
   syncWorkerPalettes(serializeCustomPalettes());
   subscribePalettes(() => {
     clearGraphCache();

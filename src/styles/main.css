@@ -3038,12 +3038,59 @@ body.cutting-edges * {
 
 .media-track-label {
   min-width: 0;
-  padding: 0 8px;
+  padding: 4px 8px;
   font-size: 11px;
   color: var(--text-dim, rgba(230, 230, 235, 0.65));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.media-track-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.media-track-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.media-track-opacity {
+  width: 100%;
+  height: 12px;
+  cursor: pointer;
+}
+
+.media-track-blend {
+  width: 100%;
+  font-size: 9px;
+  padding: 1px 2px;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+.media-track-add {
+  padding: 6px 0 2px 8px;
+}
+
+.media-track-add-btn {
+  font-size: 11px;
+  padding: 3px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: var(--text-dim, rgba(230, 230, 235, 0.65));
+  cursor: pointer;
+}
+
+.media-track-add-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text, #e6e6eb);
 }
 
 .media-track-lane {
