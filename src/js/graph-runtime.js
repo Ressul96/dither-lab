@@ -401,6 +401,7 @@ function inputSocketsFor(node) {
     case "noise":
     case "value":
     case "audio-level":
+    case "field-probe":
       return [];
     default:
       return ["image"];
@@ -648,6 +649,8 @@ function computeNodeOutput(node, index, results, context) {
       return Number(node.params?.value ?? 0);
     case "audio-level":
       return getAudioLevel(context?.timeSeconds ?? 0, node.params);
+    case "field-probe":
+      return fieldProbeValue(node.params);
     case "math":
       return applyMathNode(
         resolveInputValue(node, "a", index, results, node.params?.a ?? 0),
@@ -666,6 +669,8 @@ function computeBypassOutput(node, index, results) {
     case "value":
       return Number(node.params?.value ?? 0);
     case "audio-level":
+      return 0;
+    case "field-probe":
       return 0;
     case "math":
       return resolveInputValue(node, "a", index, results, node.params?.a ?? 0);
@@ -729,6 +734,30 @@ function applyParamEdges(node, index, results) {
 function clampToBounds(value, bounds) {
   if (!bounds) return value;
   return Math.max(bounds.min, Math.min(bounds.max, value));
+}
+
+// Sample a spatial field at a point -> scalar in 0..gain. Pure function of the
+// params (no time, no playback) so preview and export match. Radial: closeness
+// of the sample to the center within `radius`. Linear: a ramp across an axis.
+function fieldProbeValue(params) {
+  // Center / sample / radius come from the inspector as 0..100 (and 0..200 for
+  // radius) integer percentages, matching the gradient / chroma-aberration /
+  // lens-distort center convention; normalise to 0..1 (radius 0..2) here.
+  const num = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  const shape = String(params?.shape ?? "radial");
+  const cx = num(params?.centerX, 50) / 100;
+  const cy = num(params?.centerY, 50) / 100;
+  const sx = num(params?.sampleX, 50) / 100;
+  const sy = num(params?.sampleY, 50) / 100;
+  const radius = Math.max(1e-4, num(params?.radius, 50) / 100);
+  let v;
+  if (shape === "linear-x") v = (sx - cx) / radius + 0.5;
+  else if (shape === "linear-y") v = (sy - cy) / radius + 0.5;
+  else v = 1 - Math.hypot(sx - cx, sy - cy) / radius;
+  v = Math.max(0, Math.min(1, v));
+  if (String(params?.falloff ?? "linear") === "smooth") v = v * v * (3 - 2 * v);
+  if (params?.invert) v = 1 - v;
+  return v * num(params?.gain, 1);
 }
 
 function applyMathNode(a, b, params) {

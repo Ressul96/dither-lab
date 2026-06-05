@@ -81,6 +81,43 @@ export function renderAudioLevelNode(node) {
   `;
 }
 
+export function renderFieldProbeNode(node) {
+  const params = node.params;
+  // Center / sample / radius use the 0..100 (radius 0..200) integer-percent
+  // convention shared with gradient / chroma-aberration / lens-distort, so the
+  // default-step slider lands on usable values; the runtime divides by 100.
+  const radius = Number(params.radius ?? 50);
+  return `
+    <section class="node-panel-section">
+      ${renderSelectField("Shape", "shape", String(params.shape ?? "radial"), [
+        ["radial", "Radial"],
+        ["linear-x", "Linear X"],
+        ["linear-y", "Linear Y"],
+      ])}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Center</header>
+      ${renderRangeField("X", "centerX", params.centerX ?? 50, 0, 100, `${params.centerX ?? 50}%`)}
+      ${renderRangeField("Y", "centerY", params.centerY ?? 50, 0, 100, `${params.centerY ?? 50}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Sample</header>
+      ${renderRangeField("X", "sampleX", params.sampleX ?? 50, 0, 100, `${params.sampleX ?? 50}%`)}
+      ${renderRangeField("Y", "sampleY", params.sampleY ?? 50, 0, 100, `${params.sampleY ?? 50}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Shaping</header>
+      ${renderRangeField("Radius", "radius", radius, 0, 200, `${(radius / 100).toFixed(2)}`)}
+      ${renderSelectField("Falloff", "falloff", String(params.falloff ?? "linear"), [
+        ["linear", "Linear"],
+        ["smooth", "Smooth"],
+      ])}
+      ${renderCheckboxField("Invert", "invert", Boolean(params.invert))}
+      ${renderNumberField("Gain", "gain", params.gain ?? 1, { min: 0, max: 8 })}
+    </section>
+  `;
+}
+
 export function renderMathNode(node) {
   const params = node.params;
   return `
