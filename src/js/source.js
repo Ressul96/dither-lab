@@ -1052,7 +1052,7 @@ export function pausePlayback() {
 // the primary transport source. These keep the untouched native-playback path;
 // any real composition (extra clips, or a single non-primary clip) uses the
 // tick below. This gate is what guarantees single-source playback is unchanged.
-function isSimpleSingleSource() {
+export function isSimpleSingleSource() {
   const clips = (getState().composition?.tracks ?? []).flatMap((t) => t.clips ?? []);
   if (clips.length === 0) return true;
   if (clips.length > 1) return false;
