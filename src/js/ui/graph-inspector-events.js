@@ -18,6 +18,7 @@
 // kept here because they're only used by the inspector handlers.
 
 import { pushHistory } from "../state.js";
+import { resolveTokenValue, tokenRef } from "../tokens.js";
 import {
   getNodeById,
   getSelectedNode,
@@ -329,6 +330,29 @@ export function onInspectorChange(event) {
     if (isGradientRampNode(node)) {
       commitGradientMapStopColor(node, gradientStopControl);
       syncGradientStopSiblingControls(gradientStopControl);
+    }
+    renderInspector();
+    return;
+  }
+
+  const tokenBind = event.target.closest("[data-color-token-bind]");
+  if (tokenBind) {
+    inspectorEditing = false;
+    const node = getSelectedNode();
+    if (node) {
+      const key = tokenBind.dataset.colorTokenBind;
+      const before = node.params?.[key];
+      const id = tokenBind.value;
+      // Bind -> store the token reference; unbind -> bake the resolved color into
+      // a literal hex so the swatch keeps its appearance. One undo entry.
+      const next = id ? tokenRef(id) : resolveTokenValue(before);
+      if (next !== before) {
+        updateNodeParams(node.id, { [key]: next });
+        pushHistory({
+          undo: () => updateNodeParams(node.id, { [key]: before }),
+          redo: () => updateNodeParams(node.id, { [key]: next }),
+        });
+      }
     }
     renderInspector();
     return;

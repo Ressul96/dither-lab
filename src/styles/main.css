@@ -1892,6 +1892,20 @@ body.cutting-edges * {
   color: rgba(255, 255, 255, 0.95);
 }
 
+.color-token-bind {
+  margin-top: 4px;
+}
+
+.color-token-bind select {
+  width: 100%;
+  font-size: 11px;
+  padding: 3px 6px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-xs);
+}
+
 .node-palette-search {
   position: sticky;
   top: 0;
