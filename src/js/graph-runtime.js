@@ -11,6 +11,7 @@ import {
   applyDitherNode,
   applyDisplaceNode,
   applyDuotoneNode,
+  applyFieldMapNode,
   applyFlipNode,
   applyGlareNode,
   applyGradientNode,
@@ -398,6 +399,7 @@ function inputSocketsFor(node) {
       return ["a", "b"];
     case "mesh-gradient":
     case "gradient":
+    case "field-map":
     case "noise":
     case "value":
     case "audio-level":
@@ -565,6 +567,8 @@ function computeNodeOutput(node, index, results, context) {
       return applyGradientMapNode(resolveInputImage(node, "image", index, results), node.params);
     case "gradient":
       return applyGradientNode(node.params, context);
+    case "field-map":
+      return applyFieldMapNode(node.params);
     case "mesh-gradient":
       return applyMeshGradientNode(node.params, context);
     case "noise":

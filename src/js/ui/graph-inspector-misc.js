@@ -118,6 +118,44 @@ export function renderFieldProbeNode(node) {
   `;
 }
 
+export function renderFieldMapNode(node) {
+  const params = node.params;
+  // Same shape vocabulary as field-probe, rendered as a grayscale image.
+  // Center / radius use the 0..100 (radius 0..200) integer-percent convention;
+  // the runtime divides by 100.
+  const radius = Number(params.radius ?? 50);
+  const width = Number(params.width ?? 1920);
+  const height = Number(params.height ?? 1080);
+  return `
+    <section class="node-panel-section">
+      ${renderSelectField("Shape", "shape", String(params.shape ?? "radial"), [
+        ["radial", "Radial"],
+        ["linear-x", "Linear X"],
+        ["linear-y", "Linear Y"],
+      ])}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Center</header>
+      ${renderRangeField("X", "centerX", params.centerX ?? 50, 0, 100, `${params.centerX ?? 50}%`)}
+      ${renderRangeField("Y", "centerY", params.centerY ?? 50, 0, 100, `${params.centerY ?? 50}%`)}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Shaping</header>
+      ${renderRangeField("Radius", "radius", radius, 0, 200, `${(radius / 100).toFixed(2)}`)}
+      ${renderSelectField("Falloff", "falloff", String(params.falloff ?? "linear"), [
+        ["linear", "Linear"],
+        ["smooth", "Smooth"],
+      ])}
+      ${renderCheckboxField("Invert", "invert", Boolean(params.invert))}
+    </section>
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">Output</header>
+      ${renderRangeField("Width", "width", width, 256, 4096, `${width}px`)}
+      ${renderRangeField("Height", "height", height, 256, 4096, `${height}px`)}
+    </section>
+  `;
+}
+
 export function renderMathNode(node) {
   const params = node.params;
   return `
