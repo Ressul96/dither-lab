@@ -1,5 +1,6 @@
 import { getState, dispatch, subscribe, pushHistory } from "./state.js";
 import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
+import { resolveGraphTokens } from "./tokens.js";
 import { serializeCustomPalettes, subscribePalettes } from "./palettes.js";
 import {
   clearGraphCache,
@@ -1587,7 +1588,10 @@ async function renderCurrentFrame(options = {}) {
   // The forExport flag is the export pipeline's opt-in to bypass this guard.
   if (exportSessionActive && !options.forExport) return;
   const { video: v } = ensureEls();
-  const graph = ensureBootGraph();
+  // Resolve color-token references once, here, before both the CPU eval and the
+  // GPU bake derive from `graph` — so a token and its literal value render
+  // identically (preview/export parity). No-op when no token is referenced.
+  const graph = resolveGraphTokens(ensureBootGraph());
   const proceduralSource = findViewerProceduralSource(graph);
   if (proceduralSource) {
     renderProceduralFrame(graph, proceduralSource);
@@ -1830,7 +1834,7 @@ function shouldUseWorkerForPreview(mode, video) {
   return video instanceof HTMLVideoElement && !video.paused && !video.ended;
 }
 
-function renderProceduralFrame(graph = ensureBootGraph(), sourceNode = findViewerProceduralSource(graph)) {
+function renderProceduralFrame(graph = resolveGraphTokens(ensureBootGraph()), sourceNode = findViewerProceduralSource(graph)) {
   if (!sourceNode || !canvas || !ctx) return false;
 
   renderVersion += 1;

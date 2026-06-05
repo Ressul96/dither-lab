@@ -8,6 +8,7 @@ import {
 } from "./graph.js";
 import { clearSource, openSourcePath, pausePlayback, seek, setFps } from "./source.js";
 import { applyCustomPalettes, serializeCustomPalettes } from "./palettes.js";
+import { applyTokens, serializeTokens } from "./tokens.js";
 import { createDefaultTimeline, serializeTimeline } from "./timeline.js";
 import { isEmptyComposition, normalizeComposition, serializeComposition } from "./composition.js";
 import { selectedPath, tauriRemoveFile, tauriRenameFn } from "./tauri-compat.js";
@@ -21,6 +22,7 @@ export function newProject() {
   currentProjectPath = "";
   clearSource();
   applyCustomPalettes([]);
+  applyTokens([]);
   replaceGraph(createBootGraph());
   dispatch("view", { compare: "processed", splitPosition: 0.5 });
   dispatch("playback", {
@@ -190,6 +192,7 @@ function buildProjectPayload() {
     timeline: serializeTimeline(state.timeline),
     composition: serializeComposition(state.composition),
     customPalettes: serializeCustomPalettes(),
+    tokens: serializeTokens(),
   };
 }
 
@@ -229,6 +232,7 @@ async function applyProject(project) {
     currentParentId: project?.graphView?.currentParentId ?? DEFAULT_GRAPH_VIEW.currentParentId,
   };
   applyCustomPalettes(project?.customPalettes ?? []);
+  applyTokens(project?.tokens ?? []);
   dispatch(
     "timeline",
     createDefaultTimeline(project?.timeline ?? {
