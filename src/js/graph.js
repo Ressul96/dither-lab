@@ -1579,6 +1579,128 @@ export function duplicateNodes(nodeIds, options = {}) {
   return duplicatedIds;
 }
 
+// ---------- recipes (portable node sub-graphs) ----------
+//
+// A recipe is a serialized selection of effect nodes plus the edges fully
+// inside that selection — a reusable sub-chain saved to / loaded from a file.
+// Source / viewer-output / group nodes are excluded (a recipe is an effect
+// fabric, not a whole graph). Import mirrors duplicateNodes: fresh ids, internal
+// edges remapped, positions translated to a target point.
+
+export const RECIPE_KIND = "dither-recipe";
+export const RECIPE_VERSION = 1;
+
+function isRecipableNode(node) {
+  return node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group";
+}
+
+// Build a portable recipe object from a node selection. Returns null when the
+// selection has no recipable nodes.
+export function serializeRecipe(nodeIds, graph = getState().graph) {
+  const ids = new Set(Array.isArray(nodeIds) ? nodeIds : []);
+  const nodes = graph.nodes.filter((node) => ids.has(node.id) && isRecipableNode(node));
+  if (nodes.length === 0) return null;
+  const keep = new Set(nodes.map((node) => node.id));
+  const serializedNodes = nodes.map((node) => {
+    const definition = getNodeDefinition(node.type);
+    const payload = {
+      id: node.id,
+      type: node.type,
+      x: node.x,
+      y: node.y,
+      params: clone(node.params),
+      exposedParams: Array.isArray(node.exposedParams) ? [...node.exposedParams] : [],
+      exposedParamConfig: clone(node.exposedParamConfig),
+      bypassed: Boolean(node.bypassed),
+    };
+    if (node.label && node.label !== definition?.label) payload.label = node.label;
+    if (isLayerAdjustableType(node.type)) {
+      payload.opacity = node.opacity;
+      payload.hue = node.hue;
+      payload.saturation = node.saturation;
+    }
+    return payload;
+  });
+  const edges = getPersistableGraphEdges(graph)
+    .filter((edge) => keep.has(edge.fromNode) && keep.has(edge.toNode))
+    .map((edge) => ({
+      fromNode: edge.fromNode,
+      fromSocket: edge.fromSocket,
+      toNode: edge.toNode,
+      toSocket: edge.toSocket,
+    }));
+  return { kind: RECIPE_KIND, version: RECIPE_VERSION, nodes: serializedNodes, edges };
+}
+
+export function isRecipe(value) {
+  return Boolean(value && value.kind === RECIPE_KIND && Array.isArray(value.nodes) && value.nodes.length > 0);
+}
+
+// Splice a recipe into the current graph. `options.position` (world coords)
+// places the recipe's top-left corner; `options.parentId` sets the graph scope.
+// Returns the new node ids (selected), or [] when nothing recipable imported.
+export function importRecipe(recipe, options = {}) {
+  if (!isRecipe(recipe)) return [];
+  const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
+  const parentId = options.parentId ?? null;
+  const position = options.position && Number.isFinite(Number(options.position.x))
+    ? { x: Number(options.position.x), y: Number(options.position.y) }
+    : { x: 0, y: 0 };
+  const recipable = recipe.nodes.filter((node) => getNodeDefinition(node.type) && isRecipableNode(node));
+  if (recipable.length === 0) return [];
+  // Translate so the recipe's top-left corner lands at `position`.
+  const minX = Math.min(...recipable.map((node) => Number(node.x) || 0));
+  const minY = Math.min(...recipable.map((node) => Number(node.y) || 0));
+
+  const nextNodes = [...graph.nodes];
+  const idMap = new Map();
+  const newIds = [];
+  for (const node of recipable) {
+    const nextId = nextNodeId(node.type, { ...graph, nodes: nextNodes });
+    idMap.set(node.id, nextId);
+    newIds.push(nextId);
+    nextNodes.push(
+      createNode(nextId, node.type, {
+        parentId,
+        label: node.label,
+        x: position.x + ((Number(node.x) || 0) - minX),
+        y: position.y + ((Number(node.y) || 0) - minY),
+        params: clone(node.params),
+        opacity: node.opacity,
+        hue: node.hue,
+        saturation: node.saturation,
+        exposedParams: clone(node.exposedParams),
+        exposedParamConfig: clone(node.exposedParamConfig),
+        bypassed: node.bypassed,
+      })
+    );
+  }
+
+  const nextEdges = graph.edges.map((edge) => ({ ...edge }));
+  for (const edge of recipe.edges ?? []) {
+    const fromNode = idMap.get(edge.fromNode);
+    const toNode = idMap.get(edge.toNode);
+    if (!fromNode || !toNode) continue;
+    nextEdges.push({
+      id: createEdgeId(fromNode, edge.fromSocket, toNode, edge.toSocket),
+      fromNode,
+      fromSocket: edge.fromSocket,
+      toNode,
+      toSocket: edge.toSocket,
+    });
+  }
+
+  dispatch("graph", {
+    nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
+    edges: nextEdges,
+    selectedNodeId: newIds.at(-1) ?? null,
+    selectedNodeIds: newIds,
+  });
+  if (before) pushGraphHistoryFromSnapshot(before, "Import recipe");
+  return newIds;
+}
+
 export function insertNodeOnEdge(edgeId, type, options = {}) {
   const definition = getNodeDefinition(type);
   if (!definition || definition.chainable === false || type === "source" || type === "viewer-output") return null;
