@@ -9,6 +9,7 @@ import {
 import { clearSource, openSourcePath, pausePlayback, seek, setFps } from "./source.js";
 import { applyCustomPalettes, serializeCustomPalettes } from "./palettes.js";
 import { applyTokens, serializeTokens } from "./tokens.js";
+import { applyClipGraphs, serializeClipGraphs } from "./clip-graphs.js";
 import { createDefaultTimeline, serializeTimeline } from "./timeline.js";
 import { isEmptyComposition, normalizeComposition, serializeComposition } from "./composition.js";
 import { selectedPath, tauriRemoveFile, tauriRenameFn } from "./tauri-compat.js";
@@ -23,6 +24,7 @@ export function newProject() {
   clearSource();
   applyCustomPalettes([]);
   applyTokens([]);
+  applyClipGraphs([]);
   replaceGraph(createBootGraph());
   dispatch("view", { compare: "processed", splitPosition: 0.5 });
   dispatch("playback", {
@@ -193,6 +195,7 @@ function buildProjectPayload() {
     composition: serializeComposition(state.composition),
     customPalettes: serializeCustomPalettes(),
     tokens: serializeTokens(),
+    clipGraphs: serializeClipGraphs(),
   };
 }
 
@@ -233,6 +236,7 @@ async function applyProject(project) {
   };
   applyCustomPalettes(project?.customPalettes ?? []);
   applyTokens(project?.tokens ?? []);
+  applyClipGraphs(project?.clipGraphs ?? []);
   dispatch(
     "timeline",
     createDefaultTimeline(project?.timeline ?? {
