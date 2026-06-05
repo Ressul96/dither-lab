@@ -1,6 +1,6 @@
 import { getState, dispatch, subscribe, pushHistory } from "./state.js";
 import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
-import { resolveGraphTokens } from "./tokens.js";
+import { resolveGraphTokens, subscribeTokens } from "./tokens.js";
 import { serializeCustomPalettes, subscribePalettes } from "./palettes.js";
 import {
   clearGraphCache,
@@ -199,6 +199,13 @@ export function initSource() {
   subscribePalettes(() => {
     clearGraphCache();
     syncWorkerPalettes(serializeCustomPalettes());
+    scheduleRender();
+  });
+  // A token edit changes the resolved color params (resolveGraphTokens) but
+  // doesn't dispatch a state topic, so trigger a re-render here. The worker gets
+  // the already-resolved graph, so no separate token sync is needed.
+  subscribeTokens(() => {
+    clearGraphCache();
     scheduleRender();
   });
 }

@@ -1795,6 +1795,103 @@ body.cutting-edges * {
   color: rgba(255, 255, 255, 0.95);
 }
 
+.token-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.token-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.token-empty {
+  font-size: 11px;
+  color: var(--text-dim, rgba(230, 230, 235, 0.55));
+  padding: 4px 2px;
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.token-row:hover {
+  border-color: rgba(74, 158, 255, 0.4);
+}
+
+.token-swatch {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-xs);
+  background: none;
+  cursor: pointer;
+}
+
+.token-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  padding: 3px 4px;
+}
+
+.token-name:hover,
+.token-name:focus {
+  border-color: rgba(255, 255, 255, 0.14);
+  outline: none;
+}
+
+.token-del {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.55);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.token-del:hover {
+  color: rgba(255, 120, 120, 0.95);
+  background: rgba(255, 90, 90, 0.12);
+}
+
+.token-add-btn {
+  align-self: stretch;
+  padding: 6px 8px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+}
+
+.token-add-btn:hover {
+  border-color: rgba(74, 158, 255, 0.6);
+  color: rgba(255, 255, 255, 0.95);
+}
+
 .node-palette-search {
   position: sticky;
   top: 0;
