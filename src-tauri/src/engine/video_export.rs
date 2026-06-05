@@ -201,17 +201,24 @@ pub fn ffmpeg_start_encode(
         command.arg("-i").arg(path);
     }
 
-    command
-        .arg("-map")
-        .arg("0:v:0")
-        .arg("-c:v")
-        .arg(&config.codec)
-        .arg("-preset")
-        .arg(&config.preset)
-        .arg("-crf")
-        .arg(&crf_arg)
-        .arg("-pix_fmt")
-        .arg(&pix_fmt_out);
+    command.arg("-map").arg("0:v:0").arg("-c:v").arg(&config.codec);
+    if config.codec.starts_with("prores") {
+        // ProRes is driven by a profile (default HQ=3) + 10-bit 4:2:2. It has no
+        // -preset/-crf knobs — passing the x264 ones makes prores_ks error out.
+        command
+            .arg("-profile:v")
+            .arg("3")
+            .arg("-pix_fmt")
+            .arg(config.pix_fmt.clone().unwrap_or_else(|| "yuv422p10le".into()));
+    } else {
+        command
+            .arg("-preset")
+            .arg(&config.preset)
+            .arg("-crf")
+            .arg(&crf_arg)
+            .arg("-pix_fmt")
+            .arg(&pix_fmt_out);
+    }
 
     if has_audio {
         // `0?` makes the audio stream optional — if the source video has

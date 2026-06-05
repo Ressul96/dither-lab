@@ -56,6 +56,13 @@ const VIDEO_CODECS = Object.freeze([
     encoder: "ffmpeg",
   },
   {
+    id: "prores_ks",
+    label: "ProRes 422 HQ (FFmpeg)",
+    extension: "mov",
+    mime: "video/quicktime",
+    encoder: "ffmpeg",
+  },
+  {
     id: "webcodecs-vp9",
     label: "VP9 Preview (WebCodecs)",
     extension: "ivf",
