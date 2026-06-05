@@ -3,6 +3,7 @@ import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
 import { resolveGraphTokens, subscribeTokens } from "./tokens.js";
 import { analyzeAudioFromUrl, clearAudioEnvelope, subscribeAudio } from "./audio-analysis.js";
 import { serializeCustomPalettes, subscribePalettes } from "./palettes.js";
+import { getClipGraph, hasClipGraph, subscribeClipGraphs } from "./clip-graphs.js";
 import {
   clearGraphCache,
   evaluateGraphOutputs,
@@ -212,6 +213,13 @@ export function initSource() {
   // When the audio envelope finishes decoding (or clears), re-render so any
   // audio-level node reflects it.
   subscribeAudio(() => {
+    clearGraphCache();
+    scheduleRender();
+  });
+  // A clip-graph edit (assigning a graph to a clip, making it unique, or editing
+  // a param inside a clip's graph) changes what that clip renders without a state
+  // dispatch, so re-render here.
+  subscribeClipGraphs(() => {
     clearGraphCache();
     scheduleRender();
   });
@@ -1615,7 +1623,9 @@ async function renderCurrentFrame(options = {}) {
   // Resolve color-token references once, here, before both the CPU eval and the
   // GPU bake derive from `graph` — so a token and its literal value render
   // identically (preview/export parity). No-op when no token is referenced.
-  const graph = resolveGraphTokens(ensureBootGraph());
+  // `graph` may be reassigned below to the active clip's own graph (per-clip
+  // graphs); every downstream path reads this one binding.
+  let graph = resolveGraphTokens(ensureBootGraph());
   const proceduralSource = findViewerProceduralSource(graph);
   if (proceduralSource) {
     renderProceduralFrame(graph, proceduralSource);
@@ -1718,6 +1728,22 @@ async function renderCurrentFrame(options = {}) {
     }
     if (isGap) drawBlankSourceFrame(frameKey);
     else drawSourceFrame(decodeVideo, frameKey);
+  }
+
+  // Per-clip effect graph (single-layer path): if the clip under the playhead
+  // carries its own graph, evaluate this frame through it instead of the global
+  // graph, resolving its color tokens at this same chokepoint so preview and
+  // export stay in parity. graphId === null keeps the global graph, so single-
+  // source and existing projects are byte-identical. The clip graph flows through
+  // the worker, CPU eval, native preview and export uniformly because every path
+  // below reads this `graph` binding. Compositing (2+ layers) keeps the global
+  // graph for now — per-layer clip graphs are a later increment.
+  if (layers.length < 2) {
+    const activeGraphId =
+      getActiveVideoClip(getState().composition, timelineTime)?.clip?.graphId ?? null;
+    if (activeGraphId && hasClipGraph(activeGraphId)) {
+      graph = resolveGraphTokens(getClipGraph(activeGraphId));
+    }
   }
 
   // sourceVersion is the cache identity of the current source frame. It only
