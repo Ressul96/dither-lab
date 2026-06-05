@@ -249,7 +249,7 @@ export async function addSourceViaPicker() {
   const tauri = window.__TAURI__;
   if (!tauri?.dialog?.open) {
     // Browser (no Tauri): add a source via a file input + blob URL.
-    const file = await pickFileViaInput("video/*");
+    const file = await pickFileViaInput("video/*,image/*");
     if (!file) return null;
     return addSourceFromSrc(URL.createObjectURL(file), file.name);
   }
@@ -277,36 +277,49 @@ export async function addSourceViaPicker() {
 export async function addSourceFromPath(path) {
   const tauri = window.__TAURI__;
   if (!tauri || !path) return null;
-  const ext = path.split(".").pop()?.toLowerCase();
-  // Ship 4 covers video sources; image-as-clip is a later step.
-  if (ext && IMAGE_EXTENSIONS.includes(ext)) {
-    console.warn("[add-source] image sources are not addable as clips yet");
-    return null;
-  }
   return addSourceFromSrc(tauri.core.convertFileSrc(path), path);
 }
 
 // Core: load a media URL into the decode pool and register it as a new
 // composition source. `src` is a ready-to-use URL (a Tauri asset URL, or in a
-// plain browser a blob: URL); `path` is the display name. Does NOT touch the
-// current composition's clips. Returns the new sourceId.
+// plain browser a blob: URL); `path` is the display name. Images use an
+// ImageMediaMock so the pool element behaves like a video everywhere
+// (videoWidth/height, currentTime, drawable, seeked) — the compositor and
+// exporter need no special-casing beyond skipping real seeks. Does NOT touch
+// the current composition's clips. Returns the new sourceId.
 async function addSourceFromSrc(src, path) {
-  // Dedicated hidden decode element for this source.
-  const el = document.createElement("video");
-  el.muted = true;
-  el.playsInline = true;
-  el.preload = "auto";
-  el.src = src;
-  el.load();
-  try {
-    await waitFor(el, "loadeddata");
-  } catch (err) {
-    console.error("[add-source] media load failed", err);
-    try { el.removeAttribute("src"); el.load(); } catch (_) {}
-    return null;
+  const ext = path?.split(".").pop()?.toLowerCase();
+  const isImage = ext ? IMAGE_EXTENSIONS.includes(ext) : false;
+
+  let el;
+  if (isImage) {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = src;
+    try {
+      await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+    } catch (err) {
+      console.error("[add-source] image load failed", err);
+      return null;
+    }
+    el = new ImageMediaMock(img);
+  } else {
+    el = document.createElement("video");
+    el.muted = true;
+    el.playsInline = true;
+    el.preload = "auto";
+    el.src = src;
+    el.load();
+    try {
+      await waitFor(el, "loadeddata");
+    } catch (err) {
+      console.error("[add-source] media load failed", err);
+      try { el.removeAttribute("src"); el.load(); } catch (_) {}
+      return null;
+    }
   }
 
-  const sourceFps = await detectSourceFps(el);
+  const sourceFps = isImage ? (getState().source.sourceFps || 30) : await detectSourceFps(el);
   const { composition, sourceId } = addSource(getState().composition, {
     path,
     kind: "video",
@@ -1258,7 +1271,7 @@ export async function seekForExport(seconds) {
     let allOk = true;
     for (const layer of layers) {
       const el = decodeVideoForSourceId(layer.clip.sourceId);
-      if (!el?.src) continue;
+      if (!el?.src || !(el instanceof HTMLVideoElement)) continue;
       const dur = Number.isFinite(el.duration) ? el.duration : 0;
       const tgt = Math.max(0, dur ? Math.min(dur, layer.sourceTime) : layer.sourceTime);
       const cur = Number.isFinite(el.currentTime) ? el.currentTime : 0;
@@ -1285,6 +1298,11 @@ export async function seekForExport(seconds) {
   // progress stay correct, even when a different element is being decoded.
   if (transport && transport !== v) {
     try { transport.currentTime = Math.max(0, Number(seconds) || 0); } catch (_) {}
+  }
+  // Image sources (ImageMediaMock) have nothing to seek — render the frame.
+  if (!(v instanceof HTMLVideoElement)) {
+    await renderCurrentFrame({ forExport: true, timeOverride: Number(seconds) || 0 });
+    return true;
   }
   const sourceSeconds = active ? active.sourceTime : Number(seconds) || 0;
   const duration = Number.isFinite(v.duration) ? v.duration : 0;
@@ -1493,7 +1511,7 @@ async function renderCurrentFrame(options = {}) {
       // clock and needs no seek.
       for (const layer of layers) {
         const el = decodeVideoForSourceId(layer.clip.sourceId);
-        if (!el || el === v || el.readyState < 1) continue;
+        if (!el || el === v || el.readyState < 1 || !(el instanceof HTMLVideoElement)) continue;
         const dur = Number.isFinite(el.duration) ? el.duration : 0;
         const target = Math.max(0, dur ? Math.min(dur, layer.sourceTime) : layer.sourceTime);
         if (Math.abs((el.currentTime || 0) - target) > 0.001) {
@@ -1529,6 +1547,7 @@ async function renderCurrentFrame(options = {}) {
       decodeVideo !== v &&
       activeEntry &&
       !exportSessionActive &&
+      decodeVideo instanceof HTMLVideoElement &&
       decodeVideo.readyState >= 1 &&
       frameKey !== null &&
       !frameCache.has(frameKey)
