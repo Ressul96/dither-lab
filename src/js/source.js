@@ -90,6 +90,11 @@ let playRequestToken = 0;
 // single-source path, which is left completely untouched.
 let playbackClip = null;
 let playbackEl = null;
+// While the playhead is traversing an empty stretch between clips, no element
+// decodes; the clock advances by wall time and the viewer shows a blank frame.
+// { untilTime, next } where `next` is the clip to activate when the gap closes.
+let playbackGap = null;
+let gapLastWallMs = 0;
 let renderVersion = 0;
 let sourceToken = 0;
 let nativeRenderInFlight = false;
@@ -993,7 +998,7 @@ export async function togglePlay() {
 
   if (!isSimpleSingleSource()) {
     // Multi-clip composition: toggle the element-driven playback tick.
-    if (playbackClip) {
+    if (isCompositionPlaying()) {
       stopCompositionPlayback();
       dispatchCompositionPlayhead(currentTimelineTime(), false);
     } else {
@@ -1023,7 +1028,7 @@ export function restart() {
 export function pausePlayback() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
-  if (playbackClip) {
+  if (isCompositionPlaying()) {
     stopCompositionPlayback();
     dispatchCompositionPlayhead(currentTimelineTime(), false);
     return;
@@ -1096,8 +1101,16 @@ function stopCompositionPlayback() {
   }
   playbackClip = null;
   playbackEl = null;
+  playbackGap = null;
   playbackSyncSuspended = false;
   stopDrawLoop();
+}
+
+// Composition playback is live whenever a clip is playing OR the playhead is
+// traversing a gap between clips. Both states own the timeline clock and must be
+// stopped before a manual seek / pause and kept ticking by the draw loop.
+function isCompositionPlaying() {
+  return Boolean(playbackClip || playbackGap);
 }
 
 // One frame of composition playback. The playing element's currentTime is the
@@ -1106,14 +1119,25 @@ function stopCompositionPlayback() {
 // Returns false when playback should stop. Steppable for tests by setting
 // playbackEl.currentTime and calling directly.
 function compositionPlaybackTick() {
+  // Traversing an empty stretch: the wall clock drives the playhead, not an
+  // element. Handled first because no clip/element is active during a gap.
+  if (playbackGap) return compositionGapTick();
+
   const clip = playbackClip;
   const el = playbackEl;
   if (!clip || !el) return false;
   const elTime = Number.isFinite(el.currentTime) ? el.currentTime : 0;
   const clipOut = clip.in + clip.duration;
   if (elTime >= clipOut - PLAYBACK_LOOP_EPSILON || el.ended) {
+    const clipEndTime = clip.start + clip.duration;
     const next = nextVideoClipAfter(getState().composition, clip.id);
     if (next) {
+      // Sequential clip with empty space before it: traverse the gap in real
+      // time (blank frame) instead of jumping straight to the next clip.
+      if (next.clip.start > clipEndTime + PLAYBACK_LOOP_EPSILON) {
+        enterCompositionGap(clipEndTime, next);
+        return true;
+      }
       setActiveCompositionClip(next.clip, next.clip.in);
       dispatchCompositionPlayhead(next.clip.start);
       requestRenderCurrentFrame();
@@ -1137,11 +1161,49 @@ function compositionPlaybackTick() {
   return true;
 }
 
+// Begin traversing the empty stretch [fromTime, next.clip.start). No element
+// decodes; compositionGapTick advances the clock and the renderer shows a blank
+// frame until the next clip activates.
+function enterCompositionGap(fromTime, next) {
+  if (playbackEl) {
+    try { playbackEl.pause(); } catch {}
+  }
+  playbackClip = null;
+  playbackEl = null;
+  playbackGap = { untilTime: next.clip.start, next };
+  gapLastWallMs = performance.now();
+  dispatchCompositionPlayhead(fromTime);
+  requestRenderCurrentFrame();
+}
+
+// One frame while in a gap: advance the playhead by elapsed wall time × the
+// transport's playback rate. When it reaches the next clip's start, activate
+// that clip and hand the clock back to element-driven playback.
+function compositionGapTick() {
+  const gap = playbackGap;
+  if (!gap) return false;
+  const now = performance.now();
+  const rate = Math.max(0.1, Number(ensureEls().video?.playbackRate) || 1);
+  const dt = Math.max(0, (now - gapLastWallMs) / 1000) * rate;
+  gapLastWallMs = now;
+  const t = currentTimelineTime() + dt;
+  if (t >= gap.untilTime - PLAYBACK_LOOP_EPSILON) {
+    playbackGap = null;
+    setActiveCompositionClip(gap.next.clip, gap.next.clip.in);
+    dispatchCompositionPlayhead(gap.next.clip.start);
+    requestRenderCurrentFrame();
+    return true;
+  }
+  dispatchCompositionPlayhead(t);
+  requestRenderCurrentFrame();
+  return true;
+}
+
 export function seek(seconds) {
   const { video: v } = ensureEls();
   if (!v?.src) return;
   // Scrubbing pauses multi-clip playback so the clock follows the pointer.
-  if (playbackClip) stopCompositionPlayback();
+  if (isCompositionPlaying()) stopCompositionPlayback();
   // `seconds` is composition (timeline) time. Clamp to the full traversable
   // range — the composition extent, not the transport's duration — so the
   // playhead can reach clips past the primary source.
@@ -1588,14 +1650,20 @@ async function renderCurrentFrame(options = {}) {
     // the transport element `v` itself (byte-identical to the old path); with
     // several sources it's the pooled element for the active clip's file.
     const activeEntry = getActiveVideoClip(getState().composition, timelineTime);
+    // Multi-clip gap: the playhead sits in an empty stretch (no clip on any
+    // track). Show a blank frame instead of the stale transport element, run
+    // through the normal chain so preview and export match. Single-source /
+    // empty compositions keep the transport fallback (byte-identical).
+    const isGap = !activeEntry && !isSimpleSingleSource();
     const decodeVideo = (activeEntry ? decodeVideoForSourceId(activeEntry.clip.sourceId) : v) || v;
     const decodeWidth = decodeVideo.videoWidth || v.videoWidth;
     const decodeHeight = decodeVideo.videoHeight || v.videoHeight;
     ensureFrameBuffers(decodeWidth, decodeHeight);
     // Cache key is derived from the TIMELINE clock + the active clip's source id,
     // never from the decode element's own currentTime (which is the clip's in-
-    // source time and would collide across clips of one file).
-    frameKey = compositionFrameKey(timelineTime, activeEntry?.clip.sourceId);
+    // source time and would collide across clips of one file). Gaps share one
+    // stable key so the blank frame is memoised once.
+    frameKey = isGap ? `${frameCacheStamp}|gap` : compositionFrameKey(timelineTime, activeEntry?.clip.sourceId);
     // Multi-source preview: a clip backed by a pooled (non-transport) element
     // isn't driven by the transport clock, so its element sits at whatever time
     // it was last left on. Seek it to the clip's in-source time and wait for the
@@ -1620,7 +1688,8 @@ async function renderCurrentFrame(options = {}) {
         if (!ok || isStaleRender(currentRenderVersion, currentSourceToken)) return;
       }
     }
-    drawSourceFrame(decodeVideo, frameKey);
+    if (isGap) drawBlankSourceFrame(frameKey);
+    else drawSourceFrame(decodeVideo, frameKey);
   }
 
   // sourceVersion is the cache identity of the current source frame. It only
@@ -1914,6 +1983,29 @@ function drawSourceFrame(v, key = null) {
   }
   sourceCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
   sourceCtx.drawImage(v.drawable || v, 0, 0, sourceCanvas.width, sourceCanvas.height);
+  if (key !== null) cacheCurrentFrame(key);
+}
+
+// Paint a blank (black) source frame for a timeline gap. The 2D contexts use
+// alpha:false, so clearRect yields opaque black. Mirrors drawSourceFrame's
+// cache + export-fresh behaviour so the gap frame flows through the normal
+// chain and preview/export stay in parity.
+function drawBlankSourceFrame(key = null) {
+  if (!sourceCtx || !sourceCanvas) return;
+  if (exportSessionActive) {
+    sourceCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+    return;
+  }
+  if (key !== null) {
+    const cached = frameCache.get(key);
+    if (cached) {
+      frameCache.delete(key);
+      frameCache.set(key, cached);
+      sourceCtx.drawImage(cached, 0, 0, sourceCanvas.width, sourceCanvas.height);
+      return;
+    }
+  }
+  sourceCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
   if (key !== null) cacheCurrentFrame(key);
 }
 
@@ -2252,7 +2344,7 @@ function startDrawLoop() {
   const tick = () => {
     // Multi-clip composition playback drives its own clock and clip boundaries.
     // Single-source leaves playbackClip null and runs the untouched body below.
-    if (playbackClip) {
+    if (isCompositionPlaying()) {
       rafId = compositionPlaybackTick() ? requestAnimationFrame(tick) : 0;
       return;
     }
