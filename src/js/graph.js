@@ -1427,6 +1427,65 @@ function insertNodeIntoChain(type, extraEdgeFactory = null) {
   return nodeId;
 }
 
+// Create a new "source" node bound to a media source (params.sourceId) at
+// `position` (graph world coords). Unlike createFreeNode this allows the
+// otherwise-singleton source type — multiple bound video inputs are the point.
+// Dragging an asset onto the node canvas calls this. One history entry.
+export function createBoundSourceNode(sourceId, position, label) {
+  if (!sourceId) return null;
+  const graph = ensureBootGraph();
+  const before = snapshotGraphForHistory(graph);
+  const nodeId = nextNodeId("source", graph);
+  const newNode = createNode(nodeId, "source", {
+    x: position?.x ?? NODE_BASE_X,
+    y: position?.y ?? NODE_BASE_Y,
+    label,
+    params: { sourceId },
+  });
+  dispatch("graph", {
+    nodes: [...graph.nodes, newNode],
+    selectedNodeId: nodeId,
+    selectedNodeIds: [nodeId],
+  });
+  pushGraphHistoryFromSnapshot(before, "Add video input");
+  return nodeId;
+}
+
+// Rebind the source node feeding the viewer output to `sourceId` (drag an asset
+// onto the preview). Returns the rebound node id, or null when no source node is
+// upstream of the viewer. One history entry.
+export function rebindOutputSource(sourceId) {
+  if (!sourceId) return null;
+  const graph = ensureBootGraph();
+  const targetId = findOutputSourceNodeId(graph);
+  if (!targetId) return null;
+  const before = snapshotGraphForHistory(graph);
+  updateNodeParams(targetId, { sourceId });
+  pushGraphHistoryFromSnapshot(before, "Set video input source");
+  return targetId;
+}
+
+// Walk back from the viewer-output through input edges to the nearest source
+// node — the "video input connected to the output".
+function findOutputSourceNodeId(graph) {
+  const viewer = graph.nodes.find((node) => node.type === "viewer-output");
+  if (!viewer) return null;
+  const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+  const visited = new Set();
+  const stack = [viewer.id];
+  while (stack.length) {
+    const id = stack.pop();
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const node = byId.get(id);
+    if (node && node.type === "source") return id;
+    for (const edge of graph.edges ?? []) {
+      if (edge.toNode === id && !visited.has(edge.fromNode)) stack.push(edge.fromNode);
+    }
+  }
+  return null;
+}
+
 export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
   const definition = getNodeDefinition(type);
   if (!definition || type === "source" || type === "viewer-output") return null;

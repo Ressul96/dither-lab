@@ -1,10 +1,12 @@
 import { getState, subscribe } from "../state.js";
 import {
+  createBoundSourceNode,
   ensureBootGraph,
   getNodeById,
   getSelectedNode,
   getSelectedNodeIds,
   insertNodeOnEdge,
+  rebindOutputSource,
   selectNode,
   toggleNodeBypass,
   updateNodeLabel,
@@ -138,6 +140,48 @@ let stageEl;
 let resizeObserver;
 let graphRenameNodeId = null;
 
+const ASSET_DND_TYPE = "application/x-dither-source-id";
+
+function assetSourceLabel(sourceId) {
+  const source = getState().composition?.sources?.find((s) => s.id === sourceId);
+  if (!source) return undefined;
+  return source.path ? source.path.split(/[/\\]/).pop() : sourceId;
+}
+
+// Accept an asset dragged from the Assets panel onto the node editor (create a
+// new bound source node at the drop point) or the stage (rebind the source node
+// feeding the viewer output). HTML5 drag payload is the sourceId.
+function wireAssetDropTargets() {
+  const allowAssetDrop = (event) => {
+    if (!event.dataTransfer?.types?.includes(ASSET_DND_TYPE)) return false;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    return true;
+  };
+
+  if (editorEl) {
+    editorEl.addEventListener("dragover", allowAssetDrop);
+    editorEl.addEventListener("drop", (event) => {
+      if (!event.dataTransfer?.types?.includes(ASSET_DND_TYPE)) return;
+      event.preventDefault();
+      const sourceId = event.dataTransfer.getData(ASSET_DND_TYPE);
+      if (!sourceId) return;
+      const point = clientToWorld(event.clientX, event.clientY);
+      createBoundSourceNode(sourceId, point, assetSourceLabel(sourceId));
+    });
+  }
+
+  if (stageEl) {
+    stageEl.addEventListener("dragover", allowAssetDrop);
+    stageEl.addEventListener("drop", (event) => {
+      if (!event.dataTransfer?.types?.includes(ASSET_DND_TYPE)) return;
+      event.preventDefault();
+      const sourceId = event.dataTransfer.getData(ASSET_DND_TYPE);
+      if (sourceId) rebindOutputSource(sourceId);
+    });
+  }
+}
+
 export function initGraphShell() {
   ensureBootGraph();
 
@@ -228,6 +272,7 @@ export function initGraphShell() {
   inspectorEl.addEventListener("pointerdown", onInspectorPointerDown);
   inspectorEl.addEventListener("keydown", onInspectorKeyDown);
   inspectorEl.addEventListener("contextmenu", onInspectorContextMenu);
+  wireAssetDropTargets();
   subscribePalettes(onPaletteRegistryChange);
   initNodePaletteSearch();
   initPaletteDragAndDrop({

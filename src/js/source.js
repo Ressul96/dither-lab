@@ -59,6 +59,9 @@ let video;
 // exact same element it always used — behaviour stays byte-identical until a
 // second source actually exists.
 const videoPool = new Map(); // sourceId -> { el, path }
+// Per-source canvases for graph source nodes bound to a specific media source
+// (params.sourceId). Reused across frames; sized to the source's element.
+const boundSourceCanvases = new Map(); // sourceId -> canvas
 let primarySourceId = null;  // sourceId backed by the transport `video` element
 let canvas;
 let ctx;
@@ -1596,6 +1599,12 @@ async function renderCurrentFrame(options = {}) {
     : baseSourceVersion;
 
   const timelineContext = createTimelineRenderContext(v, timelineTime);
+  // Decode any source nodes bound to a specific media source (params.sourceId)
+  // at the timeline time, so the graph can read them independently of the clips.
+  const sourceFrames = await resolveBoundSourceFrames(
+    graph, timelineContext.timeSeconds, currentRenderVersion, currentSourceToken
+  );
+  if (isStaleRender(currentRenderVersion, currentSourceToken)) return;
   const nativeRenderGraph = applyTimelineToGraph(
     graph,
     timelineContext.timeline,
@@ -1647,6 +1656,7 @@ async function renderCurrentFrame(options = {}) {
     sourceImage: sourceForEval,
     sourceVersion,
     ...timelineContext,
+    sourceFrames,
   }) ?? { viewerOutput: null, ditherOutput: null };
   const graphOutput = graphOutputs.viewerOutput;
 
@@ -1919,6 +1929,63 @@ function drawCompositeFrame(layers, key = null) {
   if (!exportSessionActive && key !== null) cacheCurrentFrame(key);
 }
 
+// Build the per-source frame map for graph source nodes bound to a media source
+// (params.sourceId). Each bound source is decoded at the current timeline time,
+// clamped to its own duration (it plays along, then holds on its last frame).
+// Video elements seek + wait for paint; image mocks are static. Returns null
+// when nothing is bound. Forces main-thread render (graphRequiresMainThreadRender),
+// and unlike clip layers nothing else seeks these elements, so it seeks during
+// export too (parity).
+async function resolveBoundSourceFrames(graph, timelineTime, renderVer, srcToken) {
+  const ids = new Set();
+  for (const node of graph?.nodes ?? []) {
+    if (node?.type === "source" && node.params?.sourceId && !node.bypassed && node.visible !== false) {
+      ids.add(node.params.sourceId);
+    }
+  }
+  if (ids.size === 0) return null;
+
+  const fps = getState().source.sourceFps || 30;
+  const sources = getState().composition?.sources ?? [];
+  const frames = {};
+  for (const sourceId of ids) {
+    const el = decodeVideoForSourceId(sourceId);
+    if (!el) continue;
+    const meta = sources.find((s) => s.id === sourceId);
+    const dur = Number(meta?.duration) || (Number.isFinite(el.duration) ? el.duration : 0);
+    const target = Math.max(0, dur ? Math.min(dur, timelineTime) : timelineTime);
+    if (el instanceof HTMLVideoElement) {
+      if (el.readyState >= 1 && Math.abs((el.currentTime || 0) - target) > 0.001) {
+        const ok = await seekVideoAndWaitForPaint(el, target);
+        if (!ok) continue;
+        if (isStaleRender(renderVer, srcToken)) return null;
+      }
+    } else {
+      // ImageMediaMock and friends: static frame, no real seek.
+      try { el.currentTime = target; } catch (_) {}
+    }
+    const w = el.videoWidth || el.naturalWidth || 0;
+    const h = el.videoHeight || el.naturalHeight || 0;
+    if (!w || !h) continue;
+    let canvas = boundSourceCanvases.get(sourceId);
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      boundSourceCanvases.set(sourceId, canvas);
+    }
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    const cx = canvas.getContext("2d", { alpha: false });
+    cx.drawImage(el.drawable || el, 0, 0, w, h);
+    frames[sourceId] = {
+      canvas,
+      version: `${frameCacheStamp}|bound|${sourceId}|${timeToFrame(target, fps)}`,
+    };
+  }
+  return Object.keys(frames).length ? frames : null;
+}
+
 function cacheCurrentFrame(key) {
   if (!sourceCanvas?.width || !sourceCanvas?.height) return;
   const snapshot = acquireBuffer(sourceCanvas.width, sourceCanvas.height);
@@ -2019,7 +2086,10 @@ function createProceduralTimelineRenderContext() {
 
 function queueNativePreview(renderGraph, currentRenderVersion, currentSourceToken) {
   if (exportSessionActive) return;
-  if (!canUseNativeRender(renderGraph)) {
+  // The native GL preview only has the clip composite (sourceCanvas), so it
+  // can't render bound source nodes — skip it for main-thread-only graphs and
+  // let the JS eval's correct result stand.
+  if (!canUseNativeRender(renderGraph) || graphRequiresMainThreadRender(renderGraph)) {
     setNativeRenderStatus("js");
     return;
   }

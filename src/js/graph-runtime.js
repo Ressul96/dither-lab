@@ -129,6 +129,8 @@ export function graphRequiresMainThreadRender(graph) {
   for (const node of graph.nodes) {
     if (!node || node.bypassed || isNodeHidden(node)) continue;
     if (MAIN_THREAD_ONLY_TYPES.has(node.type)) return true;
+    // Bound source nodes read a per-source frame map only the main thread builds.
+    if (node.type === "source" && node.params?.sourceId) return true;
   }
   return false;
 }
@@ -218,9 +220,15 @@ export function evaluateGraphOutputs(graph, context) {
     let producedOutput = null;
 
     if (node.type === "source") {
-      producedOutput = applySourceNode(context?.sourceImage ?? null, node.params);
+      // A source node bound to a media source (params.sourceId) reads that
+      // source's frame from context.sourceFrames (built on the main thread);
+      // unbound nodes use the clip composite (context.sourceImage).
+      const boundId = node.params?.sourceId;
+      const bound = boundId ? context?.sourceFrames?.[boundId] : null;
+      producedOutput = applySourceNode(bound?.canvas ?? context?.sourceImage ?? null, node.params);
       results.set(node.id, producedOutput);
-      versions.set(node.id, `source@${sourceVersion};${hashParams(node.params)}`);
+      const srcVer = bound ? `${boundId}:${bound.version}` : sourceVersion;
+      versions.set(node.id, `source@${srcVer};${hashParams(node.params)}`);
     } else if (node.type === "viewer-output") {
       producedOutput = resolveInputImage(node, "image", index, results);
       results.set(node.id, producedOutput);
