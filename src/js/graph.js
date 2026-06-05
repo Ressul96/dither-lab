@@ -743,6 +743,15 @@ const NODE_DEFINITIONS = Object.freeze({
     outputs: [{ name: "value", label: "Value", type: "value" }],
     defaultParams: { value: 0 },
   },
+  "audio-level": {
+    label: "Audio Level",
+    family: "Utility",
+    description: "Outputs the source audio's RMS level at the current time, scaled by gain.",
+    chainable: false,
+    inputs: [],
+    outputs: [{ name: "value", label: "Value", type: "value" }],
+    defaultParams: { gain: 1 },
+  },
   math: {
     label: "Math",
     family: "Utility",
@@ -818,6 +827,7 @@ const TYPE_ORDER = {
   mix: 39,
   value: 40,
   math: 41,
+  "audio-level": 41.5,
   "scene-grade": 42,
   group: 43,
   "viewer-output": 44,

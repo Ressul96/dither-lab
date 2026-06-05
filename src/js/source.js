@@ -1,6 +1,7 @@
 import { getState, dispatch, subscribe, pushHistory } from "./state.js";
 import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
 import { resolveGraphTokens, subscribeTokens } from "./tokens.js";
+import { analyzeAudioFromUrl, clearAudioEnvelope, subscribeAudio } from "./audio-analysis.js";
 import { serializeCustomPalettes, subscribePalettes } from "./palettes.js";
 import {
   clearGraphCache,
@@ -205,6 +206,12 @@ export function initSource() {
   // doesn't dispatch a state topic, so trigger a re-render here. The worker gets
   // the already-resolved graph, so no separate token sync is needed.
   subscribeTokens(() => {
+    clearGraphCache();
+    scheduleRender();
+  });
+  // When the audio envelope finishes decoding (or clears), re-render so any
+  // audio-level node reflects it.
+  subscribeAudio(() => {
     clearGraphCache();
     scheduleRender();
   });
@@ -492,6 +499,15 @@ async function loadMedia(src, path, isImage, options = {}) {
     loopEnabled: true,
   });
   requestRenderCurrentFrame();
+  // Decode the audio track into an RMS envelope for audio-reactive nodes.
+  // Fire-and-forget: deterministic once ready, audio-level outputs 0 until then.
+  // Images have no audio. Uses the element's resolved URL so it works for blob
+  // (browser) and asset (Tauri) sources alike.
+  if (isImage) {
+    clearAudioEnvelope();
+  } else {
+    void analyzeAudioFromUrl(v.currentSrc || src);
+  }
   if (autoplay) {
     await startPlayback(v, { forceRestart: true });
   }
@@ -515,6 +531,7 @@ export function clearSource() {
   hasDitherOutput = false;
   sampleLayout = null;
   clearFrameCache();
+  clearAudioEnvelope();
   resetVideoPool();
 
   if (v) {

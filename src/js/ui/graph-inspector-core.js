@@ -26,6 +26,7 @@ import {
 } from "./graph-inspector-fields.js";
 import { renderEmptyInspector } from "./graph-inspector-misc.js";
 import {
+  renderAudioLevelNode,
   renderBlurNode,
   renderMathNode,
   renderPosterizeNode,
@@ -257,6 +258,8 @@ function renderNodeSpecifics(node) {
       return renderMixNode(node);
     case "value":
       return renderValueNode(node);
+    case "audio-level":
+      return renderAudioLevelNode(node);
     case "math":
       return renderMathNode(node);
     case "viewer-output":

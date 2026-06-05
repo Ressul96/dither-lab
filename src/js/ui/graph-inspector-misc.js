@@ -72,6 +72,15 @@ export function renderValueNode(node) {
   `;
 }
 
+export function renderAudioLevelNode(node) {
+  const params = node.params;
+  return `
+    <section class="node-panel-section">
+      ${renderNumberField("Gain", "gain", params.gain ?? 1, { min: 0, max: 8 })}
+    </section>
+  `;
+}
+
 export function renderMathNode(node) {
   const params = node.params;
   return `

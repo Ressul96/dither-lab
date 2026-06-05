@@ -46,6 +46,7 @@ import {
 } from "./image-ops.js";
 import { getNodeParamBounds } from "./graph.js";
 import { applyTimelineToGraph } from "./timeline.js";
+import { getAudioLevel } from "./audio-analysis.js";
 
 // Per-node memoization. Each entry pins its output canvas — buffer pool must
 // not reclaim it until the cache invalidates (params/inputs/source change or
@@ -68,7 +69,7 @@ export function getLastEvaluationProfile() {
 // param is animated (procedural noise, scrolling tracking lines, etc.). The
 // runtime salts the cache key with the current frame so they re-evaluate per
 // frame instead of returning a stale cached canvas.
-const TIME_AWARE_TYPES = new Set(["mesh-gradient", "analog", "vhs", "crt"]);
+const TIME_AWARE_TYPES = new Set(["mesh-gradient", "analog", "vhs", "crt", "audio-level"]);
 
 export function isOutputCached(canvas) {
   if (!canvas) return false;
@@ -131,6 +132,8 @@ export function graphRequiresMainThreadRender(graph) {
     if (MAIN_THREAD_ONLY_TYPES.has(node.type)) return true;
     // Bound source nodes read a per-source frame map only the main thread builds.
     if (node.type === "source" && node.params?.sourceId) return true;
+    // Audio-level reads the RMS envelope, which lives on the main thread.
+    if (node.type === "audio-level") return true;
   }
   return false;
 }
@@ -397,6 +400,7 @@ function inputSocketsFor(node) {
     case "gradient":
     case "noise":
     case "value":
+    case "audio-level":
       return [];
     default:
       return ["image"];
@@ -642,6 +646,8 @@ function computeNodeOutput(node, index, results, context) {
       );
     case "value":
       return Number(node.params?.value ?? 0);
+    case "audio-level":
+      return getAudioLevel(context?.timeSeconds ?? 0, node.params);
     case "math":
       return applyMathNode(
         resolveInputValue(node, "a", index, results, node.params?.a ?? 0),
@@ -659,6 +665,8 @@ function computeBypassOutput(node, index, results) {
   switch (node.type) {
     case "value":
       return Number(node.params?.value ?? 0);
+    case "audio-level":
+      return 0;
     case "math":
       return resolveInputValue(node, "a", index, results, node.params?.a ?? 0);
     case "mix":
