@@ -2056,6 +2056,22 @@ body.cutting-edges * {
   box-shadow: 0 0 12px color-mix(in srgb, var(--node-family) 28%, transparent);
 }
 
+.graph-node-picker__footer {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.context-menu.graph-node-picker .graph-node-picker__footer button {
+  width: 100%;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.context-menu.graph-node-picker .graph-node-picker__footer button:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
 .graph-node-context-menu {
   width: 224px;
   padding: 0;
