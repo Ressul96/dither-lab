@@ -1,4 +1,4 @@
-import { getState, dispatch, subscribe } from "./state.js";
+import { getState, dispatch, subscribe, pushHistory } from "./state.js";
 import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
 import { serializeCustomPalettes, subscribePalettes } from "./palettes.js";
 import {
@@ -34,7 +34,10 @@ import {
   getActiveVideoClip,
   getCompositingLayers,
   nextVideoClipAfter,
+  normalizeComposition,
   serializeComposition,
+  trimClipEnd,
+  trimClipStart,
 } from "./composition.js";
 
 const FRAME_CACHE_TARGET_BYTES = 150_000_000;
@@ -1347,34 +1350,89 @@ export function stepFrame(direction) {
   seek(clamp((currentFrame + direction) / fps, 0, limit));
 }
 
+// Apply one composition edit as a single undo/redo entry. Lives here, not in the
+// pure composition.js, because history touches state. Mirrors the snapshot pattern
+// in player-media-clip-drag.js. Returns true when the edit changed something.
+function commitCompositionEdit(reducer, label) {
+  const before = serializeComposition(getState().composition);
+  dispatch("composition", reducer(getState().composition));
+  const after = serializeComposition(getState().composition);
+  if (JSON.stringify(before) === JSON.stringify(after)) return false;
+  pushHistory({
+    label,
+    undo: () => dispatch("composition", serializeComposition(normalizeComposition(before))),
+    redo: () => dispatch("composition", serializeComposition(normalizeComposition(after))),
+  });
+  return true;
+}
+
 export function snapPlayhead() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
-  const { playback } = getState();
-  const t = v.currentTime || 0;
-  const nearStart = Math.abs(t - playback.trimStart) < Math.abs(t - playback.trimEnd);
-  seek(nearStart ? playback.trimStart : playback.trimEnd);
+  if (isSimpleSingleSource()) {
+    const { playback } = getState();
+    const t = v.currentTime || 0;
+    const nearStart = Math.abs(t - playback.trimStart) < Math.abs(t - playback.trimEnd);
+    seek(nearStart ? playback.trimStart : playback.trimEnd);
+    return;
+  }
+  // Multi-clip: snap to the nearer edge of the active clip at the playhead.
+  const t = currentTimelineTime();
+  const active = getActiveVideoClip(getState().composition, t);
+  if (!active) return;
+  const clipStart = active.clip.start;
+  const clipEnd = active.clip.start + active.clip.duration;
+  const nearStart = Math.abs(t - clipStart) < Math.abs(t - clipEnd);
+  seek(nearStart ? clipStart : clipEnd);
 }
 
 export function setIn() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
-  const { playback } = getState();
-  const next = Math.min(normalizePlaybackTime(v.currentTime || 0), playback.trimEnd - 0.01);
-  const trimStart = Math.max(0, next);
-  dispatch("playback", { trimStart });
-  if ((v.currentTime || 0) < trimStart) seek(trimStart);
+  if (isSimpleSingleSource()) {
+    const { playback } = getState();
+    const next = Math.min(normalizePlaybackTime(v.currentTime || 0), playback.trimEnd - 0.01);
+    const trimStart = Math.max(0, next);
+    dispatch("playback", { trimStart });
+    if ((v.currentTime || 0) < trimStart) seek(trimStart);
+    return;
+  }
+  // Multi-clip: move the active clip's head (left edge) to the playhead. The same
+  // source frame stays under the playhead; the clip just starts here now.
+  const t = currentTimelineTime();
+  const active = getActiveVideoClip(getState().composition, t);
+  if (!active) return;
+  const changed = commitCompositionEdit(
+    (c) => trimClipStart(c, { trackId: active.track.id, clipId: active.clip.id, start: t }),
+    "Trim clip in"
+  );
+  if (changed) requestRenderCurrentFrame();
 }
 
 export function setOut() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
-  const { playback } = getState();
-  const duration = Number.isFinite(v.duration) ? v.duration : 0;
-  const next = Math.max(normalizePlaybackTime(v.currentTime || 0), playback.trimStart + 0.01);
-  const trimEnd = Math.min(duration, next);
-  dispatch("playback", { trimEnd });
-  if ((v.currentTime || 0) > trimEnd) seek(trimEnd);
+  if (isSimpleSingleSource()) {
+    const { playback } = getState();
+    const duration = Number.isFinite(v.duration) ? v.duration : 0;
+    const next = Math.max(normalizePlaybackTime(v.currentTime || 0), playback.trimStart + 0.01);
+    const trimEnd = Math.min(duration, next);
+    dispatch("playback", { trimEnd });
+    if ((v.currentTime || 0) > trimEnd) seek(trimEnd);
+    return;
+  }
+  // Multi-clip: set the active clip's tail (right edge) one frame past the
+  // playhead so the current frame is the last one included (inclusive out point).
+  const t = currentTimelineTime();
+  const { composition, source, timeline } = getState();
+  const active = getActiveVideoClip(composition, t);
+  if (!active) return;
+  const step = 1 / timelineFrameRate(timeline, source.fps);
+  const changed = commitCompositionEdit(
+    (c) => trimClipEnd(c, { trackId: active.track.id, clipId: active.clip.id, end: t + step }),
+    "Trim clip out"
+  );
+  if (changed) requestRenderCurrentFrame();
 }
 
 export function resetTrim() {
