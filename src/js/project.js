@@ -170,6 +170,15 @@ async function writeProjectFile(path) {
 
 function buildProjectPayload() {
   const state = getState();
+  // Only persist clip graphs still referenced by a clip. Repeated pin/unpin
+  // leaves orphaned registry entries in memory (kept so undo/redo can restore a
+  // reference), but they shouldn't bloat the saved project.
+  const referencedClipGraphIds = new Set(
+    (state.composition?.tracks ?? [])
+      .flatMap((track) => track.clips ?? [])
+      .map((clip) => clip.graphId)
+      .filter(Boolean)
+  );
   return {
     version: 1,
     source: {
@@ -195,7 +204,7 @@ function buildProjectPayload() {
     composition: serializeComposition(state.composition),
     customPalettes: serializeCustomPalettes(),
     tokens: serializeTokens(),
-    clipGraphs: serializeClipGraphs(),
+    clipGraphs: serializeClipGraphs().filter((entry) => referencedClipGraphIds.has(entry.id)),
   };
 }
 
