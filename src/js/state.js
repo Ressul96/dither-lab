@@ -5,6 +5,12 @@ export const DEFAULT_GRAPH_VIEW = Object.freeze({
   panX: -7820,
   panY: -7904,
   currentParentId: "root",
+  // Per-clip graph editing scope. null = editing the shared global graph (the
+  // default). When set, the node editor is editing a clip's own graph: `state.graph`
+  // holds that clip graph and the global graph is stashed (graph.js). Transient —
+  // not persisted, so a freshly loaded project always starts on the global graph.
+  clipGraphId: null,
+  clipScopeClipId: null,
 });
 
 const state = {

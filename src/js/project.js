@@ -1,8 +1,11 @@
 import { DEFAULT_GRAPH_VIEW, dispatch, getState } from "./state.js";
 import {
   createBootGraph,
+  flushEditableClipGraph,
+  getGlobalGraph,
   getViewerOutputFps,
   replaceGraph,
+  resetClipGraphScope,
   resolveGraphParentId,
   serializeGraph,
 } from "./graph.js";
@@ -21,6 +24,7 @@ const MAX_RECENT_PROJECTS = 8;
 
 export function newProject() {
   currentProjectPath = "";
+  resetClipGraphScope();
   clearSource();
   applyCustomPalettes([]);
   applyTokens([]);
@@ -170,6 +174,10 @@ async function writeProjectFile(path) {
 
 function buildProjectPayload() {
   const state = getState();
+  // If a clip graph is open in the editor, flush its live edits to the registry
+  // so the save captures them (and getGlobalGraph below serialises the GLOBAL
+  // graph, not the clip-edit buffer in state.graph).
+  flushEditableClipGraph();
   // Only persist clip graphs still referenced by a clip. Repeated pin/unpin
   // leaves orphaned registry entries in memory (kept so undo/redo can restore a
   // reference), but they shouldn't bloat the saved project.
@@ -183,7 +191,7 @@ function buildProjectPayload() {
     version: 1,
     source: {
       path: state.source.path || "",
-      fps: getViewerOutputFps(state.graph) ?? state.source.fps,
+      fps: getViewerOutputFps(getGlobalGraph()) ?? state.source.fps,
       trimStart: state.playback.trimStart,
       trimEnd: state.playback.trimEnd,
       currentTime: state.playback.currentTime,
@@ -197,9 +205,9 @@ function buildProjectPayload() {
       zoom: state.graphView.zoom,
       panX: state.graphView.panX,
       panY: state.graphView.panY,
-      currentParentId: resolveGraphParentId(state.graph, state.graphView.currentParentId),
+      currentParentId: resolveGraphParentId(getGlobalGraph(), state.graphView.currentParentId),
     },
-    graph: serializeGraph(state.graph),
+    graph: serializeGraph(getGlobalGraph()),
     timeline: serializeTimeline(state.timeline),
     composition: serializeComposition(state.composition),
     customPalettes: serializeCustomPalettes(),
@@ -210,6 +218,9 @@ function buildProjectPayload() {
 
 async function applyProject(project) {
   validateProject(project);
+  // Drop any in-editor clip-edit scope before loading — the incoming project
+  // replaces the graph + clip registry wholesale.
+  resetClipGraphScope();
   if (project?.source?.path) {
     try {
       await openSourcePath(project.source.path, { autoplay: false });

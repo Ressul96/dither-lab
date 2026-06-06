@@ -1,5 +1,6 @@
 import { getState, dispatch, pushHistory } from "./state.js";
 import { normalizeHex, rgbToHex } from "./color.js";
+import { getClipGraph, hasClipGraph, setClipGraph } from "./clip-graphs.js";
 
 const NODE_SPACING_X = 252;
 const NODE_BASE_X = 88;
@@ -1253,21 +1254,108 @@ export function pushGraphHistoryFromSnapshot(before, label = "Edit graph") {
   if (!before) return false;
   const after = snapshotGraphForHistory();
   if (graphSnapshotsEqual(before, after)) return false;
+  // Capture which graph this edit belongs to so undo/redo restore into the right
+  // place even after the editing scope changes (null = the global graph).
+  const scopeId = getEditingClipGraphId();
   pushHistory({
     label,
-    undo: () => restoreGraphHistorySnapshot(before),
-    redo: () => restoreGraphHistorySnapshot(after),
+    undo: () => restoreGraphHistorySnapshot(before, scopeId),
+    redo: () => restoreGraphHistorySnapshot(after, scopeId),
   });
   return true;
 }
 
-function restoreGraphHistorySnapshot(snapshot) {
+function restoreGraphHistorySnapshot(snapshot, scopeId = null) {
   const normalized = normalizeGraph(snapshotGraphForHistory(snapshot));
+  if (scopeId && hasClipGraph(scopeId)) {
+    // The edit happened inside a clip graph. Update that clip graph in the
+    // registry; only reload the editor buffer if that clip is the one open now.
+    setClipGraph(scopeId, normalized);
+    if (getEditingClipGraphId() === scopeId) dispatch("graph", normalized);
+    return;
+  }
+  // Global-graph edit. While a clip scope is open the global graph is the stash;
+  // update it there so the global is intact on exit. Otherwise it's state.graph.
+  if (stashedGlobalGraph) {
+    stashedGlobalGraph = normalized;
+    return;
+  }
   dispatch("graph", normalized);
   const parentId = getState().graphView.currentParentId;
   const resolvedParentId = resolveGraphParentId(normalized, parentId);
   if (resolvedParentId !== parentId) {
     dispatch("graphView", { currentParentId: resolvedParentId });
+  }
+}
+
+// --- Per-clip graph editing scope (swap model) -----------------------------
+// Editing a clip's graph reuses the whole node editor unchanged: on enter we
+// stash the global graph and load the clip graph into `state.graph`, so the
+// canvas, inspector and history all operate on it as usual. Render and export
+// keep reading the GLOBAL graph via getGlobalGraph() (plus the per-clip override
+// at the render chokepoint), so a clip scope never disturbs how other clips draw.
+
+let stashedGlobalGraph = null;
+
+// The global graph regardless of editing scope. While a clip scope is open,
+// `state.graph` holds the clip graph and the real global graph is the stash.
+// Render / export / save read this so they stay anchored to the global graph.
+export function getGlobalGraph() {
+  return stashedGlobalGraph ?? ensureBootGraph();
+}
+
+export function getEditingClipGraphId() {
+  return getState().graphView?.clipGraphId ?? null;
+}
+
+export function isEditingClipGraph() {
+  return Boolean(getEditingClipGraphId());
+}
+
+// Enter a clip's graph: stash the global graph and load the clip graph into the
+// editor. Returns false when the clip graph isn't registered.
+export function enterClipGraphScope(clipId, graphId) {
+  if (!graphId || !hasClipGraph(graphId)) return false;
+  if (stashedGlobalGraph) exitClipGraphScope();
+  stashedGlobalGraph = clone(ensureBootGraph());
+  dispatch("graphView", {
+    clipGraphId: graphId,
+    clipScopeClipId: clipId ?? null,
+    currentParentId: ROOT_PARENT_ID,
+  });
+  dispatch("graph", normalizeGraph(clone(getClipGraph(graphId))));
+  return true;
+}
+
+// Leave the clip scope: write the edited clip graph back to the registry and
+// restore the global graph into the editor. No-op when not in a clip scope.
+export function exitClipGraphScope() {
+  if (!stashedGlobalGraph) return false;
+  const graphId = getEditingClipGraphId();
+  if (graphId) setClipGraph(graphId, clone(getState().graph));
+  const global = stashedGlobalGraph;
+  stashedGlobalGraph = null;
+  // Clear the scope flag BEFORE restoring the global graph so any "graph"
+  // subscribers see we are back on the global graph.
+  dispatch("graphView", { clipGraphId: null, clipScopeClipId: null, currentParentId: ROOT_PARENT_ID });
+  dispatch("graph", global);
+  return true;
+}
+
+// Flush the live edited clip graph into the registry without leaving the scope,
+// so persistence captures in-progress clip edits.
+export function flushEditableClipGraph() {
+  const graphId = getEditingClipGraphId();
+  if (graphId && stashedGlobalGraph) setClipGraph(graphId, clone(getState().graph));
+}
+
+// Clear any clip-edit scope WITHOUT writing back — used on project load / new,
+// where the current editor buffer is being replaced wholesale and the old clip
+// registry is discarded. (exitClipGraphScope is the normal, write-back path.)
+export function resetClipGraphScope() {
+  stashedGlobalGraph = null;
+  if (getEditingClipGraphId()) {
+    dispatch("graphView", { clipGraphId: null, clipScopeClipId: null });
   }
 }
 

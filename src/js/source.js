@@ -1,5 +1,5 @@
 import { getState, dispatch, subscribe, pushHistory } from "./state.js";
-import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
+import { ensureBootGraph, getGlobalGraph, getEditingClipGraphId, setViewerOutputFps } from "./graph.js";
 import { resolveGraphTokens, subscribeTokens } from "./tokens.js";
 import { analyzeAudioFromUrl, clearAudioEnvelope, subscribeAudio } from "./audio-analysis.js";
 import { serializeCustomPalettes, subscribePalettes } from "./palettes.js";
@@ -1623,9 +1623,12 @@ async function renderCurrentFrame(options = {}) {
   // Resolve color-token references once, here, before both the CPU eval and the
   // GPU bake derive from `graph` — so a token and its literal value render
   // identically (preview/export parity). No-op when no token is referenced.
-  // `graph` may be reassigned below to the active clip's own graph (per-clip
-  // graphs); every downstream path reads this one binding.
-  let graph = resolveGraphTokens(ensureBootGraph());
+  // The base is always the GLOBAL graph (getGlobalGraph): when a clip scope is
+  // open in the editor, state.graph holds the clip graph and the real global is
+  // the stash, so the base stays anchored to the global. `graph` may be
+  // reassigned below to the active clip's own graph (per-clip graphs); every
+  // downstream path reads this one binding.
+  let graph = resolveGraphTokens(getGlobalGraph());
   const proceduralSource = findViewerProceduralSource(graph);
   if (proceduralSource) {
     renderProceduralFrame(graph, proceduralSource);
@@ -1741,7 +1744,11 @@ async function renderCurrentFrame(options = {}) {
   if (layers.length < 2) {
     const activeGraphId =
       getActiveVideoClip(getState().composition, timelineTime)?.clip?.graphId ?? null;
-    if (activeGraphId && hasClipGraph(activeGraphId)) {
+    if (activeGraphId && activeGraphId === getEditingClipGraphId()) {
+      // This clip's graph is open in the editor — use the live editor buffer
+      // (state.graph) so in-progress edits show in the preview immediately.
+      graph = resolveGraphTokens(getState().graph);
+    } else if (activeGraphId && hasClipGraph(activeGraphId)) {
       graph = resolveGraphTokens(getClipGraph(activeGraphId));
     }
   }
@@ -1884,7 +1891,7 @@ function shouldUseWorkerForPreview(mode, video) {
   return video instanceof HTMLVideoElement && !video.paused && !video.ended;
 }
 
-function renderProceduralFrame(graph = resolveGraphTokens(ensureBootGraph()), sourceNode = findViewerProceduralSource(graph)) {
+function renderProceduralFrame(graph = resolveGraphTokens(getGlobalGraph()), sourceNode = findViewerProceduralSource(graph)) {
   if (!sourceNode || !canvas || !ctx) return false;
 
   renderVersion += 1;
