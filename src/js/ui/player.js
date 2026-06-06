@@ -125,6 +125,7 @@ import {
   setTrackProp,
   getSelectedClipId,
   toggleClipGraphById,
+  editClipGraph,
 } from "./player-media-clip-drag.js";
 
 export {
@@ -327,6 +328,17 @@ function wireAnimationTimeline() {
     if (blendEl) {
       setTrackProp(blendEl.dataset.trackId, { blendMode: blendEl.value });
     }
+  });
+  // Double-click a clip → edit that clip's own effect graph in the node editor.
+  // Ignore double-clicks on the trim handles / FX badge (they have their own
+  // single-click behaviour).
+  timelineEl.addEventListener("dblclick", (event) => {
+    if (event.target.closest("[data-media-clip-handle]") || event.target.closest("[data-media-clip-fx]")) return;
+    const clipEl = event.target.closest(".media-clip");
+    if (!clipEl) return;
+    event.preventDefault();
+    event.stopPropagation();
+    editClipGraph(clipEl.dataset.mediaClipTrack, clipEl.dataset.mediaClipId);
   });
   timelineEl.addEventListener("click", (event) => {
     if (event.target.closest("[data-tangent-handle]")) {

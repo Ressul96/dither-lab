@@ -95,55 +95,48 @@ that to send the active clip graph to the worker is a later optimisation.
    graph — per-layer clip graphs in the composite are a later step (each layer
    would evaluate its own clip graph before blending, restructuring
    `drawCompositeFrame`).
-3. **Editing UI** — PARTIAL. The low-risk half is shipped: a per-clip **FX
-   badge** in the Clips view (`media-clip-fx`) toggles a clip's own graph. Pin =
-   clone the current global graph into the registry and point the clip at it
-   (`toggleClipGraphById` → `setClipGraphId` reducer, atomic composition
-   history); unpin = detach back to the shared graph. The clone is a snapshot
-   (verified: mutating the global graph after pinning does not change the clip's
-   graph), so a clip keeps its look while the global graph evolves. The registry
-   entry is intentionally left on detach so undo/redo restore the reference.
-   Verified end to end: pin → edit the clip's graph → only that clip renders the
-   change; unpin → back to the shared look; undo/redo round-trip; markup badge
-   reflects state.
+3. **Editing UI** — DONE (built on branch `feat/clip-graph-editing`). Two parts:
 
-   The remaining half — **editing a clip's graph in place in the node editor**
-   (double-click to enter, breadcrumb, make-unique) — is NOT built. It is the
-   widest change and turns on the architecture decision below; the pin/unpin
-   slice covers the headline "give clips distinct looks" workflow without it (set
-   the global look, pin; repeat), so the in-editor scope-switch can be done
-   deliberately on its own branch.
+   a. **Pin / unpin** — a per-clip **FX badge** in the Clips view
+      (`media-clip-fx`) toggles a clip's own graph. Pin = clone the current
+      global graph into the registry and point the clip at it
+      (`toggleClipGraphById` → `setClipGraphId` reducer, atomic composition
+      history); unpin = detach back to the shared graph. The clone is a snapshot,
+      so a clip keeps its look while the global graph evolves. Registry entries
+      are left on detach so undo/redo restore the reference (pruned at save).
 
-   Finding from the increment-2 work: the editor's existing "scope" is
-   `graphView.currentParentId`, which only *filters nodes by parentId within the
-   single `state.graph`* (group navigation) — it is **not** a graph switch, and
-   the breadcrumb is tied to it. So clip-graph editing needs a genuinely new
-   graph-switch scope; it does not piggyback on the group scope.
+   b. **In-editor editing** — **double-click a clip** opens its graph in the
+      node editor (`editClipGraph`: creates the graph if the clip is still on the
+      shared graph, then enters the scope); a breadcrumb crumb **"⤺ Composition"**
+      exits back to the global graph.
 
-   Recommended architecture (over swapping `state.graph` in place): add
-   `state.graphView.clipGraphId` (null = editing the global graph). Keep
-   `state.graph` *always* the global graph so the render base is never disturbed
-   — the increment-2 selection already overrides per-clip at the chokepoint, and
-   if the editor swapped `state.graph` to a clip graph, frames on *other* clips
-   (graphId null) would wrongly use the edited clip graph as their base. The
-   editor (graph.js central accessors + the ~7 UI files that read
-   `getState().graph`: node-drag, socket-drag, render, actions, inspector,
-   shell, view-scope) must route through a `getEditableGraph()` /
-   `mutateEditableGraph()` indirection that targets the clip graph (writing back
-   via `setClipGraph`) when `clipGraphId` is set. That routing is the wide,
-   regression-prone part — it touches the core editor, so it warrants its own
-   focused branch + the existing graph-editor regression pass before landing.
+   Architecture chosen: the **swap model**, not the `getEditableGraph`
+   indirection the increment-2 note had recommended. The audit showed the render
+   path reads the graph only through `ensureBootGraph()` (never the bare
+   read-accessors), so the editor can be left *completely unchanged* — entering a
+   scope stashes the global graph and loads the clip graph into `state.graph`, so
+   the canvas, inspector and undo/redo all operate on it as usual. Render / export
+   / save read the global via `getGlobalGraph()` (= `stashedGlobalGraph ??
+   ensureBootGraph()`, so byte-identical when no scope is open), and the render
+   chokepoint renders the *edited* clip from the live `state.graph` buffer (other
+   clips from the registry). History is made scope-aware so cross-scope undo
+   routes to the right graph and never corrupts the global. This kept the change
+   off the editor core entirely — far less risk than routing ~30 mutation sites.
 
-   Verify (when built): scope switch enters/exits, edits isolate per clip,
-   undo/redo across scope, project save while in clip scope, and — critically —
-   editing clip A's graph never changes what clip B (shared graph) renders.
+   Verified: enter/edit/exit, registry persistence on exit, scope-aware undo,
+   global-graph integrity across the cycle, the double-click gesture and the
+   breadcrumb exit (live DOM), and no console errors. (Render-pixel parity uses
+   the proven increment-2 path; a fresh pixel shot was blocked only by flaky
+   harness video decode this session.)
 
 ## Risks
 
-- **Scope-switch refactor** (which graph the editor edits) is the widest change
-  and the one open item (see increment 3). The `activeGraphScope`
-  (`graphView.clipGraphId` + `getEditableGraph`) option is cleaner than swapping
-  `state.graph` in place — swapping corrupts the render base for other clips.
+- **Scope-switch refactor** (which graph the editor edits) — RESOLVED via the
+  swap model (see increment 3). Swapping `state.graph` to the clip graph does
+  *not* corrupt other clips' render base because render reads the global through
+  `getGlobalGraph()` (the stash), and the edited clip renders from the live
+  buffer; the earlier worry assumed render read `state.graph` directly, which it
+  doesn't (only `ensureBootGraph()`).
 - **Compositing × per-clip graphs** multiplies evaluation cost (N layers × graph
   eval). Memoisation already keys per node; acceptable for small N. (Compositing
   still uses the global graph today — see increment 2.)

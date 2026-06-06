@@ -27,6 +27,7 @@ import {
   compositionDuration,
 } from "../composition.js";
 import { hasClipGraph, makeClipGraphId, setClipGraph } from "../clip-graphs.js";
+import { enterClipGraphScope } from "../graph.js";
 import { timelineFrameRate, normalizeTimeline } from "../timeline.js";
 
 // Selection: a single clip id, mirroring the keyframe selection module. Used by
@@ -350,6 +351,26 @@ export function toggleClipGraphById(trackId, clipId) {
   pushCompositionHistory(before, graphId ? "Add clip FX graph" : "Remove clip FX graph");
   rerender();
   return true;
+}
+
+// Open a clip's own effect graph in the node editor (double-click gesture).
+// Ensures the clip has a graph first (clones the current global graph if the
+// clip is still on the shared graph), then enters the editing scope so the node
+// editor edits that clip's graph. Returns true when the scope opened.
+export function editClipGraph(trackId, clipId) {
+  if (!trackId || !clipId) return false;
+  const clip = findClip(trackId, clipId);
+  if (!clip) return false;
+  let graphId = clip.graphId;
+  if (!graphId || !hasClipGraph(graphId)) {
+    const before = snapshotComposition();
+    graphId = setClipGraph(makeClipGraphId(), structuredClone(getState().graph));
+    const next = setClipGraphId(getState().composition, { trackId, clipId, graphId });
+    dispatch("composition", next);
+    pushCompositionHistory(before, "Add clip FX graph");
+  }
+  selectClip(clipId);
+  return enterClipGraphScope(clipId, graphId);
 }
 
 // ---------- lookups ----------

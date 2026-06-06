@@ -1278,6 +1278,18 @@ body.resizing-y * {
   cursor: default;
 }
 
+/* Exit crumb shown while editing a clip's graph — accented so the scope is
+   obvious and the way back is one click. */
+.graph-breadcrumb-exit-clip {
+  color: rgba(146, 221, 255, 0.95);
+  background: rgba(146, 221, 255, 0.12);
+}
+
+.graph-breadcrumb-exit-clip:hover {
+  background: rgba(146, 221, 255, 0.22);
+  color: rgba(146, 221, 255, 1);
+}
+
 .graph-breadcrumb-separator {
   color: var(--text-muted);
   font-size: var(--text-label);
