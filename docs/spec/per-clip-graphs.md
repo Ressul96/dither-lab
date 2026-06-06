@@ -80,24 +80,59 @@ that to send the active clip graph to the worker is a later optimisation.
 
 ## Build Increments (each independently shippable + verifiable)
 
-1. **Model** — `clipGraphs.js` registry + persistence + a `setClipGraph` /
-   `clearClipGraph` reducer. `graphId` stays null everywhere → zero behavior
-   change. Verify: registry CRUD, persistence round-trip, existing render
-   unchanged. (Low risk, purely additive.)
-2. **Render** — resolve the clip's graph at the render chokepoint (single-layer
-   then compositing), main-thread-guarded. Verify: a clip bound to a distinct
-   graph renders differently from a clip on the shared graph; single-source stays
-   byte-identical; preview == export.
-3. **Editing UI** — Clips-view double-click to enter, breadcrumb, add/remove/make-
-   unique actions, atomic history. Verify: scope switch, edits isolated per clip,
-   undo/redo.
+1. **Model** — DONE (`clip-graphs.js` registry + persistence). Registry CRUD,
+   change-notify, `serialize/applyClipGraphs`, project round-trip; `graphId`
+   stays null everywhere so existing projects are unchanged.
+2. **Render** — DONE (single-layer path). The render chokepoint reassigns the
+   resolved `graph` to the active clip's registered graph (`source.js`
+   `renderCurrentFrame`), so every downstream path — worker, CPU eval, native
+   GPU preview, bound sources, export — reads one binding. No main-thread force
+   was needed: the worker already receives the full graph per frame, so a clip
+   graph flows through it correctly. Verified on a real video: a clip with a
+   distinct graph (brightness +100) renders white while the shared-graph frame is
+   unchanged, on both the main-thread/export path and the worker; `graphId: null`
+   round-trips byte-identically. Compositing (2+ layers) still uses the global
+   graph — per-layer clip graphs in the composite are a later step (each layer
+   would evaluate its own clip graph before blending, restructuring
+   `drawCompositeFrame`).
+3. **Editing UI** — NOT BUILT. This is the widest change and turns on an
+   architecture decision (below) that should be made deliberately, not rushed.
+   Scope: Clips-view double-click to enter a clip's graph, a breadcrumb, and
+   add / remove / make-unique actions with atomic history.
+
+   Finding from the increment-2 work: the editor's existing "scope" is
+   `graphView.currentParentId`, which only *filters nodes by parentId within the
+   single `state.graph`* (group navigation) — it is **not** a graph switch, and
+   the breadcrumb is tied to it. So clip-graph editing needs a genuinely new
+   graph-switch scope; it does not piggyback on the group scope.
+
+   Recommended architecture (over swapping `state.graph` in place): add
+   `state.graphView.clipGraphId` (null = editing the global graph). Keep
+   `state.graph` *always* the global graph so the render base is never disturbed
+   — the increment-2 selection already overrides per-clip at the chokepoint, and
+   if the editor swapped `state.graph` to a clip graph, frames on *other* clips
+   (graphId null) would wrongly use the edited clip graph as their base. The
+   editor (graph.js central accessors + the ~7 UI files that read
+   `getState().graph`: node-drag, socket-drag, render, actions, inspector,
+   shell, view-scope) must route through a `getEditableGraph()` /
+   `mutateEditableGraph()` indirection that targets the clip graph (writing back
+   via `setClipGraph`) when `clipGraphId` is set. That routing is the wide,
+   regression-prone part — it touches the core editor, so it warrants its own
+   focused branch + the existing graph-editor regression pass before landing.
+
+   Verify (when built): scope switch enters/exits, edits isolate per clip,
+   undo/redo across scope, project save while in clip scope, and — critically —
+   editing clip A's graph never changes what clip B (shared graph) renders.
 
 ## Risks
 
-- **Scope-switch refactor** (which graph the editor edits) is the widest change;
-  the `activeGraphScope` option is cleaner than swapping `state.graph` in place.
-  Prototype both on a branch.
+- **Scope-switch refactor** (which graph the editor edits) is the widest change
+  and the one open item (see increment 3). The `activeGraphScope`
+  (`graphView.clipGraphId` + `getEditableGraph`) option is cleaner than swapping
+  `state.graph` in place — swapping corrupts the render base for other clips.
 - **Compositing × per-clip graphs** multiplies evaluation cost (N layers × graph
-  eval). Memoisation already keys per node; acceptable for small N.
-- **Worker** stays main-thread for clip-graph frames until the worker learns to
-  accept a per-frame graph.
+  eval). Memoisation already keys per node; acceptable for small N. (Compositing
+  still uses the global graph today — see increment 2.)
+- **Worker** — resolved: the worker already accepts a full graph per render
+  message, so clip-graph frames run on the worker just like the global graph (no
+  main-thread force needed). Verified in increment 2.
