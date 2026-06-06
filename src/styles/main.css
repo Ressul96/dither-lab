@@ -3290,6 +3290,47 @@ body.cutting-edges * {
   pointer-events: none;
 }
 
+/* Per-clip FX-graph badge. Hidden until the clip is hovered, but always shown
+   (and highlighted) when the clip carries its own graph, so pinned clips read
+   at a glance. Sits clear of the end trim handle and above it so it stays
+   clickable. */
+.media-clip-fx {
+  position: absolute;
+  top: 2px;
+  right: 9px;
+  z-index: 4;
+  appearance: none;
+  padding: 0 4px;
+  height: 13px;
+  line-height: 11px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease, border-color 0.1s ease;
+}
+
+.media-clip:hover .media-clip-fx,
+.media-clip-fx:focus-visible {
+  opacity: 1;
+}
+
+.media-clip-fx:hover {
+  border-color: rgba(146, 221, 255, 0.8);
+}
+
+.media-clip-fx.is-active {
+  opacity: 1;
+  color: rgba(20, 24, 33, 0.95);
+  background: rgba(146, 221, 255, 0.95);
+  border-color: rgba(146, 221, 255, 0.95);
+}
+
 .timeline-graph-placeholder {
   min-height: 72px;
   display: flex;

@@ -20,11 +20,13 @@ import {
   addClip,
   addVideoTrack,
   updateTrack,
+  setClipGraphId,
   snapClipTime,
   serializeComposition,
   normalizeComposition,
   compositionDuration,
 } from "../composition.js";
+import { hasClipGraph, makeClipGraphId, setClipGraph } from "../clip-graphs.js";
 import { timelineFrameRate, normalizeTimeline } from "../timeline.js";
 
 // Selection: a single clip id, mirroring the keyframe selection module. Used by
@@ -322,6 +324,32 @@ export function selectClip(clipId) {
   if (selectedClipId === clipId) return;
   selectedClipId = clipId ?? null;
   rerender();
+}
+
+// Toggle a clip's own effect graph. With no graph, clone the CURRENT global
+// graph into the registry and point the clip at it — so the clip keeps the
+// current look while the global graph can keep changing for other clips. With a
+// graph, detach back to the shared global graph. One history entry; the registry
+// clone is intentionally left in place on detach so undo/redo can restore the
+// reference (orphans are pruned at project-save time).
+export function toggleClipGraphById(trackId, clipId) {
+  if (!trackId || !clipId) return false;
+  const composition = getState().composition;
+  const clip = findClip(trackId, clipId);
+  if (!clip) return false;
+  const before = snapshotComposition();
+  let graphId;
+  if (clip.graphId && hasClipGraph(clip.graphId)) {
+    graphId = null;
+  } else {
+    graphId = setClipGraph(makeClipGraphId(), structuredClone(getState().graph));
+  }
+  const next = setClipGraphId(composition, { trackId, clipId, graphId });
+  if (next === composition) return false;
+  dispatch("composition", next);
+  pushCompositionHistory(before, graphId ? "Add clip FX graph" : "Remove clip FX graph");
+  rerender();
+  return true;
 }
 
 // ---------- lookups ----------

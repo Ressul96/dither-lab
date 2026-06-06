@@ -124,6 +124,7 @@ import {
   addVideoTrackAction,
   setTrackProp,
   getSelectedClipId,
+  toggleClipGraphById,
 } from "./player-media-clip-drag.js";
 
 export {
@@ -799,6 +800,16 @@ function onAnimationTimelinePointerDown(event) {
     return;
   }
 
+  // Clips view: the FX badge toggles a per-clip effect graph. Hit-test it before
+  // the clip body so the click toggles instead of starting a move-drag.
+  const clipFx = event.target.closest("[data-media-clip-fx]");
+  if (clipFx) {
+    event.preventDefault();
+    event.stopPropagation();
+    const clipEl = clipFx.closest(".media-clip");
+    if (clipEl) toggleClipGraphById(clipEl.dataset.mediaClipTrack, clipEl.dataset.mediaClipId);
+    return;
+  }
   // Clips view: trim handles take priority over the clip body so grabbing an
   // edge resizes rather than moves. Selecting/dragging a clip is independent of
   // the keyframe machinery below.

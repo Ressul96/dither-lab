@@ -95,10 +95,24 @@ that to send the active clip graph to the worker is a later optimisation.
    graph — per-layer clip graphs in the composite are a later step (each layer
    would evaluate its own clip graph before blending, restructuring
    `drawCompositeFrame`).
-3. **Editing UI** — NOT BUILT. This is the widest change and turns on an
-   architecture decision (below) that should be made deliberately, not rushed.
-   Scope: Clips-view double-click to enter a clip's graph, a breadcrumb, and
-   add / remove / make-unique actions with atomic history.
+3. **Editing UI** — PARTIAL. The low-risk half is shipped: a per-clip **FX
+   badge** in the Clips view (`media-clip-fx`) toggles a clip's own graph. Pin =
+   clone the current global graph into the registry and point the clip at it
+   (`toggleClipGraphById` → `setClipGraphId` reducer, atomic composition
+   history); unpin = detach back to the shared graph. The clone is a snapshot
+   (verified: mutating the global graph after pinning does not change the clip's
+   graph), so a clip keeps its look while the global graph evolves. The registry
+   entry is intentionally left on detach so undo/redo restore the reference.
+   Verified end to end: pin → edit the clip's graph → only that clip renders the
+   change; unpin → back to the shared look; undo/redo round-trip; markup badge
+   reflects state.
+
+   The remaining half — **editing a clip's graph in place in the node editor**
+   (double-click to enter, breadcrumb, make-unique) — is NOT built. It is the
+   widest change and turns on the architecture decision below; the pin/unpin
+   slice covers the headline "give clips distinct looks" workflow without it (set
+   the global look, pin; repeat), so the in-editor scope-switch can be done
+   deliberately on its own branch.
 
    Finding from the increment-2 work: the editor's existing "scope" is
    `graphView.currentParentId`, which only *filters nodes by parentId within the

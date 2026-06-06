@@ -486,6 +486,28 @@ export function updateTrack(composition, { trackId, patch } = {}) {
   return normalizeComposition({ ...composition, tracks: nextTracks });
 }
 
+// Set (or clear) a clip's per-clip effect graph reference. `graphId` null means
+// the clip uses the shared global graph (the default). Pure; returns the same
+// composition object when nothing changes. The actual graph clone lives in the
+// clip-graph registry — this reducer only flips the reference on the clip.
+export function setClipGraphId(composition, { trackId, clipId, graphId = null } = {}) {
+  const tracks = composition?.tracks ?? [];
+  const track = tracks.find((t) => t.id === trackId);
+  const clip = track?.clips?.find((c) => c.id === clipId);
+  if (!clip || (clip.graphId ?? null) === (graphId ?? null)) return composition;
+  const nextTracks = tracks.map((t) =>
+    t.id !== trackId
+      ? t
+      : {
+          ...t,
+          clips: t.clips.map((c) =>
+            c.id === clipId ? { ...c, graphId: graphId ?? null } : c
+          ),
+        }
+  );
+  return normalizeComposition({ ...composition, tracks: nextTracks });
+}
+
 // Add a clip for `sourceId` to a track. `start` defaults to the end of the
 // track (append). Duration defaults to the source's full length. If the chosen
 // start would overlap an existing clip, the clip is pushed to the first free

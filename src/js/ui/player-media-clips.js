@@ -97,6 +97,14 @@ function renderClip(clip, trackId, composition, duration, fps, selectedClipId) {
   const selected = clip.id === selectedClipId ? " is-selected" : "";
   const source = composition?.sources?.find((s) => s.id === clip.sourceId);
   const label = clipLabel(source, clip);
+  // The FX badge toggles a per-clip effect graph. Active = the clip has its own
+  // graph (a copy of the global graph at pin time); inactive = it follows the
+  // shared global graph. player.js hit-tests data-media-clip-fx before the clip
+  // body so clicking the badge toggles instead of starting a move-drag.
+  const hasFx = Boolean(clip.graphId);
+  const fxTitle = hasFx
+    ? "This clip has its own FX graph. Click to use the shared graph."
+    : "Give this clip its own FX graph (copies the current graph).";
   // Trim handles sit on each edge; the drag layer hit-tests data-media-clip-handle
   // before the clip body so grabbing an edge trims instead of moving.
   return `
@@ -110,6 +118,7 @@ function renderClip(clip, trackId, composition, duration, fps, selectedClipId) {
     >
       <span class="media-clip-handle media-clip-handle--start" data-media-clip-handle="start" aria-hidden="true"></span>
       <span class="media-clip-label">${escapeHtml(label)}</span>
+      <button type="button" class="media-clip-fx${hasFx ? " is-active" : ""}" data-media-clip-fx title="${escapeHtml(fxTitle)}" aria-label="Toggle clip FX graph" aria-pressed="${hasFx ? "true" : "false"}">FX</button>
       <span class="media-clip-handle media-clip-handle--end" data-media-clip-handle="end" aria-hidden="true"></span>
     </div>
   `;
