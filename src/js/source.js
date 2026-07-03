@@ -14,7 +14,7 @@ import {
   timeToFrame,
   timelineFrameRate,
 } from "./timeline.js";
-import { selectedPath } from "./tauri-compat.js";
+import { selectedPath, tauriErrorMessage, tauriInvoke } from "./tauri-compat.js";
 import { listenWithDispose } from "./ui/lifecycle.js";
 
 const FRAME_CACHE_TARGET_BYTES = 150_000_000;
@@ -24,11 +24,14 @@ let frameCacheCap = FRAME_CACHE_MIN;
 let frameCacheStamp = 0;
 
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif"];
+const EXR_EXTENSIONS = ["exr"];
 const VIDEO_EXTENSIONS = ["mp4", "mov", "webm", "m4v", "mkv", "avi"];
-const MEDIA_EXTENSIONS = [...VIDEO_EXTENSIONS, ...IMAGE_EXTENSIONS];
+const MEDIA_EXTENSIONS = [...VIDEO_EXTENSIONS, ...IMAGE_EXTENSIONS, ...EXR_EXTENSIONS];
 const PREVIEW_BG = "#0f0f12";
 const PLAYBACK_LOOP_EPSILON = 1 / 120;
 const COMPARE_MODES = new Set(["processed", "split", "side-by-side"]);
+const DEFAULT_EXR_EXPOSURE = 0;
+const DEFAULT_EXR_WHITEPOINT = 400;
 
 let video;
 let canvas;
@@ -60,12 +63,13 @@ let previewSourceCtx = null;
 const PLAYBACK_PREVIEW_SCALE = 0.5;
 
 class ImageMediaMock extends EventTarget {
-  constructor(img) {
+  constructor(img, options = {}) {
     super();
     this.img = img;
-    this.videoWidth = img.naturalWidth;
-    this.videoHeight = img.naturalHeight;
-    this.duration = 10;
+    this.videoWidth = options.width ?? img.naturalWidth ?? img.width ?? 0;
+    this.videoHeight = options.height ?? img.naturalHeight ?? img.height ?? 0;
+    this.duration = options.duration ?? 10;
+    this._src = options.src ?? img.src ?? "";
     this._currentTime = 0;
     this.paused = true;
     this.ended = false;
@@ -85,8 +89,11 @@ class ImageMediaMock extends EventTarget {
   
   get drawable() { return this.img; }
   
-  get src() { return this.img.src; }
-  set src(val) { this.img.src = val; }
+  get src() { return this._src || this.img.src || ""; }
+  set src(val) {
+    this._src = val;
+    if ("src" in this.img) this.img.src = val;
+  }
 
   play() {
     if (!this.paused) return Promise.resolve();
@@ -134,6 +141,116 @@ class ImageMediaMock extends EventTarget {
     }
     this.dispatchEvent(new Event("timeupdate"));
     this._tickRaf = requestAnimationFrame(() => this._tick());
+  }
+}
+
+class ExrSequenceMediaMock extends ImageMediaMock {
+  constructor(config) {
+    const {
+      frames,
+      firstFrame,
+      metadata,
+      fps = 30,
+      path = "",
+      selectedIndex = 0,
+    } = config;
+    const firstCanvas = nativeFrameToCanvas(firstFrame);
+    if (!firstCanvas) throw new Error("EXR decoder returned an invalid frame");
+    const safeFrames = Array.isArray(frames) && frames.length > 0 ? frames : [path];
+    const sourceFps = clampFps(fps);
+    const exrMetadata = metadata ?? normalizeExrMetadata(firstFrame);
+    const initialPass = exrMetadata.selectedPass ?? exrMetadata.passes[0] ?? null;
+    const initialPassId = initialPass?.id ?? "auto";
+    const initialToneKey = exrToneKey(resolveExrSourceParams());
+    const initialFrameIndex = clamp(Math.round(Number(selectedIndex) || 0), 0, safeFrames.length - 1);
+    super(firstCanvas, {
+      src: path || safeFrames[0],
+      width: firstCanvas.width,
+      height: firstCanvas.height,
+      duration: safeFrames.length > 1 ? safeFrames.length / sourceFps : 10,
+    });
+    this.frames = safeFrames;
+    this.exrMetadata = exrMetadata;
+    this.sourceFps = sourceFps;
+    this.currentFrameIndex = initialFrameIndex;
+    this.currentPassId = initialPassId;
+    this.currentToneKey = initialToneKey;
+    this.currentFrameCacheKey = this.cacheKey(initialFrameIndex, initialPassId, initialToneKey);
+    this.frameCanvases = new Map([[this.currentFrameCacheKey, firstCanvas]]);
+    if (this.currentFrameIndex > 0) {
+      this._currentTime = this.currentFrameIndex / this.sourceFps;
+    }
+  }
+
+  get drawable() {
+    return this.frameCanvases.get(this.currentFrameCacheKey) ?? this.img;
+  }
+
+  async prepareFrame(timeSeconds) {
+    const frameIndex = this.frameIndexAtTime(timeSeconds);
+    const params = resolveExrSourceParams();
+    const pass = this.resolvePass(params);
+    const passId = pass?.id ?? "auto";
+    const toneKey = exrToneKey(params);
+    const cacheKey = this.cacheKey(frameIndex, passId, toneKey);
+    if (this.frameCanvases.has(cacheKey)) {
+      this.currentFrameIndex = frameIndex;
+      this.currentPassId = passId;
+      this.currentToneKey = toneKey;
+      this.currentFrameCacheKey = cacheKey;
+      this.img = this.frameCanvases.get(cacheKey);
+      return true;
+    }
+
+    const invoke = tauriInvoke();
+    if (!invoke) return false;
+    const frame = await invoke("decode_exr_frame", {
+      path: this.frames[frameIndex],
+      selection: exrSelectionForPass(pass, params),
+    });
+    const canvasFrame = nativeFrameToCanvas(frame);
+    if (!canvasFrame) return false;
+
+    this.rememberFrame(cacheKey, canvasFrame);
+    this.currentFrameIndex = frameIndex;
+    this.currentPassId = passId;
+    this.currentToneKey = toneKey;
+    this.currentFrameCacheKey = cacheKey;
+    this.img = canvasFrame;
+    this.videoWidth = canvasFrame.width;
+    this.videoHeight = canvasFrame.height;
+    return true;
+  }
+
+  frameIndexAtTime(timeSeconds) {
+    if (this.frames.length <= 1) return 0;
+    return clamp(Math.floor((Number(timeSeconds) || 0) * this.sourceFps), 0, this.frames.length - 1);
+  }
+
+  sourceFrameKey(timeSeconds) {
+    return `exr:${this.frameIndexAtTime(timeSeconds)}:${this.currentPassId}:${this.currentToneKey}`;
+  }
+
+  cacheKey(frameIndex, passId, toneKey) {
+    return `${frameIndex}:${passId || "auto"}:${toneKey}`;
+  }
+
+  resolvePass(params = resolveExrSourceParams()) {
+    const selectedId = String(params?.exrPass ?? "auto");
+    if (selectedId && selectedId !== "auto") {
+      const match = this.exrMetadata.passes.find((pass) => pass.id === selectedId);
+      if (match) return match;
+    }
+    return this.exrMetadata.selectedPass ?? this.exrMetadata.passes[0] ?? null;
+  }
+
+  rememberFrame(cacheKey, canvasFrame) {
+    this.frameCanvases.set(cacheKey, canvasFrame);
+    while (this.frameCanvases.size > FRAME_CACHE_MIN) {
+      const oldest = this.frameCanvases.keys().next().value;
+      if (oldest === cacheKey) break;
+      this.frameCanvases.delete(oldest);
+    }
   }
 }
 
@@ -186,18 +303,88 @@ export async function openSource() {
 export async function openSourcePath(path, options = {}) {
   const tauri = window.__TAURI__;
   if (!tauri || !path) return;
-  const src = tauri.core.convertFileSrc(path);
-  
+
   const ext = path.split(".").pop()?.toLowerCase();
+  const isExr = ext ? EXR_EXTENSIONS.includes(ext) : false;
+  if (isExr) {
+    await loadExrSource(path, options);
+    return;
+  }
+
+  const src = tauri.core.convertFileSrc(path);
   const isImage = ext ? IMAGE_EXTENSIONS.includes(ext) : false;
 
   await loadMedia(src, path, isImage, options);
 }
 
+async function loadExrSource(path, options = {}) {
+  const invoke = tauriInvoke();
+  if (!invoke) return;
+
+  let sequence;
+  try {
+    sequence = await invoke("detect_exr_sequence", { path });
+  } catch (error) {
+    console.error("[open-source] EXR sequence detection failed", tauriErrorMessage(error));
+    return;
+  }
+
+  const frames = Array.isArray(sequence?.frames) && sequence.frames.length > 0 ? sequence.frames : [path];
+  const selectedIndex = clamp(Math.round(Number(sequence?.selectedIndex) || 0), 0, frames.length - 1);
+  const firstPath = frames[selectedIndex] ?? frames[0] ?? path;
+
+  let frame;
+  try {
+    frame = await invoke("decode_exr_frame", { path: firstPath, selection: null });
+  } catch (error) {
+    console.error("[open-source] EXR decode failed", tauriErrorMessage(error));
+    return;
+  }
+
+  const exrMetadata = normalizeExrMetadata(frame);
+  let media;
+  try {
+    media = new ExrSequenceMediaMock({
+      path,
+      frames,
+      firstFrame: frame,
+      metadata: exrMetadata,
+      selectedIndex,
+      fps: options.fps ?? 30,
+    });
+  } catch (error) {
+    console.error("[open-source] EXR decode returned an invalid frame", error);
+    return;
+  }
+
+  await loadMedia("", path, true, {
+    ...options,
+    mediaMock: media,
+    typeLabel: frames.length > 1 ? "EXR Sequence" : "EXR",
+    sourcePatch: {
+      mediaKind: "exr",
+      exrLayers: exrMetadata.layers,
+      exrPasses: exrMetadata.passes,
+      exrSelectedPass: exrMetadata.selectedPass,
+      exrPattern: sequence?.pattern ?? null,
+    },
+  });
+}
+
 async function loadMedia(src, path, isImage, options = {}) {
-  const { autoplay = false } = options;
+  const {
+    autoplay = false,
+    mediaMock = null,
+    sourcePatch = null,
+    typeLabel = isImage ? "Image" : "Video",
+  } = options;
   
-  if (isImage) {
+  if (mediaMock) {
+    if (video && video instanceof HTMLVideoElement) {
+      try { video.pause(); } catch {}
+    }
+    video = mediaMock;
+  } else if (isImage) {
     if (video && video instanceof HTMLVideoElement) {
       try { video.pause(); } catch {}
     }
@@ -208,7 +395,7 @@ async function loadMedia(src, path, isImage, options = {}) {
       img.onload = resolve;
       img.onerror = reject;
     });
-    video = new ImageMediaMock(img);
+    video = new ImageMediaMock(img, { src });
   } else {
     if (video && !(video instanceof HTMLVideoElement)) {
       video.pause();
@@ -244,7 +431,7 @@ async function loadMedia(src, path, isImage, options = {}) {
   outputSplitCanvas?.classList.remove("hidden");
   document.getElementById("emptyState")?.classList.add("hidden");
 
-  populateReadout(v, path, isImage);
+  populateReadout(v, path, typeLabel);
   wireVideoEvents(v);
   ensureBootGraph();
 
@@ -257,6 +444,12 @@ async function loadMedia(src, path, isImage, options = {}) {
     fps: sourceFps,
     videoWidth: v.videoWidth,
     videoHeight: v.videoHeight,
+    mediaKind: isImage ? "image" : "video",
+    exrLayers: [],
+    exrPasses: [],
+    exrSelectedPass: null,
+    exrPattern: null,
+    ...(sourcePatch ?? {}),
   });
   dispatch("timeline", { duration: v.duration, fps: sourceFps });
   applyPlaybackSpeed(v);
@@ -331,6 +524,11 @@ export function clearSource() {
     fps: 30,
     videoWidth: 0,
     videoHeight: 0,
+    mediaKind: null,
+    exrLayers: [],
+    exrPasses: [],
+    exrSelectedPass: null,
+    exrPattern: null,
   });
   dispatch("playback", {
     playing: false,
@@ -555,6 +753,7 @@ function wireVideoEvents(v) {
 
 // Detect native FPS via requestVideoFrameCallback. Falls back to 30 if unsupported.
 async function detectSourceFps(v) {
+  if (Number.isFinite(v?.sourceFps)) return clampFps(v.sourceFps);
   if (typeof v.requestVideoFrameCallback !== "function") return 30;
   return new Promise((resolve) => {
     let frames = 0;
@@ -709,6 +908,91 @@ function pickSupportedMediaPath(paths) {
 function isMediaPath(path) {
   const ext = path.split(".").pop()?.toLowerCase();
   return Boolean(ext && MEDIA_EXTENSIONS.includes(ext));
+}
+
+function nativeFrameToCanvas(frame) {
+  if (!frame?.width || !frame?.height || !frame?.pixels) return null;
+  const exrCanvas = document.createElement("canvas");
+  exrCanvas.width = frame.width;
+  exrCanvas.height = frame.height;
+  const exrCtx = exrCanvas.getContext("2d", { alpha: false, willReadFrequently: true });
+  if (!exrCtx) return null;
+
+  const pixels = new Uint8ClampedArray(frame.pixels);
+  exrCtx.putImageData(new ImageData(pixels, frame.width, frame.height), 0, 0);
+  return exrCanvas;
+}
+
+function normalizeExrMetadata(frame) {
+  const rawLayers = Array.isArray(frame?.layers) ? frame.layers : [];
+  const layers = rawLayers.map((layer, layerIndex) => {
+    const layerLabel = String(layer?.label || `Layer ${layerIndex + 1}`);
+    const layerId = String(layer?.id ?? layerIndex);
+    const passes = Array.isArray(layer?.passes)
+      ? layer.passes.map((pass) => normalizeExrPass(pass, layerId, layerLabel))
+      : [];
+    return {
+      id: layerId,
+      label: layerLabel,
+      width: Number(layer?.width) || Number(frame?.width) || 0,
+      height: Number(layer?.height) || Number(frame?.height) || 0,
+      channels: Array.isArray(layer?.channels) ? layer.channels.map(String) : [],
+      passes,
+    };
+  });
+  const passes = layers.flatMap((layer) =>
+    layer.passes.map((pass) => ({
+      ...pass,
+      displayLabel: layers.length > 1 ? `${layer.label} / ${pass.label}` : pass.label,
+    }))
+  );
+  const selectedPass = frame?.selectedPass
+    ? normalizeExrPass(frame.selectedPass)
+    : passes[0] ?? null;
+  return { layers, passes, selectedPass };
+}
+
+function normalizeExrPass(pass, fallbackLayer = "0", fallbackLayerLabel = "Main") {
+  const label = String(pass?.label || "RGBA");
+  return {
+    id: String(pass?.id || `${fallbackLayer}:${label}`),
+    label,
+    displayLabel: String(pass?.displayLabel || (fallbackLayerLabel === "Main" ? label : `${fallbackLayerLabel} / ${label}`)),
+    layer: String(pass?.layer ?? fallbackLayer),
+    red: pass?.red ? String(pass.red) : null,
+    green: pass?.green ? String(pass.green) : null,
+    blue: pass?.blue ? String(pass.blue) : null,
+    alpha: pass?.alpha ? String(pass.alpha) : null,
+  };
+}
+
+function resolveExrSourceParams() {
+  return getState().graph.nodes.find((node) => node.type === "source")?.params ?? {};
+}
+
+function exrToneKey(params = {}) {
+  return `e${normalizeExrExposure(params)}:w${normalizeExrWhitepoint(params)}`;
+}
+
+function normalizeExrExposure(params = {}) {
+  return clamp(Number(params.exrExposure ?? DEFAULT_EXR_EXPOSURE) || DEFAULT_EXR_EXPOSURE, -400, 400);
+}
+
+function normalizeExrWhitepoint(params = {}) {
+  return clamp(Number(params.exrWhitepoint ?? DEFAULT_EXR_WHITEPOINT) || DEFAULT_EXR_WHITEPOINT, 10, 10000);
+}
+
+function exrSelectionForPass(pass, params = {}) {
+  if (!pass) return null;
+  return {
+    layer: pass.layer,
+    red: pass.red,
+    green: pass.green,
+    blue: pass.blue,
+    alpha: pass.alpha,
+    exposure: normalizeExrExposure(params),
+    whitepoint: normalizeExrWhitepoint(params),
+  };
 }
 
 // Transport API ----------------------------------------------------
@@ -1020,6 +1304,8 @@ async function renderCurrentFrame(options = {}) {
 
   const currentRenderVersion = ++renderVersion;
   const currentSourceToken = sourceToken;
+  if (!(await prepareSourceFrame(v))) return;
+  if (isStaleRender(currentRenderVersion, currentSourceToken)) return;
   ensureFrameBuffers(v.videoWidth, v.videoHeight);
   drawSourceFrame(v);
 
@@ -1119,6 +1405,16 @@ function requestRenderCurrentFrame() {
   void renderCurrentFrame().catch((error) => {
     console.error("[source] render failed", error);
   });
+}
+
+async function prepareSourceFrame(v) {
+  if (typeof v?.prepareFrame !== "function") return true;
+  try {
+    return await v.prepareFrame(Number.isFinite(v.currentTime) ? v.currentTime : 0);
+  } catch (error) {
+    console.error("[source] frame decode failed", error);
+    return false;
+  }
 }
 
 function isStaleRender(currentRenderVersion, currentSourceToken) {
@@ -1311,6 +1607,9 @@ function sourceFrameKey(v) {
   if (!v?.src || !Number.isFinite(v.currentTime)) return null;
   const fps = getState().source.sourceFps || 30;
   if (!fps) return null;
+  if (typeof v.sourceFrameKey === "function") {
+    return `${frameCacheStamp}|${v.sourceFrameKey(v.currentTime, fps)}`;
+  }
   return `${frameCacheStamp}|${timeToFrame(v.currentTime, fps)}`;
 }
 
@@ -1577,8 +1876,8 @@ function setPlayerControlsEnabled(enabled) {
   });
 }
 
-function populateReadout(v, path, isImage = false) {
-  setReadout("type", isImage ? "Image" : "Video");
+function populateReadout(v, path, typeLabel = "Video") {
+  setReadout("type", typeLabel);
   setReadout("resolution", `${v.videoWidth}×${v.videoHeight}`);
   setReadout("duration", formatTime(v.duration));
   setReadout("missing", "—");

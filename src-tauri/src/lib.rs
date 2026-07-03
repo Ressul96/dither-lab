@@ -1,5 +1,6 @@
 pub mod engine;
 
+use engine::exr::{decode_exr_frame, detect_exr_sequence};
 use engine::frame::native_render_graph;
 use engine::gpu::GpuRenderState;
 use engine::video_export::{
@@ -30,6 +31,8 @@ pub fn run() {
         .on_menu_event(on_menu_event)
         .invoke_handler(tauri::generate_handler![
             native_render_graph,
+            decode_exr_frame,
+            detect_exr_sequence,
             ffmpeg_check_available,
             ffmpeg_start_encode,
             ffmpeg_write_frame,

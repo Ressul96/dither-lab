@@ -1,12 +1,12 @@
 # Dither Lab — İyileştirme Yol Haritası
 
-**Tarih:** 2026-05-23 (M.1 / M.2 / M.4 phase 1+2+3+4 + player bonus / V.1 closure güncellemesi)
+**Tarih:** 2026-07-02 (EXR source/pass/tonemap + Faz D #1/F22 closure güncellemesi)
 **Girdiler:** [docs/audit/2026-05-18-code-audit.md](2026-05-18-code-audit.md) + [docs/antigravityauditreport.md](../antigravityauditreport.md)
 **Tip:** Audit raporu değil, uygulanabilir faz planı. Her faz "amaç → görev → dokunulacak dosya → başarı kriteri" biçiminde.
 
 > İki kaynak rapordaki bulgular kesişiyor. Bu doküman; Antigravity raporunun mantıklı maddelerini alır, 2026-05-18 auditindeki henüz kapatılmamış maddelerle birleştirir, son commit'lerde halledilenleri ayırır.
 >
-> **2026-05-23 notu:** Faz A-G sonrası kalan büyük mimari borçlar (M.1, M.2, M.4) + parity riski (V.1) Claude + Codex paralel iki-agent oturumunda kapandı. Faz D #2/#3, Faz E-equivalent (`graph-shell.js` split + `player.js` split + `innerHTML` migrasyonu) ve Faz A komple closure tamamlanmış sayılır. Faz D #1 (renderFrame async disiplin) ile S.1 EXR scope kararı hâlâ açık.
+> **2026-07-02 notu:** Faz A-G sonrası kalan büyük mimari borçlar (M.1, M.2, M.4) + parity riski (V.1) kapalı kalıyor. EXR scope içeride kararıyla source import, numbered sequence detect, multi-layer/pass selector ve source-level Exposure / White Point tonemap çalışma ağacında tamamlandı. F22 group in/out tail yanlış açık kalmıştı; `bb61055` / F24 virtual I/O proxy nodes ile zaten kapalı. Faz D #1 de mevcut source/export kontratıyla kapalı: export render awaited, preview export sırasında guard'lı, worker commit'leri token guard'lı, sync reader'lar side-effect'siz.
 
 ---
 
@@ -44,6 +44,9 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
 | **Faz D #2** Sync canvas readers no longer fire-and-forget render (audit'in flagledği export race fix) | `624f45a` |
 | **Faz A komple** Her 6 madde de kapanmış — detay aşağıda | `a6abe0d Mark Faz A entirely closed in audit.md` |
 | **Pre-existing dead import cleanup** Yalnız orphan import symbol'ları temizlendi; exports/private dead code'a dokunulmadı | `a8aa1b2`, `2771642` |
+| **F22 tail** group input/output node action | `bb61055` / F24 virtual I/O proxy nodes; çalışma ağacında group proxy card'ları + Open Group/Ungroup action'ları mevcut |
+| **Faz D #1** `renderCurrentFrame` async discipline | 2026-07-02 doğrulaması — export awaited render path + export guard + worker/source token guard + side-effect'siz sync readers |
+| **EXR source/pass/tonemap (E1.1-E1.4)** Rust EXR decoder + `.exr` picker/drop + numbered sequence detect + pass selector + Exposure/White Point tonemap | 2026-07-02 çalışma ağacı |
 
 ---
 
@@ -166,10 +169,9 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
 
 ### Görevler
 
-1. **`renderCurrentFrame` consistent promise dönüşü**
-   - Sorun: `async` ama bazı çağrılarda `await` edilmiyor → fire-and-forget'ler renderVersion'ı geçtikten sonra `processedCanvas`'ı ezebiliyor.
-   - Yapılacak: Tüm çağrı yerlerini denetle, ya `await` ya da explicit `.catch(noop)` + token guard. Worker yolu için de `renderVersion`/`sourceToken` epoch'unu native yoldakiyle aynı şekilde kontrol et.
-   - Dosyalar: [src/js/source.js:966](../../src/js/source.js#L966), [src/js/source.js:1046](../../src/js/source.js#L1046).
+1. **`renderCurrentFrame` consistent promise dönüşü** — ✅ **Tamamlandı / doğrulandı 2026-07-02**
+   - Çözüm: Export yolu `seekForExport` içinde `await renderCurrentFrame({ forExport: true })` kullanıyor; `renderCurrentFrame` export session aktifken preview kaynaklı çağrıları baştan döndürüyor. Worker sonucu `renderVersion` + `sourceToken` guard'ından geçmeden commit etmiyor. Sync reader'lar da render tetiklemeyi bıraktığı için export await noktaları ile encoder read arasında fire-and-forget overwrite penceresi kalmıyor.
+   - Dosyalar: [src/js/source.js](../../src/js/source.js).
 
 2. **`getCurrentExportFrameCanvas` / `hasCurrentDitherFrame` senkron read API** — ✅ **Tamamlandı 2026-05-23**
    - Sorun: `renderCurrentFrame()` await edilmeden çağrılıyordu; export session dışında stale canvas dönüş riski vardı.
@@ -190,14 +192,11 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
 ### Görevler
 
 1. **EXR Sequence desteği**
-   - Sorun: Spec'te "EXR sequence" desteği yazılı, [src-tauri/Cargo.toml](../../src-tauri/Cargo.toml) içinde `exr` veya `image` crate'i yok; UI dosya filtresinde ([src/js/source.js:25-27](../../src/js/source.js#L25)) `.exr` ekli değil.
-   - Yapılacak (büyük iş — kendi içinde alt fazlara bölünebilir):
-     - E1.1: `exr = "1.x"` crate'i ekle, Rust tarafında `decode_exr_frame(path) -> RgbaF32 + channels[]` Tauri command'ı.
-     - E1.2: UI dosya filtresine `exr`; sequence detector'a EXR numerik pattern (`name.0001.exr`) ekle.
-     - E1.3: Inspector'da kanal/pass seçici (multi-layer EXR'da R/G/B yanında diffuse/specular/depth pass'leri).
-     - E1.4: HDR → display tonemap için scene-grade veya dedicated tonemap node'u (preview için).
+   - Durum: **Tamamlandı 2026-07-02 çalışma ağacı, v1 canvas pipeline kapsamıyla.** `exr` crate eklendi; Rust `decode_exr_frame` / `detect_exr_sequence` command'ları register edildi; UI dosya filtresi `.exr` kabul ediyor; numbered sibling sequence tespiti ve lazy frame decode frontend'e bağlandı. Rust tarafı flat layer/channel metadata'sı çıkarıyor, RGB suffix gruplarını ve tek kanallı pass'leri listeliyor. Source inspector'da EXR Pass, Exposure ve White Point kontrolleri var; selected pass + tone ayarları Rust decode'a gidiyor.
+   - Kalan ürün notu:
+     - True float framebuffer, OCIO/display transform ve ileri color-management/look-dev kontrolleri v1 dışı ileri seviye ürün işi olarak değerlendirilir.
    - Başarı kriteri: 16-bit half-float EXR sequence açılıyor, kanal seçilebiliyor, preview/export aynı kareyi üretiyor.
-   - **Not:** Bu faz docs/spec/product.md'yi de güncellemeli; eğer EXR scope dışına çıkarılırsa CLAUDE.md de güncellenmeli.
+   - **Not:** EXR scope artık içeride; product.md ve CLAUDE.md EXR referansları korunur.
 
 2. **Ses (audio) desteği**
    - Sorun: Spec "AAC", "Opus", "orijinal sesi koruma" der; ne FFmpeg komutunda ne export sheet UI'da var. Tüm export'lar silent.
@@ -287,7 +286,7 @@ Eski audit'in aşağıdaki kalemleri artık kodda çözüldü; bu plana **eklemi
 2. **Faz B** (3-5 gün) — UI bug'ları görünür, küçük PR'lar, kolay kazanım.
 3. **Faz C** (1-2 hafta) — Rust stability; uzun export'larda invisible failures.
 4. **Faz D** (1 hafta) — Faz A #2'nin altyapısı; luma drift bağımsız bir PR.
-5. **Faz E** (her görev kendi başına proje) — EXR ve audio ürün vaadi; iptal cleanup hızlı.
+5. **Faz E** (her görev kendi başına proje) — EXR v1 source/pass/tonemap kapsamı kapandı; audio ürün vaadi ve image sequence iptal cleanup ayrı işler olarak kalır.
 6. **Faz F** (refactor, sürekli) — Diğer fazlarda touch edilen dosyalar split fırsatı verir; ayrı PR'lar.
 7. **Faz G** — Düşük öncelik, fırsat buldukça.
 

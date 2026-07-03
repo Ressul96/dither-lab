@@ -1,6 +1,6 @@
 # Dither Lab — Code Quality Audit
 
-**Date:** 2026-05-18 (status update appended 2026-05-23)
+**Date:** 2026-05-18 (status updates appended 2026-05-23, 2026-07-02)
 **Scope:** 52 source files — 35 JS, 10 Rust, 3 CSS, 1 HTML, 3 config
 **Method:** 7 parallel review agents covering logical module groups, single shared template per file (role / quality / issues / suggestions).
 **Project guardrails respected by suggestions:** vanilla JS only, no build step, preview/export parity, seed determinism, local-first.
@@ -13,7 +13,7 @@
 
 Several of the audit's headline findings were closed in a Claude + Codex parallel two-agent session. Findings below are **preserved verbatim for historical reference** — they describe the state of the codebase on 2026-05-18, not today. Specifically:
 
-| Audit finding | Status (2026-05-23) |
+| Audit finding | Status |
 |---|---|
 | `src/js/ui/graph-shell.js` — 7202 lines / ~150 functions | **Resolved (M.1).** Split to 526 lines + 13 new UI modules. 22 atomic commits, final `6aa5552`. |
 | `src/js/ui/player.js` — 2930 lines / 6 drag-state singletons | **Resolved (M.2).** Split to 1111 lines + 14 new player-* modules. Codex, final `1c3c3a5`. |
@@ -24,9 +24,12 @@ Several of the audit's headline findings were closed in a Claude + Codex paralle
 | A.1 keyboard alternatives for gizmo/playhead/bezier | **Resolved 2026-05-21** (Codex working tree). |
 | A.2 dispose registry for ResizeObserver / global listeners | **Resolved** (`lifecycle.js`). |
 | F22 UI polish backlog (splash / slider redesign / timeline minimise / default pan) | **Resolved 2026-05-23** (Codex: `6018fc5`, `bc14451`, `e43a75e`, `2a09cf9`, `a5b242d`). |
+| F22 tail — group in/out node action | **Resolved.** This was already covered by `bb61055` / F24 virtual I/O proxy nodes; current UI has group input/output proxy cards plus Open Group/Ungroup actions. |
 | M.5 deep-clone reduction in `graph.js` | **Resolved** (earlier session). |
+| Faz D #1 — `renderCurrentFrame` async discipline | **Resolved by current source contract.** Export uses awaited `renderCurrentFrame({ forExport: true })` through `seekForExport`; preview renders are blocked while export is active; worker commits are guarded by `renderVersion` + `sourceToken`; sync canvas readers no longer trigger fire-and-forget renders. |
+| S.1 EXR sequence scope + import/pass/tonemap | **Resolved for v1 working-tree scope 2026-07-02.** Rust decode/detect commands, `.exr` picker/drop, numbered sibling detection, multi-layer/channel pass inference, Source inspector pass dropdown, and source-level Exposure / White Point tonemap controls are in place. |
 
-Open audit items as of 2026-05-23: Faz D #1/#2 (renderFrame async discipline), S.1 EXR sequence scope decision, F22 tail (group in/out node action, file drag-drop already implemented — manual test pending), M.4 phase 2 bonus (player-tier `innerHTML` → `setInnerHtml` migration).
+Open audit items as of 2026-07-02: none in the live [next-phases.md](next-phases.md) tracker. Broader product backlog items, such as audio export, remain in [audit.md](audit.md) as separate future work rather than unfinished audit phases.
 
 See [next-phases.md](next-phases.md) for the live "remaining work" tracker and [audit.md](audit.md) Section 0 for the full closure ledger.
 

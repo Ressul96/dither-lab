@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod error;
+pub mod exr;
 pub mod frame;
 pub mod gpu;
 pub mod lens_flare;

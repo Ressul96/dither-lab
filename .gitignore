@@ -33,3 +33,6 @@ src-tauri/gen
 
 # Dither Lab project atomic writes
 *.ditherlab.tmp
+
+# test videosu (buyuk, repoya girmesin)
+smoke/*.mp4

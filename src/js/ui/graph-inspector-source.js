@@ -5,6 +5,7 @@
 // same building blocks promoted to first-class graph nodes.
 
 import { getSelectedNode } from "../graph.js";
+import { getState } from "../state.js";
 import {
   renderRangeField,
   renderSelectField,
@@ -21,6 +22,7 @@ export function renderSourceNode() {
   const invert = String(params.invert ?? "off");
   const invertChannels = String(params.invertChannels ?? "rgb");
   return `
+    ${renderExrSourceSection(params)}
     <section class="node-panel-section node-panel-section--titled">
       <header class="node-panel-section-title">Adjust</header>
       ${renderRangeField("Brightness", "brightness", params.brightness ?? 0, -100, 100, formatSignedValue(params.brightness ?? 0))}
@@ -56,6 +58,30 @@ export function renderSourceNode() {
         ["gb", "Green + Blue"],
         ["rb", "Red + Blue"],
       ])}
+    </section>
+  `;
+}
+
+function renderExrSourceSection(params) {
+  const { source } = getState();
+  const passes = Array.isArray(source.exrPasses) ? source.exrPasses : [];
+  if (source.mediaKind !== "exr" || passes.length === 0) return "";
+
+  const selected = passes.some((pass) => pass.id === params.exrPass)
+    ? String(params.exrPass)
+    : "auto";
+  const autoLabel = source.exrSelectedPass?.displayLabel || source.exrSelectedPass?.label || "Detected";
+  const options = [
+    ["auto", `Auto (${autoLabel})`],
+    ...passes.map((pass) => [String(pass.id), String(pass.displayLabel || pass.label || pass.id)]),
+  ];
+
+  return `
+    <section class="node-panel-section node-panel-section--titled">
+      <header class="node-panel-section-title">EXR</header>
+      ${renderSelectField("Pass", "exrPass", selected, options)}
+      ${renderRangeField("Exposure", "exrExposure", params.exrExposure ?? 0, -400, 400, formatSignedStops(params.exrExposure ?? 0))}
+      ${renderRangeField("White Point", "exrWhitepoint", params.exrWhitepoint ?? 400, 10, 1600, `${params.exrWhitepoint ?? 400}%`)}
     </section>
   `;
 }

@@ -40,6 +40,9 @@ const NODE_DEFINITIONS = Object.freeze({
       bwMode: "off",
       invert: "off",
       invertChannels: "rgb",
+      exrPass: "auto",
+      exrExposure: 0,
+      exrWhitepoint: 400,
     },
   },
   "mesh-gradient": {

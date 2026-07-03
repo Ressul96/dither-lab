@@ -16,6 +16,11 @@ const state = {
     fps: 30,
     videoWidth: 0,
     videoHeight: 0,
+    mediaKind: null,
+    exrLayers: [],
+    exrPasses: [],
+    exrSelectedPass: null,
+    exrPattern: null,
   },
   playback: {
     playing: false,
