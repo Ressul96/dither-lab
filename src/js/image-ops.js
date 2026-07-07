@@ -26,6 +26,7 @@ export { applyBlurNode } from "./image-ops/blur.js";
 export { applyChromaticAberrationNode } from "./image-ops/chroma-aberration.js";
 export { applyDisplaceNode } from "./image-ops/displace.js";
 export { applyDitherNode } from "./image-ops/dither.js";
+export { applyFieldMapNode } from "./image-ops/field-map.js";
 export { applyDuotoneNode } from "./image-ops/duotone.js";
 export { applyCropNode, applyFlipNode, applyInvertNode } from "./image-ops/geometry.js";
 export { applyGlareNode } from "./image-ops/glare.js";

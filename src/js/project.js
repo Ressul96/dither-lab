@@ -1,14 +1,20 @@
 import { DEFAULT_GRAPH_VIEW, dispatch, getState } from "./state.js";
 import {
   createBootGraph,
+  flushEditableClipGraph,
+  getGlobalGraph,
   getViewerOutputFps,
   replaceGraph,
+  resetClipGraphScope,
   resolveGraphParentId,
   serializeGraph,
 } from "./graph.js";
 import { clearSource, openSourcePath, pausePlayback, seek, setFps } from "./source.js";
 import { applyCustomPalettes, serializeCustomPalettes } from "./palettes.js";
+import { applyTokens, serializeTokens } from "./tokens.js";
+import { applyClipGraphs, serializeClipGraphs } from "./clip-graphs.js";
 import { createDefaultTimeline, serializeTimeline } from "./timeline.js";
+import { isEmptyComposition, normalizeComposition, serializeComposition } from "./composition.js";
 import { selectedPath, tauriRemoveFile, tauriRenameFn } from "./tauri-compat.js";
 
 let currentProjectPath = "";
@@ -18,8 +24,11 @@ const MAX_RECENT_PROJECTS = 8;
 
 export function newProject() {
   currentProjectPath = "";
+  resetClipGraphScope();
   clearSource();
   applyCustomPalettes([]);
+  applyTokens([]);
+  applyClipGraphs([]);
   replaceGraph(createBootGraph());
   dispatch("view", { compare: "processed", splitPosition: 0.5 });
   dispatch("playback", {
@@ -165,11 +174,24 @@ async function writeProjectFile(path) {
 
 function buildProjectPayload() {
   const state = getState();
+  // If a clip graph is open in the editor, flush its live edits to the registry
+  // so the save captures them (and getGlobalGraph below serialises the GLOBAL
+  // graph, not the clip-edit buffer in state.graph).
+  flushEditableClipGraph();
+  // Only persist clip graphs still referenced by a clip. Repeated pin/unpin
+  // leaves orphaned registry entries in memory (kept so undo/redo can restore a
+  // reference), but they shouldn't bloat the saved project.
+  const referencedClipGraphIds = new Set(
+    (state.composition?.tracks ?? [])
+      .flatMap((track) => track.clips ?? [])
+      .map((clip) => clip.graphId)
+      .filter(Boolean)
+  );
   return {
     version: 1,
     source: {
       path: state.source.path || "",
-      fps: getViewerOutputFps(state.graph) ?? state.source.fps,
+      fps: getViewerOutputFps(getGlobalGraph()) ?? state.source.fps,
       trimStart: state.playback.trimStart,
       trimEnd: state.playback.trimEnd,
       currentTime: state.playback.currentTime,
@@ -183,16 +205,22 @@ function buildProjectPayload() {
       zoom: state.graphView.zoom,
       panX: state.graphView.panX,
       panY: state.graphView.panY,
-      currentParentId: resolveGraphParentId(state.graph, state.graphView.currentParentId),
+      currentParentId: resolveGraphParentId(getGlobalGraph(), state.graphView.currentParentId),
     },
-    graph: serializeGraph(state.graph),
+    graph: serializeGraph(getGlobalGraph()),
     timeline: serializeTimeline(state.timeline),
+    composition: serializeComposition(state.composition),
     customPalettes: serializeCustomPalettes(),
+    tokens: serializeTokens(),
+    clipGraphs: serializeClipGraphs().filter((entry) => referencedClipGraphIds.has(entry.id)),
   };
 }
 
 async function applyProject(project) {
   validateProject(project);
+  // Drop any in-editor clip-edit scope before loading — the incoming project
+  // replaces the graph + clip registry wholesale.
+  resetClipGraphScope();
   if (project?.source?.path) {
     try {
       await openSourcePath(project.source.path, { autoplay: false });
@@ -227,6 +255,8 @@ async function applyProject(project) {
     currentParentId: project?.graphView?.currentParentId ?? DEFAULT_GRAPH_VIEW.currentParentId,
   };
   applyCustomPalettes(project?.customPalettes ?? []);
+  applyTokens(project?.tokens ?? []);
+  applyClipGraphs(project?.clipGraphs ?? []);
   dispatch(
     "timeline",
     createDefaultTimeline(project?.timeline ?? {
@@ -234,6 +264,13 @@ async function applyProject(project) {
       fps: getState().source.fps,
     })
   );
+  // Restore the saved composition AFTER openSourcePath — that call ran the
+  // single-clip migration, so a richer saved composition (multi-clip, later
+  // phases) must overwrite it here. An empty/absent saved composition leaves
+  // the migration result in place (backward compat for pre-v3 projects).
+  if (project?.composition && !isEmptyComposition(project.composition)) {
+    dispatch("composition", serializeComposition(normalizeComposition(project.composition)));
+  }
   const graph = replaceGraph(project?.graph);
   dispatch("graphView", {
     zoom: requestedGraphView.zoom,

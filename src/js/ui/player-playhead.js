@@ -1,5 +1,5 @@
 import { getState } from "../state.js";
-import { pausePlayback, seek } from "../source.js";
+import { isSimpleSingleSource, pausePlayback, seek } from "../source.js";
 import {
   durationToFrames,
   normalizeTimeline,
@@ -67,12 +67,19 @@ export function handlePlayheadKeyDown(event) {
   const fps = timelineFrameRate(normalized, source.fps);
   const direction = event.key === "ArrowLeft" ? -1 : 1;
   const multiplier = event.shiftKey ? 10 : event.altKey ? 0.1 : 1;
+  // Single-source nudges stay inside the trim range (unchanged). Multi-clip
+  // nudges span the whole composition so arrow keys can reach clips past the
+  // primary source's trim, matching stepFrame's composition-aware behaviour.
+  const simple = isSimpleSingleSource();
   const trimStart = clampTime(Number(playback.trimStart) || 0, 0, duration);
   const trimEnd = clampTime(Number(playback.trimEnd) || duration, trimStart, duration);
-  const maxTime = Math.max(trimStart, trimEnd - 1 / Math.max(1, fps));
+  const lo = simple ? trimStart : 0;
+  const hi = simple
+    ? Math.max(trimStart, trimEnd - 1 / Math.max(1, fps))
+    : Math.max(0, duration - 1 / Math.max(1, fps));
   const currentTime = Number.isFinite(Number(playback.currentTime)) ? Number(playback.currentTime) : 0;
   pausePlayback();
-  seek(clampTime(currentTime + (direction * multiplier) / Math.max(1, fps), trimStart, maxTime));
+  seek(clampTime(currentTime + (direction * multiplier) / Math.max(1, fps), lo, hi));
   return true;
 }
 

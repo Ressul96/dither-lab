@@ -6,9 +6,11 @@ import {
   getSelectedNode,
   getSelectedNodeIds,
   groupSelectedNodes,
+  pushGraphHistoryFromSnapshot,
   removeNode,
   resolveGraphParentId,
   selectNodes,
+  snapshotGraphForHistory,
   toggleNodeBypass,
   toggleNodeSolo,
   ungroupNode,
@@ -40,18 +42,22 @@ export function duplicateSelectedGraphNodes() {
 export function toggleBypassForSelectedNodes() {
   const ids = getSelectedNodeIds().filter((nodeId) => canBypassGraphNode(getNodeById(nodeId)));
   let changed = false;
+  const before = ids.length > 1 ? snapshotGraphForHistory() : null;
   for (const id of ids) {
-    changed = toggleNodeBypass(id) || changed;
+    changed = toggleNodeBypass(id, { history: ids.length <= 1 }) || changed;
   }
+  if (changed && before) pushGraphHistoryFromSnapshot(before, "Toggle bypass");
   return changed;
 }
 
 export function removeSelectedGraphNodes() {
   const ids = getSelectedNodeIds();
   let removed = false;
+  const before = ids.length > 1 ? snapshotGraphForHistory() : null;
   for (const id of ids) {
-    removed = removeNode(id) || removed;
+    removed = removeNode(id, { history: ids.length <= 1 }) || removed;
   }
+  if (removed && before) pushGraphHistoryFromSnapshot(before, "Delete nodes");
   return removed;
 }
 

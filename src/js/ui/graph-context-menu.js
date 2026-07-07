@@ -13,7 +13,9 @@ import {
   ungroupNode,
 } from "../graph.js";
 import { setCurrentGraphParent } from "./graph-breadcrumb.js";
+import { getCurrentGraphParentId } from "./graph-view-scope.js";
 import { canBypassGraphNode } from "./graph-node-policy.js";
+import { exportSelectedRecipe, importRecipeFromFile } from "../recipes.js";
 import { escapeHtml, setInnerHtml } from "./utils.js";
 
 let graphMenuEl = null;
@@ -41,6 +43,18 @@ export function initGraphContextMenu(deps) {
     const nodeAction = event.target.closest("[data-node-menu-action]");
     if (nodeAction) {
       handleGraphNodeMenuAction(nodeAction);
+      hideGraphContextMenu(clearInsertHighlight);
+      return;
+    }
+
+    const graphAction = event.target.closest("[data-graph-action]");
+    if (graphAction) {
+      if (graphAction.dataset.graphAction === "import-recipe") {
+        importRecipeFromFile({
+          position: graphMenuState?.point ?? getViewportCenterWorld(),
+          parentId: getCurrentGraphParentId(),
+        });
+      }
       hideGraphContextMenu(clearInsertHighlight);
       return;
     }
@@ -152,6 +166,9 @@ function renderGraphContextMenuContent(insertOnEdge) {
     <div class="graph-node-picker__body">
       ${groups.map(renderGraphContextMenuGroup).join("")}
     </div>
+    <div class="graph-node-picker__footer">
+      <button type="button" data-graph-action="import-recipe">Import Recipe…</button>
+    </div>
   `;
 }
 
@@ -210,6 +227,9 @@ function renderGraphNodeMenuContent(nodeId) {
   const canBypass = canBypassGraphNode(node);
   const canGroup = getGroupSelectionInfo(selectedIds).canGroup;
   const canUngroup = node.type === "group";
+  const canSaveRecipe = selectedIds
+    .map((id) => getNodeById(id))
+    .some((entry) => entry && entry.type !== "source" && entry.type !== "viewer-output" && entry.type !== "group");
   const bypassLabel = node.bypassed ? "Enable Node" : "Bypass Node";
 
   return `
@@ -221,6 +241,7 @@ function renderGraphNodeMenuContent(nodeId) {
       ${renderGraphNodeMenuButton("duplicate", "Duplicate Node", canDuplicate)}
       ${renderGraphNodeMenuButton("toggle-bypass", bypassLabel, canBypass)}
       ${renderGraphNodeMenuButton("group-selected", "Group Selected", canGroup)}
+      ${renderGraphNodeMenuButton("save-recipe", "Save as Recipe…", canSaveRecipe)}
       ${
         node.type === "group"
           ? renderGraphNodeMenuButton("open-group", "Open Group", true)

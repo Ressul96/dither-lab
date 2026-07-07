@@ -6,7 +6,7 @@ import {
   writePixel,
   isMonochromePalette,
 } from "./core.js";
-import { nearestColorInPalette } from "../palettes.js";
+import { createPaletteQuantizer } from "../palettes.js";
 
 const RGB_BIAS_RANGE = 96;
 
@@ -91,6 +91,7 @@ function runNoiseRGB(imageData, params, palette, sampleNoise) {
   const threshold = clamp(Math.round(params.threshold ?? 128), 0, 255);
   const invert = Boolean(params.invert);
   const shift = threshold - 128;
+  const quantize = createPaletteQuantizer(palette);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -109,7 +110,7 @@ function runNoiseRGB(imageData, params, palette, sampleNoise) {
       g = clamp(g, 0, 255);
       b = clamp(b, 0, 255);
 
-      const matched = nearestColorInPalette(r, g, b, palette);
+      const matched = quantize(r, g, b);
       writePixel(data, offset, matched[0], matched[1], matched[2]);
     }
   }

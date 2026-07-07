@@ -1470,11 +1470,13 @@ function getAsciiAtlas(ramp, glyphSize) {
 }
 
 function buildAsciiAtlas(ramp, glyphSize) {
-  // Worker scopes still bail here — font availability + text rasterisation
-  // aren't guaranteed inside a Worker (spec §Faz 3 open decision). When the
-  // worker adapter lands the atlas will be built on the main thread and
-  // shipped as an ImageBitmap; until then, ASCII renders main-thread only.
-  if (typeof document === "undefined") return null;
+  // Runs wherever a canvas factory exists (DOM canvas on the main thread,
+  // OffscreenCanvas in a Worker). Worker font availability is less certain than
+  // on the main thread, but the monospace stack below degrades to whatever the
+  // host ships; a missing canvas factory is the only hard stop here.
+  if (typeof document === "undefined" && typeof OffscreenCanvas === "undefined") {
+    return null;
+  }
   const size = Math.max(8, Math.round(glyphSize));
   const canvas = createProcessingCanvas(ramp.length * size, size);
   const ctx = canvas.getContext("2d", { alpha: false });
@@ -2220,6 +2222,14 @@ export function applyThresholdGpu(input, params) {
   return applyShaderPass("threshold", input, params);
 }
 
+// True when a WebGL2 renderer can be created in this scope. The render worker
+// calls this to decide whether a GPU-effect graph can run here or must fall
+// back to the main thread. Lazily probes once via getRenderer (cached after),
+// so a scope without WebGL2 pays the probe cost only on the first call.
+export function isGpuRendererAvailable() {
+  return getRenderer() != null;
+}
+
 function getRenderer() {
   if (renderer !== null) {
     if (!renderer.isDisposed?.()) return renderer;
@@ -2230,11 +2240,14 @@ function getRenderer() {
 }
 
 function createRenderer() {
-  // Same worker bail as the ASCII atlas: WebGL2 inside a Worker requires the
-  // factory's OffscreenCanvas branch, but the rest of the renderer wiring
-  // (createTexture / drawArrays) isn't wired through yet. F8.4 removes this
-  // guard once the worker adapter lands.
-  if (typeof document === "undefined") return null;
+  // The renderer is DOM-free: every surface comes from createProcessingCanvas,
+  // which returns an OffscreenCanvas in a Worker. So it runs wherever a canvas
+  // factory exists — the main thread always qualifies; a Worker needs
+  // OffscreenCanvas. With neither, bail; callers treat null as "GPU unavailable"
+  // (CPU fallback on the main thread, fallbackToMainThread in the worker).
+  if (typeof document === "undefined" && typeof OffscreenCanvas === "undefined") {
+    return null;
+  }
 
   const canvas = createProcessingCanvas(1, 1);
   const gl = canvas.getContext("webgl2", {

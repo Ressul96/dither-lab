@@ -20,6 +20,7 @@
 
 import { escapeHtml } from "./utils.js";
 import { normalizeHex } from "../color.js";
+import { isTokenRef, listTokens, resolveTokenValue, tokenIdFromRef } from "../tokens.js";
 import { pushHistory } from "../state.js";
 import { getSelectedNode } from "../graph.js";
 import { hexToHsvColor, hsvColorToHex } from "./graph-color-math.js";
@@ -91,7 +92,10 @@ export function popPickerHexSnapshot(targetId) {
 export function renderColorField(label, key, value, options = {}) {
   const safeKey = escapeHtml(key);
   const fallback = options.fallback ?? "#000000";
-  const hex = normalizeHex(value, fallback);
+  // A param may hold a literal hex or a "token:<id>" reference. Resolve the
+  // reference for display so the swatch/hex show the token's actual color.
+  const bound = isTokenRef(value);
+  const hex = normalizeHex(bound ? resolveTokenValue(value) : value, fallback);
   return `
     <div class="field color-field">
       <label>
@@ -108,6 +112,28 @@ export function renderColorField(label, key, value, options = {}) {
         target: { kind: "node-param", paramKey: key },
         inputAttrs: `data-node-param="${safeKey}" data-input-kind="color-hex"`,
       })}
+      ${renderTokenBindSelect(key, value)}
+    </div>
+  `;
+}
+
+// Compact dropdown to bind a color param to a color token. Only shown when at
+// least one token exists. "Literal" unbinds (bakes the current color back to a
+// hex). Selecting a token stores a "token:<id>" reference, resolved at render.
+function renderTokenBindSelect(key, value) {
+  const tokens = listTokens();
+  if (tokens.length === 0) return "";
+  const boundId = tokenIdFromRef(value);
+  return `
+    <div class="color-token-bind">
+      <select data-color-token-bind="${escapeHtml(key)}" aria-label="Bind ${escapeHtml(key)} to a color token">
+        <option value="" ${boundId ? "" : "selected"}>Literal</option>
+        ${tokens
+          .map(
+            (token) => `<option value="${escapeHtml(token.id)}" ${token.id === boundId ? "selected" : ""}>${escapeHtml(token.name)}</option>`
+          )
+          .join("")}
+      </select>
     </div>
   `;
 }

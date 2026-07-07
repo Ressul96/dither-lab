@@ -1278,6 +1278,18 @@ body.resizing-y * {
   cursor: default;
 }
 
+/* Exit crumb shown while editing a clip's graph — accented so the scope is
+   obvious and the way back is one click. */
+.graph-breadcrumb-exit-clip {
+  color: rgba(146, 221, 255, 0.95);
+  background: rgba(146, 221, 255, 0.12);
+}
+
+.graph-breadcrumb-exit-clip:hover {
+  background: rgba(146, 221, 255, 0.22);
+  color: rgba(146, 221, 255, 1);
+}
+
 .graph-breadcrumb-separator {
   color: var(--text-muted);
   font-size: var(--text-label);
@@ -1723,6 +1735,189 @@ body.cutting-edges * {
   gap: 10px;
 }
 
+/* Assets panel (Ship 4) */
+.asset-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.asset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.asset-empty {
+  font-size: 11px;
+  color: var(--text-dim, rgba(230, 230, 235, 0.55));
+  padding: 4px 2px;
+}
+
+.asset-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: grab;
+  user-select: none;
+}
+
+.asset-row:hover {
+  background: rgba(74, 158, 255, 0.1);
+  border-color: rgba(74, 158, 255, 0.4);
+}
+
+.asset-row:active {
+  cursor: grabbing;
+}
+
+.asset-name {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asset-meta {
+  font-size: 10px;
+  color: var(--text-dim, rgba(230, 230, 235, 0.5));
+}
+
+.asset-add-btn {
+  align-self: stretch;
+  padding: 6px 8px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+}
+
+.asset-add-btn:hover {
+  border-color: rgba(74, 158, 255, 0.6);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.token-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.token-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.token-empty {
+  font-size: 11px;
+  color: var(--text-dim, rgba(230, 230, 235, 0.55));
+  padding: 4px 2px;
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.token-row:hover {
+  border-color: rgba(74, 158, 255, 0.4);
+}
+
+.token-swatch {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-xs);
+  background: none;
+  cursor: pointer;
+}
+
+.token-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  padding: 3px 4px;
+}
+
+.token-name:hover,
+.token-name:focus {
+  border-color: rgba(255, 255, 255, 0.14);
+  outline: none;
+}
+
+.token-del {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.55);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.token-del:hover {
+  color: rgba(255, 120, 120, 0.95);
+  background: rgba(255, 90, 90, 0.12);
+}
+
+.token-add-btn {
+  align-self: stretch;
+  padding: 6px 8px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+}
+
+.token-add-btn:hover {
+  border-color: rgba(74, 158, 255, 0.6);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.color-token-bind {
+  margin-top: 4px;
+}
+
+.color-token-bind select {
+  width: 100%;
+  font-size: 11px;
+  padding: 3px 6px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-xs);
+}
+
 .node-palette-search {
   position: sticky;
   top: 0;
@@ -1982,6 +2177,22 @@ body.cutting-edges * {
   border-radius: var(--radius-xs);
   background: var(--node-family);
   box-shadow: 0 0 12px color-mix(in srgb, var(--node-family) 28%, transparent);
+}
+
+.graph-node-picker__footer {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.context-menu.graph-node-picker .graph-node-picker__footer button {
+  width: 100%;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.context-menu.graph-node-picker .graph-node-picker__footer button:hover:not(:disabled) {
+  background: var(--accent-dim);
 }
 
 .graph-node-context-menu {
@@ -2948,6 +3159,188 @@ body.cutting-edges * {
 
 .animation-track-lane:hover {
   background: rgba(255, 255, 255, 0.04);
+}
+
+/* V3 media-clip lanes (Clips view). Read-only in Ship 1: one row per media
+   track, one rectangle per clip, positioned on the shared timeline axis. */
+.media-track-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.media-track-row.is-disabled {
+  opacity: 0.45;
+}
+
+.media-track-label {
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-dim, rgba(230, 230, 235, 0.65));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.media-track-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media-track-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.media-track-opacity {
+  width: 100%;
+  height: 12px;
+  cursor: pointer;
+}
+
+.media-track-blend {
+  width: 100%;
+  font-size: 9px;
+  padding: 1px 2px;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+.media-track-add {
+  padding: 6px 0 2px 8px;
+}
+
+.media-track-add-btn {
+  font-size: 11px;
+  padding: 3px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: var(--text-dim, rgba(230, 230, 235, 0.65));
+  cursor: pointer;
+}
+
+.media-track-add-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text, #e6e6eb);
+}
+
+.media-track-lane {
+  position: relative;
+  height: 26px;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.media-clip {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  min-width: 2px;
+  box-sizing: border-box;
+  border-radius: var(--radius-sm);
+  background: rgba(74, 158, 255, 0.32);
+  border: 1px solid rgba(74, 158, 255, 0.65);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  cursor: default;
+}
+
+.media-track-row--audio .media-clip {
+  background: rgba(120, 200, 120, 0.28);
+  border-color: rgba(120, 200, 120, 0.6);
+}
+
+.media-clip.is-disabled {
+  opacity: 0.4;
+}
+
+.media-clip.is-selected {
+  border-color: rgba(146, 221, 255, 0.95);
+  box-shadow: 0 0 0 1px rgba(146, 221, 255, 0.6), 0 0 6px rgba(74, 158, 255, 0.4);
+  z-index: 2;
+}
+
+.media-clip-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  z-index: 3;
+}
+
+.media-clip-handle--start {
+  left: -1px;
+}
+
+.media-clip-handle--end {
+  right: -1px;
+}
+
+.media-clip-handle:hover {
+  background: rgba(146, 221, 255, 0.55);
+}
+
+.media-clip-label {
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.92);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* Per-clip FX-graph badge. Hidden until the clip is hovered, but always shown
+   (and highlighted) when the clip carries its own graph, so pinned clips read
+   at a glance. Sits clear of the end trim handle and above it so it stays
+   clickable. */
+.media-clip-fx {
+  position: absolute;
+  top: 2px;
+  right: 9px;
+  z-index: 4;
+  appearance: none;
+  padding: 0 4px;
+  height: 13px;
+  line-height: 11px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease, border-color 0.1s ease;
+}
+
+.media-clip:hover .media-clip-fx,
+.media-clip-fx:focus-visible {
+  opacity: 1;
+}
+
+.media-clip-fx:hover {
+  border-color: rgba(146, 221, 255, 0.8);
+}
+
+.media-clip-fx.is-active {
+  opacity: 1;
+  color: rgba(20, 24, 33, 0.95);
+  background: rgba(146, 221, 255, 0.95);
+  border-color: rgba(146, 221, 255, 0.95);
 }
 
 .timeline-graph-placeholder {

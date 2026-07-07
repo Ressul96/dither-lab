@@ -6,7 +6,7 @@ import {
   writePixel,
   isMonochromePalette,
 } from "./core.js";
-import { nearestColorInPalette } from "../palettes.js";
+import { createPaletteQuantizer } from "../palettes.js";
 
 const BAYER_BASE = [0, 2, 3, 1];
 const RGB_BIAS_RANGE = 96;
@@ -127,6 +127,7 @@ function runOrderedRGB(imageData, params, palette, size, matrix) {
   const invert = Boolean(params.invert);
   const matrixMax = size * size;
   const shift = threshold - 128;
+  const quantize = createPaletteQuantizer(palette);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -146,7 +147,7 @@ function runOrderedRGB(imageData, params, palette, size, matrix) {
       g = clamp(g, 0, 255);
       b = clamp(b, 0, 255);
 
-      const matched = nearestColorInPalette(r, g, b, palette);
+      const matched = quantize(r, g, b);
       writePixel(data, offset, matched[0], matched[1], matched[2]);
     }
   }

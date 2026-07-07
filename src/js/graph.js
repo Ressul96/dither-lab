@@ -1,5 +1,6 @@
-import { getState, dispatch } from "./state.js";
+import { getState, dispatch, pushHistory } from "./state.js";
 import { normalizeHex, rgbToHex } from "./color.js";
+import { getClipGraph, hasClipGraph, setClipGraph } from "./clip-graphs.js";
 
 const NODE_SPACING_X = 252;
 const NODE_BASE_X = 88;
@@ -746,6 +747,51 @@ const NODE_DEFINITIONS = Object.freeze({
     outputs: [{ name: "value", label: "Value", type: "value" }],
     defaultParams: { value: 0 },
   },
+  "audio-level": {
+    label: "Audio Level",
+    family: "Utility",
+    description: "Outputs the source audio's RMS level at the current time, scaled by gain.",
+    chainable: false,
+    inputs: [],
+    outputs: [{ name: "value", label: "Value", type: "value" }],
+    defaultParams: { gain: 1 },
+  },
+  "field-probe": {
+    label: "Field",
+    family: "Utility",
+    description: "Samples a spatial field (radial/linear) at a point; outputs a scalar.",
+    chainable: false,
+    inputs: [],
+    outputs: [{ name: "value", label: "Value", type: "value" }],
+    defaultParams: {
+      shape: "radial",
+      centerX: 50,
+      centerY: 50,
+      sampleX: 50,
+      sampleY: 50,
+      radius: 50,
+      falloff: "linear",
+      invert: false,
+      gain: 1,
+    },
+  },
+  "field-map": {
+    label: "Field Map",
+    family: "Input",
+    description: "Renders a spatial field (radial/linear) as a grayscale influence map for displace / mask inputs.",
+    inputs: [],
+    outputs: [{ name: "image", label: "Image", type: "image" }],
+    defaultParams: {
+      shape: "radial",
+      centerX: 50,
+      centerY: 50,
+      radius: 50,
+      falloff: "linear",
+      invert: false,
+      width: 1920,
+      height: 1080,
+    },
+  },
   math: {
     label: "Math",
     family: "Utility",
@@ -782,6 +828,7 @@ const TYPE_ORDER = {
   "mesh-gradient": 1,
   gradient: 2,
   noise: 2.5,
+  "field-map": 2.6,
   adjust: 3,
   posterize: 4,
   invert: 5,
@@ -821,6 +868,8 @@ const TYPE_ORDER = {
   mix: 39,
   value: 40,
   math: 41,
+  "audio-level": 41.5,
+  "field-probe": 41.6,
   "scene-grade": 42,
   group: 43,
   "viewer-output": 44,
@@ -1200,6 +1249,123 @@ export function getValueNodeOutputBounds(nodeId, graph = getState().graph) {
   return { min, max };
 }
 
+export function snapshotGraphForHistory(graph = getState().graph) {
+  return clone(graph);
+}
+
+export function pushGraphHistoryFromSnapshot(before, label = "Edit graph") {
+  if (!before) return false;
+  const after = snapshotGraphForHistory();
+  if (graphSnapshotsEqual(before, after)) return false;
+  // Capture which graph this edit belongs to so undo/redo restore into the right
+  // place even after the editing scope changes (null = the global graph).
+  const scopeId = getEditingClipGraphId();
+  pushHistory({
+    label,
+    undo: () => restoreGraphHistorySnapshot(before, scopeId),
+    redo: () => restoreGraphHistorySnapshot(after, scopeId),
+  });
+  return true;
+}
+
+function restoreGraphHistorySnapshot(snapshot, scopeId = null) {
+  const normalized = normalizeGraph(snapshotGraphForHistory(snapshot));
+  if (scopeId && hasClipGraph(scopeId)) {
+    // The edit happened inside a clip graph. Update that clip graph in the
+    // registry; only reload the editor buffer if that clip is the one open now.
+    setClipGraph(scopeId, normalized);
+    if (getEditingClipGraphId() === scopeId) dispatch("graph", normalized);
+    return;
+  }
+  // Global-graph edit. While a clip scope is open the global graph is the stash;
+  // update it there so the global is intact on exit. Otherwise it's state.graph.
+  if (stashedGlobalGraph) {
+    stashedGlobalGraph = normalized;
+    return;
+  }
+  dispatch("graph", normalized);
+  const parentId = getState().graphView.currentParentId;
+  const resolvedParentId = resolveGraphParentId(normalized, parentId);
+  if (resolvedParentId !== parentId) {
+    dispatch("graphView", { currentParentId: resolvedParentId });
+  }
+}
+
+// --- Per-clip graph editing scope (swap model) -----------------------------
+// Editing a clip's graph reuses the whole node editor unchanged: on enter we
+// stash the global graph and load the clip graph into `state.graph`, so the
+// canvas, inspector and history all operate on it as usual. Render and export
+// keep reading the GLOBAL graph via getGlobalGraph() (plus the per-clip override
+// at the render chokepoint), so a clip scope never disturbs how other clips draw.
+
+let stashedGlobalGraph = null;
+
+// The global graph regardless of editing scope. While a clip scope is open,
+// `state.graph` holds the clip graph and the real global graph is the stash.
+// Render / export / save read this so they stay anchored to the global graph.
+export function getGlobalGraph() {
+  return stashedGlobalGraph ?? ensureBootGraph();
+}
+
+export function getEditingClipGraphId() {
+  return getState().graphView?.clipGraphId ?? null;
+}
+
+export function isEditingClipGraph() {
+  return Boolean(getEditingClipGraphId());
+}
+
+// Enter a clip's graph: stash the global graph and load the clip graph into the
+// editor. Returns false when the clip graph isn't registered.
+export function enterClipGraphScope(clipId, graphId) {
+  if (!graphId || !hasClipGraph(graphId)) return false;
+  if (stashedGlobalGraph) exitClipGraphScope();
+  stashedGlobalGraph = clone(ensureBootGraph());
+  dispatch("graphView", {
+    clipGraphId: graphId,
+    clipScopeClipId: clipId ?? null,
+    currentParentId: ROOT_PARENT_ID,
+  });
+  dispatch("graph", normalizeGraph(clone(getClipGraph(graphId))));
+  return true;
+}
+
+// Leave the clip scope: write the edited clip graph back to the registry and
+// restore the global graph into the editor. No-op when not in a clip scope.
+export function exitClipGraphScope() {
+  if (!stashedGlobalGraph) return false;
+  const graphId = getEditingClipGraphId();
+  if (graphId) setClipGraph(graphId, clone(getState().graph));
+  const global = stashedGlobalGraph;
+  stashedGlobalGraph = null;
+  // Clear the scope flag BEFORE restoring the global graph so any "graph"
+  // subscribers see we are back on the global graph.
+  dispatch("graphView", { clipGraphId: null, clipScopeClipId: null, currentParentId: ROOT_PARENT_ID });
+  dispatch("graph", global);
+  return true;
+}
+
+// Flush the live edited clip graph into the registry without leaving the scope,
+// so persistence captures in-progress clip edits.
+export function flushEditableClipGraph() {
+  const graphId = getEditingClipGraphId();
+  if (graphId && stashedGlobalGraph) setClipGraph(graphId, clone(getState().graph));
+}
+
+// Clear any clip-edit scope WITHOUT writing back — used on project load / new,
+// where the current editor buffer is being replaced wholesale and the old clip
+// registry is discarded. (exitClipGraphScope is the normal, write-back path.)
+export function resetClipGraphScope() {
+  stashedGlobalGraph = null;
+  if (getEditingClipGraphId()) {
+    dispatch("graphView", { clipGraphId: null, clipScopeClipId: null });
+  }
+}
+
+function graphSnapshotsEqual(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export function createBootGraph() {
   const nodes = [
     createNode("source-1", "source"),
@@ -1213,6 +1379,7 @@ export function createBootGraph() {
     edges: buildLinearEdges(nodes),
     selectedNodeId: "viewer-output-1",
     selectedNodeIds: ["viewer-output-1"],
+    solo: null,
   };
 }
 
@@ -1338,6 +1505,7 @@ function insertNodeIntoChain(type, extraEdgeFactory = null) {
   if (!definition || definition.chainable === false) return null;
 
   const graph = ensureBootGraph();
+  const before = snapshotGraphForHistory(graph);
   const chain = getMainChain(graph);
   const insertIndex = getInsertionIndex(chain, type);
   const prevNode = chain[insertIndex - 1];
@@ -1393,8 +1561,68 @@ function insertNodeIntoChain(type, extraEdgeFactory = null) {
     selectedNodeId: nodeId,
     selectedNodeIds: [nodeId],
   });
+  pushGraphHistoryFromSnapshot(before, "Add node");
 
   return nodeId;
+}
+
+// Create a new "source" node bound to a media source (params.sourceId) at
+// `position` (graph world coords). Unlike createFreeNode this allows the
+// otherwise-singleton source type — multiple bound video inputs are the point.
+// Dragging an asset onto the node canvas calls this. One history entry.
+export function createBoundSourceNode(sourceId, position, label) {
+  if (!sourceId) return null;
+  const graph = ensureBootGraph();
+  const before = snapshotGraphForHistory(graph);
+  const nodeId = nextNodeId("source", graph);
+  const newNode = createNode(nodeId, "source", {
+    x: position?.x ?? NODE_BASE_X,
+    y: position?.y ?? NODE_BASE_Y,
+    label,
+    params: { sourceId },
+  });
+  dispatch("graph", {
+    nodes: [...graph.nodes, newNode],
+    selectedNodeId: nodeId,
+    selectedNodeIds: [nodeId],
+  });
+  pushGraphHistoryFromSnapshot(before, "Add video input");
+  return nodeId;
+}
+
+// Rebind the source node feeding the viewer output to `sourceId` (drag an asset
+// onto the preview). Returns the rebound node id, or null when no source node is
+// upstream of the viewer. One history entry.
+export function rebindOutputSource(sourceId) {
+  if (!sourceId) return null;
+  const graph = ensureBootGraph();
+  const targetId = findOutputSourceNodeId(graph);
+  if (!targetId) return null;
+  const before = snapshotGraphForHistory(graph);
+  updateNodeParams(targetId, { sourceId });
+  pushGraphHistoryFromSnapshot(before, "Set video input source");
+  return targetId;
+}
+
+// Walk back from the viewer-output through input edges to the nearest source
+// node — the "video input connected to the output".
+function findOutputSourceNodeId(graph) {
+  const viewer = graph.nodes.find((node) => node.type === "viewer-output");
+  if (!viewer) return null;
+  const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+  const visited = new Set();
+  const stack = [viewer.id];
+  while (stack.length) {
+    const id = stack.pop();
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const node = byId.get(id);
+    if (node && node.type === "source") return id;
+    for (const edge of graph.edges ?? []) {
+      if (edge.toNode === id && !visited.has(edge.fromNode)) stack.push(edge.fromNode);
+    }
+  }
+  return null;
 }
 
 export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
@@ -1402,6 +1630,7 @@ export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
   if (!definition || type === "source" || type === "viewer-output") return null;
 
   const graph = ensureBootGraph();
+  const before = snapshotGraphForHistory(graph);
   const nodeId = nextNodeId(type, graph);
   const newNode = createNode(nodeId, type, {
     x: position?.x ?? NODE_BASE_X,
@@ -1417,6 +1646,7 @@ export function createFreeNode(type, position, parentId = ROOT_PARENT_ID) {
     selectedNodeId: nodeId,
     selectedNodeIds: [nodeId],
   });
+  pushGraphHistoryFromSnapshot(before, "Add node");
 
   return nodeId;
 }
@@ -1427,6 +1657,7 @@ export function duplicateNode(nodeId, options = {}) {
 
 export function duplicateNodes(nodeIds, options = {}) {
   const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const selectedIds = [...new Set(Array.isArray(nodeIds) ? nodeIds : [])];
   const sources = selectedIds
     .map((nodeId) => getNodeById(nodeId, graph))
@@ -1482,8 +1713,131 @@ export function duplicateNodes(nodeIds, options = {}) {
     selectedNodeId: duplicatedIds.at(-1) ?? null,
     selectedNodeIds: duplicatedIds,
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Duplicate node");
 
   return duplicatedIds;
+}
+
+// ---------- recipes (portable node sub-graphs) ----------
+//
+// A recipe is a serialized selection of effect nodes plus the edges fully
+// inside that selection — a reusable sub-chain saved to / loaded from a file.
+// Source / viewer-output / group nodes are excluded (a recipe is an effect
+// fabric, not a whole graph). Import mirrors duplicateNodes: fresh ids, internal
+// edges remapped, positions translated to a target point.
+
+export const RECIPE_KIND = "dither-recipe";
+export const RECIPE_VERSION = 1;
+
+function isRecipableNode(node) {
+  return node && node.type !== "source" && node.type !== "viewer-output" && node.type !== "group";
+}
+
+// Build a portable recipe object from a node selection. Returns null when the
+// selection has no recipable nodes.
+export function serializeRecipe(nodeIds, graph = getState().graph) {
+  const ids = new Set(Array.isArray(nodeIds) ? nodeIds : []);
+  const nodes = graph.nodes.filter((node) => ids.has(node.id) && isRecipableNode(node));
+  if (nodes.length === 0) return null;
+  const keep = new Set(nodes.map((node) => node.id));
+  const serializedNodes = nodes.map((node) => {
+    const definition = getNodeDefinition(node.type);
+    const payload = {
+      id: node.id,
+      type: node.type,
+      x: node.x,
+      y: node.y,
+      params: clone(node.params),
+      exposedParams: Array.isArray(node.exposedParams) ? [...node.exposedParams] : [],
+      exposedParamConfig: clone(node.exposedParamConfig),
+      bypassed: Boolean(node.bypassed),
+    };
+    if (node.label && node.label !== definition?.label) payload.label = node.label;
+    if (isLayerAdjustableType(node.type)) {
+      payload.opacity = node.opacity;
+      payload.hue = node.hue;
+      payload.saturation = node.saturation;
+    }
+    return payload;
+  });
+  const edges = getPersistableGraphEdges(graph)
+    .filter((edge) => keep.has(edge.fromNode) && keep.has(edge.toNode))
+    .map((edge) => ({
+      fromNode: edge.fromNode,
+      fromSocket: edge.fromSocket,
+      toNode: edge.toNode,
+      toSocket: edge.toSocket,
+    }));
+  return { kind: RECIPE_KIND, version: RECIPE_VERSION, nodes: serializedNodes, edges };
+}
+
+export function isRecipe(value) {
+  return Boolean(value && value.kind === RECIPE_KIND && Array.isArray(value.nodes) && value.nodes.length > 0);
+}
+
+// Splice a recipe into the current graph. `options.position` (world coords)
+// places the recipe's top-left corner; `options.parentId` sets the graph scope.
+// Returns the new node ids (selected), or [] when nothing recipable imported.
+export function importRecipe(recipe, options = {}) {
+  if (!isRecipe(recipe)) return [];
+  const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
+  const parentId = options.parentId ?? null;
+  const position = options.position && Number.isFinite(Number(options.position.x))
+    ? { x: Number(options.position.x), y: Number(options.position.y) }
+    : { x: 0, y: 0 };
+  const recipable = recipe.nodes.filter((node) => getNodeDefinition(node.type) && isRecipableNode(node));
+  if (recipable.length === 0) return [];
+  // Translate so the recipe's top-left corner lands at `position`.
+  const minX = Math.min(...recipable.map((node) => Number(node.x) || 0));
+  const minY = Math.min(...recipable.map((node) => Number(node.y) || 0));
+
+  const nextNodes = [...graph.nodes];
+  const idMap = new Map();
+  const newIds = [];
+  for (const node of recipable) {
+    const nextId = nextNodeId(node.type, { ...graph, nodes: nextNodes });
+    idMap.set(node.id, nextId);
+    newIds.push(nextId);
+    nextNodes.push(
+      createNode(nextId, node.type, {
+        parentId,
+        label: node.label,
+        x: position.x + ((Number(node.x) || 0) - minX),
+        y: position.y + ((Number(node.y) || 0) - minY),
+        params: clone(node.params),
+        opacity: node.opacity,
+        hue: node.hue,
+        saturation: node.saturation,
+        exposedParams: clone(node.exposedParams),
+        exposedParamConfig: clone(node.exposedParamConfig),
+        bypassed: node.bypassed,
+      })
+    );
+  }
+
+  const nextEdges = graph.edges.map((edge) => ({ ...edge }));
+  for (const edge of recipe.edges ?? []) {
+    const fromNode = idMap.get(edge.fromNode);
+    const toNode = idMap.get(edge.toNode);
+    if (!fromNode || !toNode) continue;
+    nextEdges.push({
+      id: createEdgeId(fromNode, edge.fromSocket, toNode, edge.toSocket),
+      fromNode,
+      fromSocket: edge.fromSocket,
+      toNode,
+      toSocket: edge.toSocket,
+    });
+  }
+
+  dispatch("graph", {
+    nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
+    edges: nextEdges,
+    selectedNodeId: newIds.at(-1) ?? null,
+    selectedNodeIds: newIds,
+  });
+  if (before) pushGraphHistoryFromSnapshot(before, "Import recipe");
+  return newIds;
 }
 
 export function insertNodeOnEdge(edgeId, type, options = {}) {
@@ -1491,6 +1845,7 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
   if (!definition || definition.chainable === false || type === "source" || type === "viewer-output") return null;
 
   const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const edge = graph.edges.find((item) => item.id === edgeId);
   if (!edge) return null;
 
@@ -1536,6 +1891,7 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
       selectedNodeId: nodeId,
       selectedNodeIds: [nodeId],
     });
+    if (before) pushGraphHistoryFromSnapshot(before, "Insert node");
 
     return nodeId;
   }
@@ -1586,6 +1942,7 @@ export function insertNodeOnEdge(edgeId, type, options = {}) {
     selectedNodeId: nodeId,
     selectedNodeIds: [nodeId],
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Insert node");
 
   return nodeId;
 }
@@ -1594,6 +1951,7 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
   if (!nodeId || !edgeId) return false;
 
   const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const edge = graph.edges.find((item) => item.id === edgeId);
   if (!edge || edge.fromNode === nodeId || edge.toNode === nodeId) return false;
 
@@ -1647,6 +2005,7 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
       selectedNodeId: nodeId,
       selectedNodeIds: [nodeId],
     });
+    if (before) pushGraphHistoryFromSnapshot(before, "Insert node");
 
     return true;
   }
@@ -1711,12 +2070,14 @@ export function insertExistingNodeOnEdge(nodeId, edgeId, options = {}) {
     selectedNodeId: nodeId,
     selectedNodeIds: [nodeId],
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Insert node");
 
   return true;
 }
 
 export function groupSelectedNodes(options = {}) {
   const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const selectedNodes = getGroupableSelectedNodes(graph, options.nodeIds);
   if (selectedNodes.length === 0) return null;
 
@@ -1752,13 +2113,15 @@ export function groupSelectedNodes(options = {}) {
     selectedNodeId: groupId,
     selectedNodeIds: [groupId],
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Group nodes");
 
   return groupId;
 }
 
-export function ungroupNode(groupId) {
+export function ungroupNode(groupId, options = {}) {
   if (!groupId) return false;
   const graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const group = getNodeById(groupId, graph);
   if (!group || group.type !== "group") return false;
 
@@ -1794,6 +2157,7 @@ export function ungroupNode(groupId) {
   if (getState().graphView.currentParentId === groupId) {
     dispatch("graphView", { currentParentId: parentId });
   }
+  if (before) pushGraphHistoryFromSnapshot(before, "Ungroup nodes");
 
   return true;
 }
@@ -1811,10 +2175,11 @@ export function commitLayout() {
   dispatch("graph", {});
 }
 
-export function addEdge(fromNode, fromSocket, toNode, toSocket) {
+export function addEdge(fromNode, fromSocket, toNode, toSocket, options = {}) {
   if (!fromNode || !toNode || fromNode === toNode) return false;
 
   const graph = getState().graph;
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const fromDef = graph.nodes.find((node) => node.id === fromNode);
   const toDef = graph.nodes.find((node) => node.id === toNode);
   if (!fromDef || !toDef) return false;
@@ -1857,13 +2222,15 @@ export function addEdge(fromNode, fromSocket, toNode, toSocket) {
   const refreshedNodes = refreshGroupMetadataForNodes(nextNodes, nextEdges);
 
   dispatch("graph", { nodes: refreshedNodes, edges: nextEdges });
+  if (before) pushGraphHistoryFromSnapshot(before, "Connect nodes");
   return true;
 }
 
-export function removeNode(nodeId) {
+export function removeNode(nodeId, options = {}) {
   if (!nodeId) return false;
 
   const graph = getState().graph;
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const node = graph.nodes.find((item) => item.id === nodeId);
   if (!node || node.type === "source" || node.type === "viewer-output") return false;
 
@@ -1940,6 +2307,7 @@ export function removeNode(nodeId) {
   if (getState().graphView.currentParentId === nodeId) {
     dispatch("graphView", { currentParentId: fallbackParentId });
   }
+  if (before) pushGraphHistoryFromSnapshot(before, "Delete node");
   return true;
 }
 
@@ -1987,8 +2355,9 @@ export function updateNodeLayerProperties(nodeId, patch) {
   dispatch("graph", { nodes: nextNodes });
 }
 
-export function updateNodeLabel(nodeId, label) {
+export function updateNodeLabel(nodeId, label, options = {}) {
   const { graph } = getState();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const node = getNodeById(nodeId, graph);
   const definition = getNodeDefinition(node?.type);
   if (!node || !definition) return false;
@@ -2006,11 +2375,13 @@ export function updateNodeLabel(nodeId, label) {
         : item
     ),
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Rename node");
   return true;
 }
 
-export function toggleNodeBypass(nodeId) {
+export function toggleNodeBypass(nodeId, options = {}) {
   const { graph } = getState();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   let changed = false;
   const nextNodes = graph.nodes.map((node) => {
     if (node.id !== nodeId || node.type === "source" || node.type === "viewer-output" || node.type === "group") {
@@ -2025,13 +2396,15 @@ export function toggleNodeBypass(nodeId) {
 
   if (!changed) return false;
   dispatch("graph", { nodes: nextNodes });
+  if (before) pushGraphHistoryFromSnapshot(before, "Toggle bypass");
   return true;
 }
 
-export function toggleNodeSolo(nodeId) {
+export function toggleNodeSolo(nodeId, options = {}) {
   if (!nodeId) return false;
 
   let graph = ensureBootGraph();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const activeSolo = normalizeSoloState(graph.solo);
   if (activeSolo) {
     const restoredEdges = restoreSoloEdges(graph, activeSolo);
@@ -2043,6 +2416,7 @@ export function toggleNodeSolo(nodeId) {
         edges: restoredEdges,
         solo: null,
       });
+      if (before) pushGraphHistoryFromSnapshot(before, "Toggle solo");
       return true;
     }
     graph = { ...graph, edges: restoredEdges, solo: null };
@@ -2087,6 +2461,7 @@ export function toggleNodeSolo(nodeId) {
       soloEdgeId: soloEdge.id,
     },
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Toggle solo");
   return true;
 }
 
@@ -2094,9 +2469,10 @@ export function getSoloNodeId(graph = getState().graph) {
   return normalizeSoloState(graph?.solo)?.nodeId ?? null;
 }
 
-export function setParamExposed(nodeId, paramKey, exposed, config = null) {
+export function setParamExposed(nodeId, paramKey, exposed, config = null, options = {}) {
   if (!nodeId || !paramKey) return false;
   const { graph } = getState();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   let changed = false;
   let removedSocket = false;
 
@@ -2150,6 +2526,7 @@ export function setParamExposed(nodeId, paramKey, exposed, config = null) {
     nodes: refreshGroupMetadataForNodes(nextNodes, nextEdges),
     edges: nextEdges,
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Edit node sockets");
   return true;
 }
 
@@ -2160,10 +2537,11 @@ export function toggleParamExposed(nodeId, paramKey, config = null) {
   return setParamExposed(nodeId, paramKey, !exposed, config);
 }
 
-export function removeEdgesById(edgeIds) {
+export function removeEdgesById(edgeIds, options = {}) {
   if (!Array.isArray(edgeIds) || edgeIds.length === 0) return false;
   const ids = new Set(edgeIds);
   const { graph } = getState();
+  const before = options.history === false ? null : snapshotGraphForHistory(graph);
   const nextEdges = graph.edges.filter((edge) => !ids.has(edge.id));
   if (nextEdges.length === graph.edges.length) return false;
   dispatch("graph", {
@@ -2171,6 +2549,7 @@ export function removeEdgesById(edgeIds) {
     nodes: refreshGroupMetadataForNodes(graph.nodes, nextEdges),
     edges: nextEdges,
   });
+  if (before) pushGraphHistoryFromSnapshot(before, "Disconnect nodes");
   return true;
 }
 
@@ -2329,6 +2708,7 @@ function normalizeGraph(graph) {
       edges: buildLinearEdges(chain),
       selectedNodeId: fallbackSelection,
       selectedNodeIds: normalizeSelectedNodeIds(graph.selectedNodeIds, chain, fallbackSelection),
+      solo: null,
     };
   }
 
@@ -2337,6 +2717,7 @@ function normalizeGraph(graph) {
     edges: nextEdges,
     selectedNodeId,
     selectedNodeIds,
+    solo: normalizeSoloState(graph.solo),
   };
 }
 
@@ -2378,7 +2759,7 @@ function normalizeSoloState(solo) {
     viewerNodeId,
     viewerInput,
     soloEdgeId,
-    previousEdges: Array.isArray(solo.previousEdges) ? solo.previousEdges : [],
+    previousEdges: Array.isArray(solo.previousEdges) ? solo.previousEdges.map((edge) => ({ ...edge })) : [],
   };
 }
 

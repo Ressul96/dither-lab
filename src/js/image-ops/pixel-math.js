@@ -31,6 +31,11 @@ export function mixByte(a, b, amount) {
 // GLSL-style smoothstep: 0 at value≤edge0, 1 at value≥edge1, cubic
 // Hermite interpolation in between. Used by threshold / mask soft edges.
 export function smoothstep(edge0, edge1, value) {
+  // A degenerate range (edge0 === edge1) makes the division 0/0 → NaN, which
+  // GLSL leaves undefined. Every current caller passes a non-zero spread, so
+  // this only hardens the primitive for future ones: collapse to a clean step
+  // (0 below the edge, 1 at or above it).
+  if (edge0 === edge1) return value < edge0 ? 0 : 1;
   const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
   return t * t * (3 - 2 * t);
 }

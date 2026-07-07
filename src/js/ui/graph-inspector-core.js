@@ -26,7 +26,10 @@ import {
 } from "./graph-inspector-fields.js";
 import { renderEmptyInspector } from "./graph-inspector-misc.js";
 import {
+  renderAudioLevelNode,
   renderBlurNode,
+  renderFieldMapNode,
+  renderFieldProbeNode,
   renderMathNode,
   renderPosterizeNode,
   renderValueNode,
@@ -179,6 +182,8 @@ function renderNodeSpecifics(node) {
       return renderMeshGradientNode(node);
     case "noise":
       return renderNoiseNode(node);
+    case "field-map":
+      return renderFieldMapNode(node);
     case "adjust":
       return renderAdjustNode(node);
     case "posterize":
@@ -257,6 +262,10 @@ function renderNodeSpecifics(node) {
       return renderMixNode(node);
     case "value":
       return renderValueNode(node);
+    case "audio-level":
+      return renderAudioLevelNode(node);
+    case "field-probe":
+      return renderFieldProbeNode(node);
     case "math":
       return renderMathNode(node);
     case "viewer-output":

@@ -1,4 +1,5 @@
 import { timeToFrame } from "../timeline.js";
+import { isSimpleSingleSource } from "../source.js";
 import { escapeHtml, setInnerHtml } from "./utils.js";
 import { getPlayerEls } from "./player-elements.js";
 import {
@@ -108,6 +109,10 @@ export function renderTimeRuler(duration, fps, unit, zoom) {
 
 export function renderRenderRangeOverlay(duration, playback) {
   if (!(duration > 0)) return "";
+  // The trim band represents the single-source in/out range. In a multi-clip
+  // composition the timeline itself is the source of truth, so the band and its
+  // drag handles would be misleading — hide it there (single-source unchanged).
+  if (!isSimpleSingleSource()) return "";
   const start = clampValue(playback.trimStart || 0, 0, duration);
   const end = clampValue(playback.trimEnd || duration, start, duration);
   const left = (start / duration) * 100;

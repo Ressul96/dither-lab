@@ -1,12 +1,24 @@
-import { getState, dispatch, subscribe } from "./state.js";
-import { ensureBootGraph, setViewerOutputFps } from "./graph.js";
-import { clearGraphCache, evaluateGraphOutputs, isOutputCached } from "./graph-runtime.js";
+import { getState, dispatch, subscribe, pushHistory } from "./state.js";
+import { ensureBootGraph, getGlobalGraph, getEditingClipGraphId, setViewerOutputFps } from "./graph.js";
+import { resolveGraphTokens, subscribeTokens } from "./tokens.js";
+import { analyzeAudioFromUrl, clearAudioEnvelope, subscribeAudio } from "./audio-analysis.js";
+import { serializeCustomPalettes, subscribePalettes } from "./palettes.js";
+import { getClipGraph, hasClipGraph, subscribeClipGraphs } from "./clip-graphs.js";
+import {
+  clearGraphCache,
+  evaluateGraphOutputs,
+  graphContainsGpuEffect,
+  graphRequiresMainThreadRender,
+  isOutputCached,
+} from "./graph-runtime.js";
 import { canUseNativeRender, evaluateNativeGraphOutputs } from "./native-render.js";
 import { acquireBuffer, releaseBuffer } from "./image-ops.js";
 import {
   isWorkerAvailable,
   requestWorkerRender,
   clearWorkerCache,
+  syncWorkerPalettes,
+  workerKnownGpuUnsupported,
 } from "./render-adapter.js";
 import {
   applyTimelineToGraph,
@@ -16,6 +28,20 @@ import {
 } from "./timeline.js";
 import { selectedPath, tauriErrorMessage, tauriInvoke } from "./tauri-compat.js";
 import { listenWithDispose } from "./ui/lifecycle.js";
+import {
+  addSource,
+  compositionFromSource,
+  compositionDuration,
+  createDefaultComposition,
+  firstVideoClip,
+  getActiveVideoClip,
+  getCompositingLayers,
+  nextVideoClipAfter,
+  normalizeComposition,
+  serializeComposition,
+  trimClipEnd,
+  trimClipStart,
+} from "./composition.js";
 
 const FRAME_CACHE_TARGET_BYTES = 150_000_000;
 const FRAME_CACHE_MIN = 8;
@@ -34,6 +60,18 @@ const DEFAULT_EXR_EXPOSURE = 0;
 const DEFAULT_EXR_WHITEPOINT = 400;
 
 let video;
+// Multi-source decode pool (Ship 4). Maps a composition sourceId to the
+// HTMLVideoElement that decodes it, so the playhead can switch between distinct
+// video files without re-loading one shared element. The transport element
+// (`video`, the DOM #sourceVideo that also drives play/pause/FPS) is registered
+// here under the primary source id, so the single-source path resolves to the
+// exact same element it always used — behaviour stays byte-identical until a
+// second source actually exists.
+const videoPool = new Map(); // sourceId -> { el, path }
+// Per-source canvases for graph source nodes bound to a specific media source
+// (params.sourceId). Reused across frames; sized to the source's element.
+const boundSourceCanvases = new Map(); // sourceId -> canvas
+let primarySourceId = null;  // sourceId backed by the transport `video` element
 let canvas;
 let ctx;
 let splitCanvas;
@@ -52,6 +90,17 @@ let hasDitherOutput = false;
 let playbackSyncSuspended = false;
 let pendingPlayPromise = null;
 let playRequestToken = 0;
+// Multi-clip composition playback (Phase B). When set, the play tick is driven
+// by `playbackEl` (the element decoding `playbackClip`) instead of the single
+// transport video, advancing across clip boundaries. Null for the classic
+// single-source path, which is left completely untouched.
+let playbackClip = null;
+let playbackEl = null;
+// While the playhead is traversing an empty stretch between clips, no element
+// decodes; the clock advances by wall time and the viewer shows a blank frame.
+// { untilTime, next } where `next` is the clip to activate when the gap closes.
+let playbackGap = null;
+let gapLastWallMs = 0;
 let renderVersion = 0;
 let sourceToken = 0;
 let nativeRenderInFlight = false;
@@ -262,6 +311,35 @@ export function initSource() {
   subscribe("view", () => presentPreview());
   subscribe("graph", () => scheduleRender());
   subscribe("timeline", () => scheduleRender());
+  // Composition changes (clip edits, track opacity/blend) change what the stage
+  // draws, so re-render the preview when the composition slice updates.
+  subscribe("composition", () => scheduleRender());
+  syncWorkerPalettes(serializeCustomPalettes());
+  subscribePalettes(() => {
+    clearGraphCache();
+    syncWorkerPalettes(serializeCustomPalettes());
+    scheduleRender();
+  });
+  // A token edit changes the resolved color params (resolveGraphTokens) but
+  // doesn't dispatch a state topic, so trigger a re-render here. The worker gets
+  // the already-resolved graph, so no separate token sync is needed.
+  subscribeTokens(() => {
+    clearGraphCache();
+    scheduleRender();
+  });
+  // When the audio envelope finishes decoding (or clears), re-render so any
+  // audio-level node reflects it.
+  subscribeAudio(() => {
+    clearGraphCache();
+    scheduleRender();
+  });
+  // A clip-graph edit (assigning a graph to a clip, making it unique, or editing
+  // a param inside a clip's graph) changes what that clip renders without a state
+  // dispatch, so re-render here.
+  subscribeClipGraphs(() => {
+    clearGraphCache();
+    scheduleRender();
+  });
 }
 
 // Coalesce multiple render requests within the same animation frame. Slider
@@ -279,7 +357,11 @@ function scheduleRender() {
 
 export async function openSource() {
   const tauri = window.__TAURI__;
-  if (!tauri) return;
+  if (!tauri?.dialog?.open) {
+    // Browser (no Tauri): load a primary source via a file input + blob URL.
+    await loadMediaFromFile(await pickFileViaInput("video/*,image/*"));
+    return;
+  }
 
   let selected;
   try {
@@ -371,6 +453,134 @@ async function loadExrSource(path, options = {}) {
   });
 }
 
+// Ship 4: open the file picker and ADD the chosen media as a new source in the
+// composition (without replacing the current one, unlike openSource). Returns
+// the new sourceId or null. The Assets panel calls this.
+export async function addSourceViaPicker() {
+  const tauri = window.__TAURI__;
+  if (!tauri?.dialog?.open) {
+    // Browser (no Tauri): add a source via a file input + blob URL.
+    const file = await pickFileViaInput("video/*,image/*");
+    if (!file) return null;
+    return addSourceFromSrc(URL.createObjectURL(file), file.name);
+  }
+  let selected;
+  try {
+    selected = await tauri.dialog.open({
+      title: "Add Media",
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Media", extensions: MEDIA_EXTENSIONS }],
+    });
+  } catch (err) {
+    console.error("[add-source] dialog failed", err);
+    return null;
+  }
+  const path = selectedPath(selected);
+  if (!path) return null;
+  return addSourceFromPath(path);
+}
+
+// Load a media file into the decode pool and register it as a new composition
+// source — does NOT touch the current composition's clips or reset playback.
+// Video sources get a dedicated hidden <video> in the pool; the metadata
+// (duration/dimensions) is read once on loadeddata. Returns the new sourceId.
+export async function addSourceFromPath(path) {
+  const tauri = window.__TAURI__;
+  if (!tauri || !path) return null;
+  return addSourceFromSrc(tauri.core.convertFileSrc(path), path);
+}
+
+// Core: load a media URL into the decode pool and register it as a new
+// composition source. `src` is a ready-to-use URL (a Tauri asset URL, or in a
+// plain browser a blob: URL); `path` is the display name. Images use an
+// ImageMediaMock so the pool element behaves like a video everywhere
+// (videoWidth/height, currentTime, drawable, seeked) — the compositor and
+// exporter need no special-casing beyond skipping real seeks. Does NOT touch
+// the current composition's clips. Returns the new sourceId.
+async function addSourceFromSrc(src, path) {
+  const ext = path?.split(".").pop()?.toLowerCase();
+  const isImage = ext ? IMAGE_EXTENSIONS.includes(ext) : false;
+
+  let el;
+  if (isImage) {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = src;
+    try {
+      await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+    } catch (err) {
+      console.error("[add-source] image load failed", err);
+      return null;
+    }
+    el = new ImageMediaMock(img);
+  } else {
+    el = document.createElement("video");
+    el.muted = true;
+    el.playsInline = true;
+    el.preload = "auto";
+    el.src = src;
+    el.load();
+    try {
+      await waitFor(el, "loadeddata");
+    } catch (err) {
+      console.error("[add-source] media load failed", err);
+      try { el.removeAttribute("src"); el.load(); } catch (_) {}
+      return null;
+    }
+  }
+
+  const sourceFps = isImage ? (getState().source.sourceFps || 30) : await detectSourceFps(el);
+  const { composition, sourceId } = addSource(getState().composition, {
+    path,
+    kind: "video",
+    duration: el.duration,
+    fps: sourceFps,
+    width: el.videoWidth,
+    height: el.videoHeight,
+    hasAudio: false,
+  });
+  videoPool.set(sourceId, { el, path });
+  dispatch("composition", serializeComposition(composition));
+  return sourceId;
+}
+
+// Open a hidden <input type=file> and resolve with the chosen File. The no-Tauri
+// browser fallback for the native file dialog, so media can be loaded when the
+// frontend runs outside the desktop shell (e.g. localhost in a browser).
+function pickFileViaInput(accept) {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.style.display = "none";
+    input.addEventListener(
+      "change",
+      () => {
+        const file = input.files && input.files[0] ? input.files[0] : null;
+        input.remove();
+        resolve(file);
+      },
+      { once: true }
+    );
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+// Load a browser File as the primary source via a blob: URL.
+async function loadMediaFromFile(file) {
+  if (!file) return;
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  const isImage = ext ? IMAGE_EXTENSIONS.includes(ext) : false;
+  await loadMedia(URL.createObjectURL(file), file.name, isImage);
+}
+
+function isMediaFile(file) {
+  const ext = file?.name?.split(".").pop()?.toLowerCase();
+  return Boolean(ext && MEDIA_EXTENSIONS.includes(ext));
+}
+
 async function loadMedia(src, path, isImage, options = {}) {
   const {
     autoplay = false,
@@ -452,6 +662,25 @@ async function loadMedia(src, path, isImage, options = {}) {
     ...(sourcePatch ?? {}),
   });
   dispatch("timeline", { duration: v.duration, fps: sourceFps });
+  // V3: mirror the freshly-loaded source into a single-clip composition so the
+  // clip timeline and composition-aware render path have a valid model. Ship 1
+  // is single-source, so a new load replaces the composition (matches the
+  // pre-v3 "one source at a time" behaviour).
+  const migrated = compositionFromSource({
+    loaded: true,
+    path,
+    duration: v.duration,
+    sourceFps,
+    fps: sourceFps,
+    videoWidth: v.videoWidth,
+    videoHeight: v.videoHeight,
+  });
+  dispatch("composition", serializeComposition(migrated));
+  // Loading a fresh source replaces the composition, so any extra pooled
+  // decode elements from a previous project are stale — drop them and bind the
+  // transport element to the new primary source id.
+  resetVideoPool();
+  registerPrimarySource(migrated.sources[0]?.id ?? "source-1");
   applyPlaybackSpeed(v);
   setViewerOutputFps(sourceFps);
   dispatch("playback", {
@@ -471,6 +700,15 @@ async function loadMedia(src, path, isImage, options = {}) {
     loopEnabled: true,
   });
   requestRenderCurrentFrame();
+  // Decode the audio track into an RMS envelope for audio-reactive nodes.
+  // Fire-and-forget: deterministic once ready, audio-level outputs 0 until then.
+  // Images have no audio. Uses the element's resolved URL so it works for blob
+  // (browser) and asset (Tauri) sources alike.
+  if (isImage) {
+    clearAudioEnvelope();
+  } else {
+    void analyzeAudioFromUrl(v.currentSrc || src);
+  }
   if (autoplay) {
     await startPlayback(v, { forceRestart: true });
   }
@@ -494,6 +732,8 @@ export function clearSource() {
   hasDitherOutput = false;
   sampleLayout = null;
   clearFrameCache();
+  clearAudioEnvelope();
+  resetVideoPool();
 
   if (v) {
     try {
@@ -530,6 +770,7 @@ export function clearSource() {
     exrSelectedPass: null,
     exrPattern: null,
   });
+  dispatch("composition", createDefaultComposition());
   dispatch("playback", {
     playing: false,
     currentTime: 0,
@@ -613,7 +854,15 @@ function wireSourceDropTarget() {
     if (!hasFilePayload(event.dataTransfer)) return;
     event.preventDefault();
     showDropzone(false);
-    await loadDroppedPaths(extractDomDropPaths(event.dataTransfer));
+    const paths = extractDomDropPaths(event.dataTransfer);
+    if (paths.length > 0) {
+      await loadDroppedPaths(paths);
+      return;
+    }
+    // Browser: filesystem paths aren't exposed on File, so load the dropped
+    // File directly via a blob: URL.
+    const file = Array.from(event.dataTransfer.files || []).find(isMediaFile);
+    if (file) await loadMediaFromFile(file);
   });
 
   const tauriEvent = window.__TAURI__?.event;
@@ -677,6 +926,47 @@ function ensureEls() {
     ditherCanvas,
     ditherCtx,
   };
+}
+
+// ---------- multi-source decode pool (Ship 4) ----------
+
+// Register the transport <video> element as the decoder for `sourceId`. Called
+// when a source is loaded into the shared #sourceVideo, so the pool and the
+// single-source path point at the same element.
+function registerPrimarySource(sourceId) {
+  const { video: v } = ensureEls();
+  if (!sourceId || !v) return;
+  primarySourceId = sourceId;
+  videoPool.set(sourceId, { el: v, path: v.src || "" });
+}
+
+// Resolve the <video> element that decodes a given sourceId. The primary source
+// is the transport element; any other source uses its own pooled element. In
+// the single-source case this always returns the transport `video`, so the
+// existing render/seek path is unchanged.
+function decodeVideoForSourceId(sourceId) {
+  if (!sourceId) return ensureEls().video;
+  const entry = videoPool.get(sourceId);
+  if (entry?.el) return entry.el;
+  return ensureEls().video;
+}
+
+// Tear down every pooled decode element EXCEPT the transport element (which the
+// DOM owns and loadMedia reuses). Non-primary elements get their src released
+// so the browser frees the decoder. Called on source load / clearSource.
+function resetVideoPool() {
+  for (const [sourceId, entry] of videoPool) {
+    if (sourceId === primarySourceId) continue;
+    if (entry?.el && entry.el !== video) {
+      try {
+        entry.el.pause();
+        entry.el.removeAttribute("src");
+        entry.el.load();
+      } catch (_) {}
+    }
+  }
+  videoPool.clear();
+  primarySourceId = null;
 }
 
 function ensureFrameBuffers(width, height) {
@@ -811,7 +1101,7 @@ function clampFps(fps) {
 export function graphContainsDither(graph) {
   if (!graph?.nodes?.length) return false;
   for (const node of graph.nodes) {
-    if (!node || node.bypassed) continue;
+    if (!node || node.bypassed || node.visible === false) continue;
     if (node.type === "dither" || node.type === "pattern-dither") return true;
   }
   return false;
@@ -821,6 +1111,28 @@ function normalizePlaybackTime(seconds, fps) {
   const state = getState();
   const grid = fps ?? timelineFrameRate(state.timeline, state.source.fps);
   return snapTimeToFrame(seconds, grid);
+}
+
+// Authoritative timeline (composition) time in seconds. The transport video's
+// currentTime is capped at the primary source's duration, so it cannot address
+// composition times past the first clip; playback.currentTime is the clock of
+// record (written by seek and the play tick, mirrored by syncPlaybackState).
+// Single-source: the lone clip is start:0/in:0 on the transport, so this equals
+// the transport's currentTime and render/seek stay byte-identical.
+function currentTimelineTime() {
+  return Number(getState().playback.currentTime) || 0;
+}
+
+// Full traversable timeline length: the composition extent, but never shorter
+// than the source/user-set timeline duration (procedural tails). Used to clamp
+// seeks and size the playable range.
+function timelineClockDuration() {
+  const { composition, source, timeline } = getState();
+  return Math.max(
+    compositionDuration(composition) || 0,
+    Number(source?.duration) || 0,
+    Number(timeline?.duration) || 0
+  );
 }
 
 function syncPlaybackState(v, patch = {}) {
@@ -1001,6 +1313,17 @@ export async function togglePlay() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
 
+  if (!isSimpleSingleSource()) {
+    // Multi-clip composition: toggle the element-driven playback tick.
+    if (isCompositionPlaying()) {
+      stopCompositionPlayback();
+      dispatchCompositionPlayhead(currentTimelineTime(), false);
+    } else {
+      startCompositionPlayback();
+    }
+    return;
+  }
+
   if (pendingPlayPromise || (!v.paused && !v.ended)) {
     playRequestToken += 1;
     pendingPlayPromise = null;
@@ -1022,26 +1345,213 @@ export function restart() {
 export function pausePlayback() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
+  if (isCompositionPlaying()) {
+    stopCompositionPlayback();
+    dispatchCompositionPlayhead(currentTimelineTime(), false);
+    return;
+  }
   playRequestToken += 1;
   pendingPlayPromise = null;
   v.pause();
-  syncPlaybackState(v, { playing: false });
+  if (isSimpleSingleSource()) {
+    syncPlaybackState(v, { playing: false });
+  } else {
+    // Multi-clip but not actively playing (paused/scrubbing): the transport's
+    // currentTime is not the timeline clock, so don't let syncPlaybackState pull
+    // it in — just clear the playing flag and keep the composition clock.
+    dispatch("playback", { playing: false });
+  }
+}
+
+// ---------- multi-clip composition playback (Phase B) ----------
+
+// The classic single-source case: zero or one clip, and that clip is backed by
+// the primary transport source. These keep the untouched native-playback path;
+// any real composition (extra clips, or a single non-primary clip) uses the
+// tick below. This gate is what guarantees single-source playback is unchanged.
+export function isSimpleSingleSource() {
+  const clips = (getState().composition?.tracks ?? []).flatMap((t) => t.clips ?? []);
+  if (clips.length === 0) return true;
+  if (clips.length > 1) return false;
+  return clips[0].sourceId === primarySourceId;
+}
+
+// Write the composition playhead. Unlike syncPlaybackState (which reads the
+// transport's paused/ended), `playing` is explicit because the playing element
+// may be a pooled one the transport knows nothing about.
+function dispatchCompositionPlayhead(t, playing = true) {
+  dispatch("playback", { currentTime: normalizePlaybackTime(t), playing });
+}
+
+// Make `clip` the playing clip: pause the previous element if it differs, point
+// the new element at `sourceTarget` (in-source seconds) and start it.
+function setActiveCompositionClip(clip, sourceTarget) {
+  const nextEl = decodeVideoForSourceId(clip.sourceId);
+  if (playbackEl && playbackEl !== nextEl) {
+    try { playbackEl.pause(); } catch {}
+  }
+  playbackClip = clip;
+  playbackEl = nextEl;
+  try { playbackEl.currentTime = Math.max(0, sourceTarget || 0); } catch {}
+  try { playbackEl.play(); } catch {}
+}
+
+function startCompositionPlayback() {
+  const t = currentTimelineTime();
+  let active = getActiveVideoClip(getState().composition, t);
+  const within = !!active && t >= active.clip.start && t < active.clip.start + active.clip.duration;
+  if (!within) {
+    // Playhead past the end / in a gap: (re)start from the first clip.
+    active = firstVideoClip(getState().composition);
+  }
+  if (!active) return;
+  // Suppress the transport's trim/sync handlers — the tick owns the clock now.
+  playbackSyncSuspended = true;
+  setActiveCompositionClip(active.clip, within ? active.sourceTime : active.clip.in);
+  dispatchCompositionPlayhead(within ? t : active.clip.start);
+  if (!rafId) startDrawLoop();
+}
+
+function stopCompositionPlayback() {
+  if (playbackEl) {
+    try { playbackEl.pause(); } catch {}
+  }
+  playbackClip = null;
+  playbackEl = null;
+  playbackGap = null;
+  playbackSyncSuspended = false;
+  stopDrawLoop();
+}
+
+// Composition playback is live whenever a clip is playing OR the playhead is
+// traversing a gap between clips. Both states own the timeline clock and must be
+// stopped before a manual seek / pause and kept ticking by the draw loop.
+function isCompositionPlaying() {
+  return Boolean(playbackClip || playbackGap);
+}
+
+// One frame of composition playback. The playing element's currentTime is the
+// clock: timelineTime = clip.start + (el.currentTime - clip.in). At the clip's
+// out point we roll to the next clip (or loop / stop at the composition end).
+// Returns false when playback should stop. Steppable for tests by setting
+// playbackEl.currentTime and calling directly.
+function compositionPlaybackTick() {
+  // Traversing an empty stretch: the wall clock drives the playhead, not an
+  // element. Handled first because no clip/element is active during a gap.
+  if (playbackGap) return compositionGapTick();
+
+  const clip = playbackClip;
+  const el = playbackEl;
+  if (!clip || !el) return false;
+  const elTime = Number.isFinite(el.currentTime) ? el.currentTime : 0;
+  const clipOut = clip.in + clip.duration;
+  if (elTime >= clipOut - PLAYBACK_LOOP_EPSILON || el.ended) {
+    const clipEndTime = clip.start + clip.duration;
+    const next = nextVideoClipAfter(getState().composition, clip.id);
+    if (next) {
+      // Sequential clip with empty space before it: traverse the gap in real
+      // time (blank frame) instead of jumping straight to the next clip.
+      if (next.clip.start > clipEndTime + PLAYBACK_LOOP_EPSILON) {
+        enterCompositionGap(clipEndTime, next);
+        return true;
+      }
+      setActiveCompositionClip(next.clip, next.clip.in);
+      dispatchCompositionPlayhead(next.clip.start);
+      requestRenderCurrentFrame();
+      return true;
+    }
+    if (getState().playback.loopEnabled !== false) {
+      const first = firstVideoClip(getState().composition);
+      if (first) {
+        setActiveCompositionClip(first.clip, first.clip.in);
+        dispatchCompositionPlayhead(first.clip.start);
+        requestRenderCurrentFrame();
+        return true;
+      }
+    }
+    stopCompositionPlayback();
+    dispatchCompositionPlayhead(timelineClockDuration(), false);
+    return false;
+  }
+  dispatchCompositionPlayhead(clip.start + (elTime - clip.in));
+  requestRenderCurrentFrame();
+  return true;
+}
+
+// Begin traversing the empty stretch [fromTime, next.clip.start). No element
+// decodes; compositionGapTick advances the clock and the renderer shows a blank
+// frame until the next clip activates.
+function enterCompositionGap(fromTime, next) {
+  if (playbackEl) {
+    try { playbackEl.pause(); } catch {}
+  }
+  playbackClip = null;
+  playbackEl = null;
+  playbackGap = { untilTime: next.clip.start, next };
+  gapLastWallMs = performance.now();
+  dispatchCompositionPlayhead(fromTime);
+  requestRenderCurrentFrame();
+}
+
+// One frame while in a gap: advance the playhead by elapsed wall time × the
+// transport's playback rate. When it reaches the next clip's start, activate
+// that clip and hand the clock back to element-driven playback.
+function compositionGapTick() {
+  const gap = playbackGap;
+  if (!gap) return false;
+  const now = performance.now();
+  const rate = Math.max(0.1, Number(ensureEls().video?.playbackRate) || 1);
+  const dt = Math.max(0, (now - gapLastWallMs) / 1000) * rate;
+  gapLastWallMs = now;
+  const t = currentTimelineTime() + dt;
+  if (t >= gap.untilTime - PLAYBACK_LOOP_EPSILON) {
+    playbackGap = null;
+    setActiveCompositionClip(gap.next.clip, gap.next.clip.in);
+    dispatchCompositionPlayhead(gap.next.clip.start);
+    requestRenderCurrentFrame();
+    return true;
+  }
+  dispatchCompositionPlayhead(t);
+  requestRenderCurrentFrame();
+  return true;
 }
 
 export function seek(seconds) {
   const { video: v } = ensureEls();
   if (!v?.src) return;
-  const duration = Number.isFinite(v.duration) ? v.duration : 0;
-  const target = normalizePlaybackTime(Math.max(0, Math.min(duration, Number(seconds) || 0)));
-  const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
-  try {
-    if (Math.abs(before - target) > 0.0005) {
-      v.currentTime = target;
-    } else {
-      requestRenderCurrentFrame();
-    }
-  } catch {}
-  syncPlaybackState(v, { currentTime: target });
+  // Scrubbing pauses multi-clip playback so the clock follows the pointer.
+  if (isCompositionPlaying()) stopCompositionPlayback();
+  // `seconds` is composition (timeline) time. Clamp to the full traversable
+  // range — the composition extent, not the transport's duration — so the
+  // playhead can reach clips past the primary source.
+  const timelineTime = normalizePlaybackTime(
+    Math.max(0, Math.min(timelineClockDuration(), Number(seconds) || 0))
+  );
+  // Resolve which clip plays here and which element decodes it.
+  const active = getActiveVideoClip(getState().composition, timelineTime);
+  const el = active ? decodeVideoForSourceId(active.clip.sourceId) : v;
+
+  // Advance the timeline clock first so the render below reads the new position.
+  syncPlaybackState(v, { currentTime: timelineTime });
+
+  if (el === v) {
+    // Primary / single-source: seek the transport element directly; its 'seeked'
+    // handler renders. With one clip (start:0/in:0) this seeks the transport to
+    // `timelineTime`, byte-identical to the pre-composition path.
+    const duration = Number.isFinite(v.duration) ? v.duration : 0;
+    const elTarget = normalizePlaybackTime(
+      Math.max(0, Math.min(duration, active ? active.sourceTime : timelineTime))
+    );
+    const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+    try {
+      if (Math.abs(before - elTarget) > 0.0005) v.currentTime = elTarget;
+      else requestRenderCurrentFrame();
+    } catch {}
+  } else {
+    // Non-primary clip: renderCurrentFrame's decode sync seeks the pooled element
+    // to its in-source time and waits for paint, so just render at the new clock.
+    requestRenderCurrentFrame();
+  }
 }
 
 export function beginExportSession() {
@@ -1064,29 +1574,20 @@ export function endExportSession() {
   if (v) syncPlaybackState(v);
 }
 
-export async function seekForExport(seconds) {
-  const { video: v } = ensureEls();
-  if (!v?.src) return false;
-  const duration = Number.isFinite(v.duration) ? v.duration : 0;
-  const target = Math.max(0, Math.min(duration, Number(seconds) || 0));
-  const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
-
-  if (Math.abs(before - target) <= 0.0005) {
-    await renderCurrentFrame({ forExport: true });
-    return true;
-  }
-
-  // `seeked` alone is not enough: it tells us the position updated, but
-  // the <video>'s drawImage source can still hold the previous decoded
-  // frame. After `seeked` we wait one more paint — via
-  // requestVideoFrameCallback when available, with a double-rAF fallback
-  // because some WebViews (notably WKWebView for paused video) don't
-  // fire rVFC reliably.
+// Seek a <video> to `target` (in-element seconds) and resolve once a fresh
+// frame has actually painted. `seeked` alone is not enough: it reports the
+// position update, but the <video>'s drawImage source can still hold the
+// previous decoded frame. After `seeked` we wait one more paint — via
+// requestVideoFrameCallback when available, with a double-rAF fallback because
+// some WebViews (notably WKWebView for paused video) don't fire rVFC reliably.
+// Resolves true on success, false on decode error / timeout. Shared by the
+// export seek and the multi-source preview seek so both wait identically.
+function seekVideoAndWaitForPaint(v, target) {
   const supportsVFC =
     typeof v.requestVideoFrameCallback === "function" &&
     v instanceof HTMLVideoElement;
 
-  const ok = await new Promise((resolve) => {
+  return new Promise((resolve) => {
     let settled = false;
 
     const cleanup = () => {
@@ -1104,10 +1605,9 @@ export async function seekForExport(seconds) {
       if (settled) return;
       settled = true;
       cleanup();
-      console.warn("[seekForExport] failed", {
+      console.warn("[seek-video] failed", {
         reason,
         target,
-        before,
         readyState: v.readyState,
         videoError: v.error && { code: v.error.code, message: v.error.message },
       });
@@ -1143,8 +1643,69 @@ export async function seekForExport(seconds) {
       fail("set-currentTime-throw:" + (e?.message || e));
     }
   });
+}
 
-  if (ok) await renderCurrentFrame({ forExport: true });
+export async function seekForExport(seconds) {
+  const transport = ensureEls().video;
+  // Composite export: when 2+ video layers are active, seek EVERY layer's
+  // element to its in-source time so the composite draws the right frames.
+  // Preview seeks all layers via renderCurrentFrame's decode sync; export must
+  // match for parity. Single-layer / procedural keeps the original path below.
+  const layers = getCompositingLayers(getState().composition, seconds);
+  if (layers.length >= 2) {
+    let allOk = true;
+    for (const layer of layers) {
+      const el = decodeVideoForSourceId(layer.clip.sourceId);
+      if (!el?.src || !(el instanceof HTMLVideoElement)) continue;
+      const dur = Number.isFinite(el.duration) ? el.duration : 0;
+      const tgt = Math.max(0, dur ? Math.min(dur, layer.sourceTime) : layer.sourceTime);
+      const cur = Number.isFinite(el.currentTime) ? el.currentTime : 0;
+      if (Math.abs(cur - tgt) <= 0.0005) continue;
+      const ok = await seekVideoAndWaitForPaint(el, tgt);
+      if (!ok) allOk = false;
+    }
+    // Keep the transport clock on the timeline for export progress.
+    try {
+      const tdur = Number.isFinite(transport.duration) ? transport.duration : 0;
+      transport.currentTime = Math.max(0, tdur ? Math.min(tdur, Number(seconds) || 0) : Number(seconds) || 0);
+    } catch (_) {}
+    await renderCurrentFrame({ forExport: true, timeOverride: Number(seconds) || 0 });
+    return allOk;
+  }
+  // `seconds` is composition (timeline) time. Resolve which source plays there
+  // and seek THAT element to the clip's in-source time. Single-source: the
+  // active clip starts at 0/in 0, so v === transport and sourceTime === seconds
+  // (byte-identical to the old single-element seek).
+  const active = getActiveVideoClip(getState().composition, seconds);
+  const v = active ? decodeVideoForSourceId(active.clip.sourceId) : transport;
+  if (!v?.src) return false;
+  // Keep the transport element's clock on the timeline so playback UI / export
+  // progress stay correct, even when a different element is being decoded.
+  if (transport && transport !== v) {
+    try { transport.currentTime = Math.max(0, Number(seconds) || 0); } catch (_) {}
+  }
+  // Image and EXR sources (ImageMediaMock and its subclasses) have no real
+  // <video> seek. Static images ignore currentTime, but an EXR sequence reads
+  // it to pick the frame, so set it to the clip's in-source time before
+  // rendering — the preview path decodes at the element's currentTime and
+  // export must match it (preview/export parity).
+  if (!(v instanceof HTMLVideoElement)) {
+    try { v.currentTime = active ? active.sourceTime : Number(seconds) || 0; } catch (_) {}
+    await renderCurrentFrame({ forExport: true, timeOverride: Number(seconds) || 0 });
+    return true;
+  }
+  const sourceSeconds = active ? active.sourceTime : Number(seconds) || 0;
+  const duration = Number.isFinite(v.duration) ? v.duration : 0;
+  const target = Math.max(0, Math.min(duration, sourceSeconds));
+  const before = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+
+  if (Math.abs(before - target) <= 0.0005) {
+    await renderCurrentFrame({ forExport: true, timeOverride: Number(seconds) || 0 });
+    return true;
+  }
+
+  const ok = await seekVideoAndWaitForPaint(v, target);
+  if (ok) await renderCurrentFrame({ forExport: true, timeOverride: Number(seconds) || 0 });
   return ok;
 }
 
@@ -1153,45 +1714,109 @@ export function stepFrame(direction) {
   if (!v?.src) return;
   const { source, playback, timeline } = getState();
   const fps = timelineFrameRate(timeline, source.fps);
-  const duration = Number.isFinite(v.duration) ? v.duration : 0;
   pausePlayback();
-  const currentFrame = timeToFrame(v.currentTime || 0, fps);
-  const next = clamp(
-    (currentFrame + direction) / fps,
-    playback.trimStart,
-    Math.max(playback.trimStart, (playback.trimEnd || duration) - 1 / fps)
-  );
-  seek(next);
+  if (isSimpleSingleSource()) {
+    // Single-source: step over the transport clock within the trim range
+    // (byte-identical to the pre-composition behaviour).
+    const duration = Number.isFinite(v.duration) ? v.duration : 0;
+    const currentFrame = timeToFrame(v.currentTime || 0, fps);
+    const next = clamp(
+      (currentFrame + direction) / fps,
+      playback.trimStart,
+      Math.max(playback.trimStart, (playback.trimEnd || duration) - 1 / fps)
+    );
+    seek(next);
+    return;
+  }
+  // Multi-clip: step over the composition clock across the full timeline.
+  const currentFrame = timeToFrame(currentTimelineTime(), fps);
+  const limit = Math.max(0, timelineClockDuration() - 1 / fps);
+  seek(clamp((currentFrame + direction) / fps, 0, limit));
+}
+
+// Apply one composition edit as a single undo/redo entry. Lives here, not in the
+// pure composition.js, because history touches state. Mirrors the snapshot pattern
+// in player-media-clip-drag.js. Returns true when the edit changed something.
+function commitCompositionEdit(reducer, label) {
+  const before = serializeComposition(getState().composition);
+  dispatch("composition", reducer(getState().composition));
+  const after = serializeComposition(getState().composition);
+  if (JSON.stringify(before) === JSON.stringify(after)) return false;
+  pushHistory({
+    label,
+    undo: () => dispatch("composition", serializeComposition(normalizeComposition(before))),
+    redo: () => dispatch("composition", serializeComposition(normalizeComposition(after))),
+  });
+  return true;
 }
 
 export function snapPlayhead() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
-  const { playback } = getState();
-  const t = v.currentTime || 0;
-  const nearStart = Math.abs(t - playback.trimStart) < Math.abs(t - playback.trimEnd);
-  seek(nearStart ? playback.trimStart : playback.trimEnd);
+  if (isSimpleSingleSource()) {
+    const { playback } = getState();
+    const t = v.currentTime || 0;
+    const nearStart = Math.abs(t - playback.trimStart) < Math.abs(t - playback.trimEnd);
+    seek(nearStart ? playback.trimStart : playback.trimEnd);
+    return;
+  }
+  // Multi-clip: snap to the nearer edge of the active clip at the playhead.
+  const t = currentTimelineTime();
+  const active = getActiveVideoClip(getState().composition, t);
+  if (!active) return;
+  const clipStart = active.clip.start;
+  const clipEnd = active.clip.start + active.clip.duration;
+  const nearStart = Math.abs(t - clipStart) < Math.abs(t - clipEnd);
+  seek(nearStart ? clipStart : clipEnd);
 }
 
 export function setIn() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
-  const { playback } = getState();
-  const next = Math.min(normalizePlaybackTime(v.currentTime || 0), playback.trimEnd - 0.01);
-  const trimStart = Math.max(0, next);
-  dispatch("playback", { trimStart });
-  if ((v.currentTime || 0) < trimStart) seek(trimStart);
+  if (isSimpleSingleSource()) {
+    const { playback } = getState();
+    const next = Math.min(normalizePlaybackTime(v.currentTime || 0), playback.trimEnd - 0.01);
+    const trimStart = Math.max(0, next);
+    dispatch("playback", { trimStart });
+    if ((v.currentTime || 0) < trimStart) seek(trimStart);
+    return;
+  }
+  // Multi-clip: move the active clip's head (left edge) to the playhead. The same
+  // source frame stays under the playhead; the clip just starts here now.
+  const t = currentTimelineTime();
+  const active = getActiveVideoClip(getState().composition, t);
+  if (!active) return;
+  const changed = commitCompositionEdit(
+    (c) => trimClipStart(c, { trackId: active.track.id, clipId: active.clip.id, start: t }),
+    "Trim clip in"
+  );
+  if (changed) requestRenderCurrentFrame();
 }
 
 export function setOut() {
   const { video: v } = ensureEls();
   if (!v?.src) return;
-  const { playback } = getState();
-  const duration = Number.isFinite(v.duration) ? v.duration : 0;
-  const next = Math.max(normalizePlaybackTime(v.currentTime || 0), playback.trimStart + 0.01);
-  const trimEnd = Math.min(duration, next);
-  dispatch("playback", { trimEnd });
-  if ((v.currentTime || 0) > trimEnd) seek(trimEnd);
+  if (isSimpleSingleSource()) {
+    const { playback } = getState();
+    const duration = Number.isFinite(v.duration) ? v.duration : 0;
+    const next = Math.max(normalizePlaybackTime(v.currentTime || 0), playback.trimStart + 0.01);
+    const trimEnd = Math.min(duration, next);
+    dispatch("playback", { trimEnd });
+    if ((v.currentTime || 0) > trimEnd) seek(trimEnd);
+    return;
+  }
+  // Multi-clip: set the active clip's tail (right edge) one frame past the
+  // playhead so the current frame is the last one included (inclusive out point).
+  const t = currentTimelineTime();
+  const { composition, source, timeline } = getState();
+  const active = getActiveVideoClip(composition, t);
+  if (!active) return;
+  const step = 1 / timelineFrameRate(timeline, source.fps);
+  const changed = commitCompositionEdit(
+    (c) => trimClipEnd(c, { trackId: active.track.id, clipId: active.clip.id, end: t + step }),
+    "Trim clip out"
+  );
+  if (changed) requestRenderCurrentFrame();
 }
 
 export function resetTrim() {
@@ -1284,7 +1909,15 @@ async function renderCurrentFrame(options = {}) {
   // The forExport flag is the export pipeline's opt-in to bypass this guard.
   if (exportSessionActive && !options.forExport) return;
   const { video: v } = ensureEls();
-  const graph = ensureBootGraph();
+  // Resolve color-token references once, here, before both the CPU eval and the
+  // GPU bake derive from `graph` — so a token and its literal value render
+  // identically (preview/export parity). No-op when no token is referenced.
+  // The base is always the GLOBAL graph (getGlobalGraph): when a clip scope is
+  // open in the editor, state.graph holds the clip graph and the real global is
+  // the stash, so the base stays anchored to the global. `graph` may be
+  // reassigned below to the active clip's own graph (per-clip graphs); every
+  // downstream path reads this one binding.
+  let graph = resolveGraphTokens(getGlobalGraph());
   const proceduralSource = findViewerProceduralSource(graph);
   if (proceduralSource) {
     renderProceduralFrame(graph, proceduralSource);
@@ -1304,15 +1937,123 @@ async function renderCurrentFrame(options = {}) {
 
   const currentRenderVersion = ++renderVersion;
   const currentSourceToken = sourceToken;
-  if (!(await prepareSourceFrame(v))) return;
-  if (isStaleRender(currentRenderVersion, currentSourceToken)) return;
-  ensureFrameBuffers(v.videoWidth, v.videoHeight);
-  drawSourceFrame(v);
+  // Authoritative composition time for this render. Preview reads the timeline
+  // clock (playback.currentTime); export passes the exact frame time through
+  // options.timeOverride (seekForExport doesn't write playback state). Single-
+  // source: playback.currentTime === transport currentTime, byte-identical to
+  // the old v.currentTime path.
+  const timelineTime = options.timeOverride != null
+    ? Number(options.timeOverride) || 0
+    : currentTimelineTime();
+  // Resolve the active video clips bottom-to-top. With 0 or 1 layer this runs
+  // the original single-element path verbatim (byte-identical); with 2+ layers
+  // it composites them with per-track blend/opacity. Both paths write
+  // sourceCanvas + a frame-cache key, so everything downstream (graph, worker,
+  // export) is unchanged and preview/export stay in parity.
+  const layers = getCompositingLayers(getState().composition, timelineTime);
+  let frameKey;
+  if (layers.length >= 2) {
+    // --- multi-layer compositing ---
+    // The bottom layer's element sizes the canvas; upper layers scale to fit.
+    const baseEl = decodeVideoForSourceId(layers[0].clip.sourceId) || v;
+    ensureFrameBuffers(baseEl.videoWidth || v.videoWidth, baseEl.videoHeight || v.videoHeight);
+    frameKey = compositeFrameKey(timelineTime, layers);
+    if (!exportSessionActive && frameKey !== null && !frameCache.has(frameKey)) {
+      // Seek every pooled (non-transport) layer to its in-source time and wait
+      // for paint before compositing. The primary layer rides the transport
+      // clock and needs no seek.
+      for (const layer of layers) {
+        const el = decodeVideoForSourceId(layer.clip.sourceId);
+        if (!el || el === v || el.readyState < 1 || !(el instanceof HTMLVideoElement)) continue;
+        const dur = Number.isFinite(el.duration) ? el.duration : 0;
+        const target = Math.max(0, dur ? Math.min(dur, layer.sourceTime) : layer.sourceTime);
+        if (Math.abs((el.currentTime || 0) - target) > 0.001) {
+          const ok = await seekVideoAndWaitForPaint(el, target);
+          if (!ok || isStaleRender(currentRenderVersion, currentSourceToken)) return;
+        }
+      }
+    }
+    drawCompositeFrame(layers, frameKey);
+  } else {
+    // --- single-layer path (verbatim pre-compositing behaviour) ---
+    // Decode element for the clip under the playhead. With one source this is
+    // the transport element `v` itself (byte-identical to the old path); with
+    // several sources it's the pooled element for the active clip's file.
+    const activeEntry = getActiveVideoClip(getState().composition, timelineTime);
+    // Multi-clip gap: the playhead sits in an empty stretch (no clip on any
+    // track). Show a blank frame instead of the stale transport element, run
+    // through the normal chain so preview and export match. Single-source /
+    // empty compositions keep the transport fallback (byte-identical).
+    const isGap = !activeEntry && !isSimpleSingleSource();
+    const decodeVideo = (activeEntry ? decodeVideoForSourceId(activeEntry.clip.sourceId) : v) || v;
+    const decodeWidth = decodeVideo.videoWidth || v.videoWidth;
+    const decodeHeight = decodeVideo.videoHeight || v.videoHeight;
+    ensureFrameBuffers(decodeWidth, decodeHeight);
+    // Decode this element's current frame before keying or drawing it. EXR
+    // sources tone-map into .drawable and refresh their frame/pass/tone identity
+    // here; a no-op for <video> and image elements. Skipped for gaps (nothing to
+    // decode — the frame is blank).
+    if (!isGap) {
+      if (!(await prepareSourceFrame(decodeVideo))) return;
+      if (isStaleRender(currentRenderVersion, currentSourceToken)) return;
+    }
+    // Cache key is derived from the TIMELINE clock + the active clip's source id,
+    // never from the decode element's own currentTime (which is the clip's in-
+    // source time and would collide across clips of one file). Gaps share one
+    // stable key so the blank frame is memoised once.
+    frameKey = isGap ? `${frameCacheStamp}|gap` : compositionFrameKey(timelineTime, activeEntry?.clip.sourceId);
+    // Multi-source preview: a clip backed by a pooled (non-transport) element
+    // isn't driven by the transport clock, so its element sits at whatever time
+    // it was last left on. Seek it to the clip's in-source time and wait for the
+    // frame to paint before drawing — but only when that frame isn't already
+    // cached and the element has actually moved. Single-source / primary-source
+    // clips keep decodeVideo === v and skip this entirely (byte-identical to the
+    // pre-multi-source path). During live playback this seeks the secondary clip
+    // per frame (lower fps, still correct); primary playback is untouched.
+    if (
+      decodeVideo !== v &&
+      activeEntry &&
+      !exportSessionActive &&
+      decodeVideo instanceof HTMLVideoElement &&
+      decodeVideo.readyState >= 1 &&
+      frameKey !== null &&
+      !frameCache.has(frameKey)
+    ) {
+      const dur = Number.isFinite(decodeVideo.duration) ? decodeVideo.duration : 0;
+      const target = Math.max(0, dur ? Math.min(dur, activeEntry.sourceTime) : activeEntry.sourceTime);
+      if (Math.abs((decodeVideo.currentTime || 0) - target) > 0.001) {
+        const ok = await seekVideoAndWaitForPaint(decodeVideo, target);
+        if (!ok || isStaleRender(currentRenderVersion, currentSourceToken)) return;
+      }
+    }
+    if (isGap) drawBlankSourceFrame(frameKey);
+    else drawSourceFrame(decodeVideo, frameKey);
+  }
+
+  // Per-clip effect graph (single-layer path): if the clip under the playhead
+  // carries its own graph, evaluate this frame through it instead of the global
+  // graph, resolving its color tokens at this same chokepoint so preview and
+  // export stay in parity. graphId === null keeps the global graph, so single-
+  // source and existing projects are byte-identical. The clip graph flows through
+  // the worker, CPU eval, native preview and export uniformly because every path
+  // below reads this `graph` binding. Compositing (2+ layers) keeps the global
+  // graph for now — per-layer clip graphs are a later increment.
+  if (layers.length < 2) {
+    const activeGraphId =
+      getActiveVideoClip(getState().composition, timelineTime)?.clip?.graphId ?? null;
+    if (activeGraphId && activeGraphId === getEditingClipGraphId()) {
+      // This clip's graph is open in the editor — use the live editor buffer
+      // (state.graph) so in-progress edits show in the preview immediately.
+      graph = resolveGraphTokens(getState().graph);
+    } else if (activeGraphId && hasClipGraph(activeGraphId)) {
+      graph = resolveGraphTokens(getClipGraph(activeGraphId));
+    }
+  }
 
   // sourceVersion is the cache identity of the current source frame. It only
   // changes when the painted contents change (new frame, new source), so the
   // node memo cache can hit on paused-video param tweaks.
-  const baseSourceVersion = sourceFrameKey(v) ?? `live-${currentRenderVersion}`;
+  const baseSourceVersion = frameKey ?? `live-${currentRenderVersion}`;
 
   // During playback, evaluate the effect chain on a downscaled copy of the
   // source. The processed/dither commits already scale the result back up to
@@ -1342,7 +2083,13 @@ async function renderCurrentFrame(options = {}) {
     ? `${baseSourceVersion}@${PLAYBACK_PREVIEW_SCALE}`
     : baseSourceVersion;
 
-  const timelineContext = createTimelineRenderContext(v);
+  const timelineContext = createTimelineRenderContext(v, timelineTime);
+  // Decode any source nodes bound to a specific media source (params.sourceId)
+  // at the timeline time, so the graph can read them independently of the clips.
+  const sourceFrames = await resolveBoundSourceFrames(
+    graph, timelineContext.timeSeconds, currentRenderVersion, currentSourceToken
+  );
+  if (isStaleRender(currentRenderVersion, currentSourceToken)) return;
   const nativeRenderGraph = applyTimelineToGraph(
     graph,
     timelineContext.timeline,
@@ -1361,6 +2108,10 @@ async function renderCurrentFrame(options = {}) {
   const useWorker =
     !exportSessionActive &&
     shouldUseWorkerForPreview(getState().view?.workerRender, v) &&
+    !graphRequiresMainThreadRender(graph) &&
+    // GPU-effect graphs are sent to the worker optimistically; once it reports
+    // it can't build a WebGL2 renderer, they stay on the main thread (parity).
+    (!graphContainsGpuEffect(graph) || !workerKnownGpuUnsupported()) &&
     isWorkerAvailable();
 
   if (useWorker) {
@@ -1390,6 +2141,7 @@ async function renderCurrentFrame(options = {}) {
     sourceImage: sourceForEval,
     sourceVersion,
     ...timelineContext,
+    sourceFrames,
   }) ?? { viewerOutput: null, ditherOutput: null };
   const graphOutput = graphOutputs.viewerOutput;
 
@@ -1446,7 +2198,7 @@ function shouldUseWorkerForPreview(mode, video) {
   return video instanceof HTMLVideoElement && !video.paused && !video.ended;
 }
 
-function renderProceduralFrame(graph = ensureBootGraph(), sourceNode = findViewerProceduralSource(graph)) {
+function renderProceduralFrame(graph = resolveGraphTokens(getGlobalGraph()), sourceNode = findViewerProceduralSource(graph)) {
   if (!sourceNode || !canvas || !ctx) return false;
 
   renderVersion += 1;
@@ -1577,7 +2329,7 @@ function buildPreviewSource(fullSource) {
   return previewSourceCanvas;
 }
 
-function drawSourceFrame(v) {
+function drawSourceFrame(v, key = null) {
   if (!sourceCtx || !sourceCanvas) return;
   // Export drives back-to-back seeks where `<video>.drawImage` can briefly
   // read the previous decoded frame. Caching those pixels under the new
@@ -1588,7 +2340,6 @@ function drawSourceFrame(v) {
     sourceCtx.drawImage(v.drawable || v, 0, 0, sourceCanvas.width, sourceCanvas.height);
     return;
   }
-  const key = sourceFrameKey(v);
   if (key !== null) {
     const cached = frameCache.get(key);
     if (cached) {
@@ -1603,14 +2354,161 @@ function drawSourceFrame(v) {
   if (key !== null) cacheCurrentFrame(key);
 }
 
-function sourceFrameKey(v) {
-  if (!v?.src || !Number.isFinite(v.currentTime)) return null;
+// Paint a blank (black) source frame for a timeline gap. The 2D contexts use
+// alpha:false, so clearRect yields opaque black. Mirrors drawSourceFrame's
+// cache + export-fresh behaviour so the gap frame flows through the normal
+// chain and preview/export stay in parity.
+function drawBlankSourceFrame(key = null) {
+  if (!sourceCtx || !sourceCanvas) return;
+  if (exportSessionActive) {
+    sourceCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+    return;
+  }
+  if (key !== null) {
+    const cached = frameCache.get(key);
+    if (cached) {
+      frameCache.delete(key);
+      frameCache.set(key, cached);
+      sourceCtx.drawImage(cached, 0, 0, sourceCanvas.width, sourceCanvas.height);
+      return;
+    }
+  }
+  sourceCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+  if (key !== null) cacheCurrentFrame(key);
+}
+
+// Frame-cache identity for composition time `timelineTime`. Keyed by the active
+// clip's source id + the frame index, so frames from different source files
+// can't collide. Single-source resolves to a constant source id, matching the
+// pre-multi-source behaviour.
+function compositionFrameKey(timelineTime, sourceId) {
+  if (!Number.isFinite(timelineTime)) return null;
   const fps = getState().source.sourceFps || 30;
   if (!fps) return null;
-  if (typeof v.sourceFrameKey === "function") {
-    return `${frameCacheStamp}|${v.sourceFrameKey(v.currentTime, fps)}`;
+  // EXR (and any element exposing a custom frame identity) folds its frame +
+  // pass + tone-mapping key into the cache key, so a pass or exposure change
+  // invalidates the cached frame even though the timeline time is unchanged.
+  const el = sourceId ? decodeVideoForSourceId(sourceId) : ensureEls().video;
+  if (el && typeof el.sourceFrameKey === "function") {
+    return `${frameCacheStamp}|${sourceId ?? "live"}|${el.sourceFrameKey(timelineTime, fps)}`;
   }
-  return `${frameCacheStamp}|${timeToFrame(v.currentTime, fps)}`;
+  return `${frameCacheStamp}|${sourceId ?? "live"}|${timeToFrame(timelineTime, fps)}`;
+}
+
+// Frame-cache identity for a composited stack: every layer's source id + frame
+// index + opacity + blend mode, in paint order. Distinct from the single-clip
+// key so composited and un-composited frames never collide in the cache.
+function compositeFrameKey(timelineTime, layers) {
+  if (!Number.isFinite(timelineTime) || !layers?.length) return null;
+  const fps = getState().source.sourceFps || 30;
+  if (!fps) return null;
+  const parts = layers.map((l) => {
+    const frame = timeToFrame(l.sourceTime, fps);
+    const op = Math.round(l.track.opacity ?? 100);
+    const blend = l.track.blendMode || "normal";
+    return `${l.clip.sourceId}:${frame}:${op}:${blend}`;
+  });
+  return `${frameCacheStamp}|comp|${parts.join("|")}`;
+}
+
+// Canvas2D globalCompositeOperation names that double as composition blend
+// modes (they share names with CSS mix-blend-mode). "normal" and anything
+// unknown fall back to source-over.
+const CANVAS_BLEND_MODES = new Set([
+  "multiply", "screen", "overlay", "darken", "lighten", "color-dodge",
+  "color-burn", "hard-light", "soft-light", "difference", "exclusion",
+  "hue", "saturation", "color", "luminosity",
+]);
+function blendModeToCanvas(mode) {
+  return CANVAS_BLEND_MODES.has(mode) ? mode : "source-over";
+}
+
+// Composite `layers` (bottom-to-top) into sourceCanvas with per-track opacity
+// (globalAlpha) and blend mode (globalCompositeOperation). The base layer always
+// paints source-over; upper layers use their track's blend mode. Mirrors
+// drawSourceFrame's cache + export-fresh behaviour so preview and export match.
+function drawCompositeFrame(layers, key = null) {
+  if (!sourceCtx || !sourceCanvas) return;
+  if (!exportSessionActive && key !== null) {
+    const cached = frameCache.get(key);
+    if (cached) {
+      frameCache.delete(key);
+      frameCache.set(key, cached);
+      sourceCtx.drawImage(cached, 0, 0, sourceCanvas.width, sourceCanvas.height);
+      return;
+    }
+  }
+  const w = sourceCanvas.width;
+  const h = sourceCanvas.height;
+  sourceCtx.clearRect(0, 0, w, h);
+  sourceCtx.save();
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
+    const el = decodeVideoForSourceId(layer.clip.sourceId);
+    if (!el) continue;
+    sourceCtx.globalAlpha = clamp((layer.track.opacity ?? 100) / 100, 0, 1);
+    sourceCtx.globalCompositeOperation = i === 0 ? "source-over" : blendModeToCanvas(layer.track.blendMode);
+    sourceCtx.drawImage(el.drawable || el, 0, 0, w, h);
+  }
+  sourceCtx.restore();
+  if (!exportSessionActive && key !== null) cacheCurrentFrame(key);
+}
+
+// Build the per-source frame map for graph source nodes bound to a media source
+// (params.sourceId). Each bound source is decoded at the current timeline time,
+// clamped to its own duration (it plays along, then holds on its last frame).
+// Video elements seek + wait for paint; image mocks are static. Returns null
+// when nothing is bound. Forces main-thread render (graphRequiresMainThreadRender),
+// and unlike clip layers nothing else seeks these elements, so it seeks during
+// export too (parity).
+async function resolveBoundSourceFrames(graph, timelineTime, renderVer, srcToken) {
+  const ids = new Set();
+  for (const node of graph?.nodes ?? []) {
+    if (node?.type === "source" && node.params?.sourceId && !node.bypassed && node.visible !== false) {
+      ids.add(node.params.sourceId);
+    }
+  }
+  if (ids.size === 0) return null;
+
+  const fps = getState().source.sourceFps || 30;
+  const sources = getState().composition?.sources ?? [];
+  const frames = {};
+  for (const sourceId of ids) {
+    const el = decodeVideoForSourceId(sourceId);
+    if (!el) continue;
+    const meta = sources.find((s) => s.id === sourceId);
+    const dur = Number(meta?.duration) || (Number.isFinite(el.duration) ? el.duration : 0);
+    const target = Math.max(0, dur ? Math.min(dur, timelineTime) : timelineTime);
+    if (el instanceof HTMLVideoElement) {
+      if (el.readyState >= 1 && Math.abs((el.currentTime || 0) - target) > 0.001) {
+        const ok = await seekVideoAndWaitForPaint(el, target);
+        if (!ok) continue;
+        if (isStaleRender(renderVer, srcToken)) return null;
+      }
+    } else {
+      // ImageMediaMock and friends: static frame, no real seek.
+      try { el.currentTime = target; } catch (_) {}
+    }
+    const w = el.videoWidth || el.naturalWidth || 0;
+    const h = el.videoHeight || el.naturalHeight || 0;
+    if (!w || !h) continue;
+    let canvas = boundSourceCanvases.get(sourceId);
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      boundSourceCanvases.set(sourceId, canvas);
+    }
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    const cx = canvas.getContext("2d", { alpha: false });
+    cx.drawImage(el.drawable || el, 0, 0, w, h);
+    frames[sourceId] = {
+      canvas,
+      version: `${frameCacheStamp}|bound|${sourceId}|${timeToFrame(target, fps)}`,
+    };
+  }
+  return Object.keys(frames).length ? frames : null;
 }
 
 function cacheCurrentFrame(key) {
@@ -1676,17 +2574,27 @@ function commitDitherFrame(image) {
   ditherCtx.drawImage(image, 0, 0, ditherCanvas.width, ditherCanvas.height);
 }
 
-function createTimelineRenderContext(v) {
+function createTimelineRenderContext(v, timelineTime) {
   const state = getState();
   const fps = state.source.fps || 30;
+  const rawTime = timelineTime != null
+    ? timelineTime
+    : (Number.isFinite(v?.currentTime) ? v.currentTime : state.playback.currentTime);
+  const timeSeconds = normalizePlaybackTime(rawTime, fps);
+  // V3: resolve the active media clip at this composition time. Ship 1 is
+  // single-source (the load-time migration makes one clip at start=0/in=0, so
+  // its sourceTime === timeSeconds and the existing single-<video> render path
+  // stays pixel-identical). The resolved clip is attached to the context so the
+  // clip-cache key and later multi-source/compositing phases can consume it
+  // without changing this call site. Both preview and export go through here,
+  // keeping them in parity.
+  const activeClip = getActiveVideoClip(state.composition, timeSeconds);
   return {
     timeline: state.timeline,
-    timeSeconds: normalizePlaybackTime(
-      Number.isFinite(v?.currentTime) ? v.currentTime : state.playback.currentTime,
-      fps
-    ),
+    timeSeconds,
     durationSeconds: state.source.duration || v?.duration || 0,
     fps,
+    activeClip,
   };
 }
 
@@ -1703,7 +2611,10 @@ function createProceduralTimelineRenderContext() {
 
 function queueNativePreview(renderGraph, currentRenderVersion, currentSourceToken) {
   if (exportSessionActive) return;
-  if (!canUseNativeRender(renderGraph)) {
+  // The native GL preview only has the clip composite (sourceCanvas), so it
+  // can't render bound source nodes — skip it for main-thread-only graphs and
+  // let the JS eval's correct result stand.
+  if (!canUseNativeRender(renderGraph) || graphRequiresMainThreadRender(renderGraph)) {
     setNativeRenderStatus("js");
     return;
   }
@@ -1806,6 +2717,12 @@ function clearSplitCanvas() {
 function startDrawLoop() {
   const { video: v } = ensureEls();
   const tick = () => {
+    // Multi-clip composition playback drives its own clock and clip boundaries.
+    // Single-source leaves playbackClip null and runs the untouched body below.
+    if (isCompositionPlaying()) {
+      rafId = compositionPlaybackTick() ? requestAnimationFrame(tick) : 0;
+      return;
+    }
     if (!playbackSyncSuspended) {
       if (!enforceTrimPlayback(v)) {
         syncPlaybackState(v);

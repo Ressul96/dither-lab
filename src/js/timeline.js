@@ -79,7 +79,8 @@ export function normalizeTimeline(raw = {}, fallback = {}) {
     autokey: raw?.autokey === true,
     tracks,
     // UI state preserved through save/load. Defaults match state.js.
-    viewMode: raw?.viewMode === "graph" ? "graph" : "layers",
+    viewMode:
+      raw?.viewMode === "graph" || raw?.viewMode === "clips" ? raw.viewMode : "layers",
     durationUnit: raw?.durationUnit === "second" ? "second" : "frame",
     zoom: clampZoom(raw?.zoom),
     panelOpen: raw?.panelOpen === true,
@@ -271,7 +272,7 @@ export function toggleTrackExpanded(trackId) {
 }
 
 export function setViewMode(mode) {
-  if (mode !== "layers" && mode !== "graph") return;
+  if (mode !== "layers" && mode !== "graph" && mode !== "clips") return;
   if (getState().timeline.viewMode === mode) return;
   dispatch("timeline", { viewMode: mode });
 }

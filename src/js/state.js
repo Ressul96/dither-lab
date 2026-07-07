@@ -5,6 +5,12 @@ export const DEFAULT_GRAPH_VIEW = Object.freeze({
   panX: -7820,
   panY: -7904,
   currentParentId: "root",
+  // Per-clip graph editing scope. null = editing the shared global graph (the
+  // default). When set, the node editor is editing a clip's own graph: `state.graph`
+  // holds that clip graph and the global graph is stashed (graph.js). Transient —
+  // not persisted, so a freshly loaded project always starts on the global graph.
+  clipGraphId: null,
+  clipScopeClipId: null,
 });
 
 const state = {
@@ -57,6 +63,7 @@ const state = {
     edges: [],
     selectedNodeId: null,
     selectedNodeIds: [],
+    solo: null,
   },
   timeline: {
     version: 1,
@@ -76,6 +83,17 @@ const state = {
   },
   graphView: { ...DEFAULT_GRAPH_VIEW },
   ab: { a: null, b: null },
+  // V3 multi-track clip timeline. Structurally separate from `timeline` (which
+  // is parameter keyframes): `composition` models WHAT source content exists at
+  // a given time. Populated by a single-clip migration on source load; the full
+  // model + queries live in composition.js. Empty until a source is loaded.
+  composition: {
+    version: 1,
+    fps: 30,
+    duration: 0,
+    tracks: [],
+    sources: [],
+  },
 };
 
 const listeners = new Map();
@@ -95,10 +113,10 @@ export function subscribe(topic, fn) {
 export function dispatch(topic, patch) {
   const slot = state[topic];
   if (!slot) return;
-  Object.assign(slot, patch);
+  state[topic] = { ...slot, ...patch };
   const subs = listeners.get(topic);
   if (subs) {
-    for (const fn of [...subs]) notifySubscriber(topic, fn, slot);
+    for (const fn of [...subs]) notifySubscriber(topic, fn, state[topic]);
   }
 }
 
@@ -129,6 +147,7 @@ export function redo() {
 }
 
 export function syncHistoryButtons() {
+  if (typeof document === "undefined") return;
   const u = document.querySelector('[data-action="undo"]');
   const r = document.querySelector('[data-action="redo"]');
   if (u) u.disabled = undoStack.length === 0;

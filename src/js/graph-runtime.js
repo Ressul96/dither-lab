@@ -11,6 +11,7 @@ import {
   applyDitherNode,
   applyDisplaceNode,
   applyDuotoneNode,
+  applyFieldMapNode,
   applyFlipNode,
   applyGlareNode,
   applyGradientNode,
@@ -46,6 +47,7 @@ import {
 } from "./image-ops.js";
 import { getNodeParamBounds } from "./graph.js";
 import { applyTimelineToGraph } from "./timeline.js";
+import { getAudioLevel } from "./audio-analysis.js";
 
 // Per-node memoization. Each entry pins its output canvas — buffer pool must
 // not reclaim it until the cache invalidates (params/inputs/source change or
@@ -68,7 +70,7 @@ export function getLastEvaluationProfile() {
 // param is animated (procedural noise, scrolling tracking lines, etc.). The
 // runtime salts the cache key with the current frame so they re-evaluate per
 // frame instead of returning a stale cached canvas.
-const TIME_AWARE_TYPES = new Set(["mesh-gradient", "analog", "vhs", "crt"]);
+const TIME_AWARE_TYPES = new Set(["mesh-gradient", "analog", "vhs", "crt", "audio-level"]);
 
 export function isOutputCached(canvas) {
   if (!canvas) return false;
@@ -87,6 +89,54 @@ export function clearGraphCache() {
 
 export function evaluateViewerOutput(graph, context) {
   return evaluateGraphOutputs(graph, context).viewerOutput;
+}
+
+// GPU stylize nodes (vhs, crt, bloom, ascii, …) have no CPU fallback: when the
+// renderer is unavailable, stylize-gpu.js passes the input straight through and
+// the effect silently vanishes — a worker frame that wouldn't match a main-
+// thread export. render-worker.js uses this to decide whether to fall back to
+// the main thread (paired with isGpuRendererAvailable in gpu-effects.js). glare
+// is intentionally absent: every glare type runs on the CPU or has a CPU
+// fallback, so it stays worker-safe.
+const WORKER_UNSAFE_GPU_TYPES = new Set([
+  "halftone",
+  "led-screen",
+  "modulation",
+  "pixel-sorting",
+  "depth-of-field",
+  "vhs",
+  "crt",
+  "analog",
+  "bloom",
+  "halation",
+  "ascii",
+  "pattern-dither",
+]);
+
+const MAIN_THREAD_ONLY_TYPES = new Set([
+  "ascii",
+]);
+
+export function graphContainsGpuEffect(graph) {
+  if (!graph?.nodes?.length) return false;
+  for (const node of graph.nodes) {
+    if (!node || node.bypassed || isNodeHidden(node)) continue;
+    if (WORKER_UNSAFE_GPU_TYPES.has(node.type)) return true;
+  }
+  return false;
+}
+
+export function graphRequiresMainThreadRender(graph) {
+  if (!graph?.nodes?.length) return false;
+  for (const node of graph.nodes) {
+    if (!node || node.bypassed || isNodeHidden(node)) continue;
+    if (MAIN_THREAD_ONLY_TYPES.has(node.type)) return true;
+    // Bound source nodes read a per-source frame map only the main thread builds.
+    if (node.type === "source" && node.params?.sourceId) return true;
+    // Audio-level reads the RMS envelope, which lives on the main thread.
+    if (node.type === "audio-level") return true;
+  }
+  return false;
 }
 
 export function isNodeHidden(node) {
@@ -174,9 +224,15 @@ export function evaluateGraphOutputs(graph, context) {
     let producedOutput = null;
 
     if (node.type === "source") {
-      producedOutput = applySourceNode(context?.sourceImage ?? null, node.params);
+      // A source node bound to a media source (params.sourceId) reads that
+      // source's frame from context.sourceFrames (built on the main thread);
+      // unbound nodes use the clip composite (context.sourceImage).
+      const boundId = node.params?.sourceId;
+      const bound = boundId ? context?.sourceFrames?.[boundId] : null;
+      producedOutput = applySourceNode(bound?.canvas ?? context?.sourceImage ?? null, node.params);
       results.set(node.id, producedOutput);
-      versions.set(node.id, `source@${sourceVersion};${hashParams(node.params)}`);
+      const srcVer = bound ? `${boundId}:${bound.version}` : sourceVersion;
+      versions.set(node.id, `source@${srcVer};${hashParams(node.params)}`);
     } else if (node.type === "viewer-output") {
       producedOutput = resolveInputImage(node, "image", index, results);
       results.set(node.id, producedOutput);
@@ -343,8 +399,11 @@ function inputSocketsFor(node) {
       return ["a", "b"];
     case "mesh-gradient":
     case "gradient":
+    case "field-map":
     case "noise":
     case "value":
+    case "audio-level":
+    case "field-probe":
       return [];
     default:
       return ["image"];
@@ -508,6 +567,8 @@ function computeNodeOutput(node, index, results, context) {
       return applyGradientMapNode(resolveInputImage(node, "image", index, results), node.params);
     case "gradient":
       return applyGradientNode(node.params, context);
+    case "field-map":
+      return applyFieldMapNode(node.params);
     case "mesh-gradient":
       return applyMeshGradientNode(node.params, context);
     case "noise":
@@ -590,6 +651,10 @@ function computeNodeOutput(node, index, results, context) {
       );
     case "value":
       return Number(node.params?.value ?? 0);
+    case "audio-level":
+      return getAudioLevel(context?.timeSeconds ?? 0, node.params);
+    case "field-probe":
+      return fieldProbeValue(node.params);
     case "math":
       return applyMathNode(
         resolveInputValue(node, "a", index, results, node.params?.a ?? 0),
@@ -607,6 +672,10 @@ function computeBypassOutput(node, index, results) {
   switch (node.type) {
     case "value":
       return Number(node.params?.value ?? 0);
+    case "audio-level":
+      return 0;
+    case "field-probe":
+      return 0;
     case "math":
       return resolveInputValue(node, "a", index, results, node.params?.a ?? 0);
     case "mix":
@@ -669,6 +738,30 @@ function applyParamEdges(node, index, results) {
 function clampToBounds(value, bounds) {
   if (!bounds) return value;
   return Math.max(bounds.min, Math.min(bounds.max, value));
+}
+
+// Sample a spatial field at a point -> scalar in 0..gain. Pure function of the
+// params (no time, no playback) so preview and export match. Radial: closeness
+// of the sample to the center within `radius`. Linear: a ramp across an axis.
+function fieldProbeValue(params) {
+  // Center / sample / radius come from the inspector as 0..100 (and 0..200 for
+  // radius) integer percentages, matching the gradient / chroma-aberration /
+  // lens-distort center convention; normalise to 0..1 (radius 0..2) here.
+  const num = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  const shape = String(params?.shape ?? "radial");
+  const cx = num(params?.centerX, 50) / 100;
+  const cy = num(params?.centerY, 50) / 100;
+  const sx = num(params?.sampleX, 50) / 100;
+  const sy = num(params?.sampleY, 50) / 100;
+  const radius = Math.max(1e-4, num(params?.radius, 50) / 100);
+  let v;
+  if (shape === "linear-x") v = (sx - cx) / radius + 0.5;
+  else if (shape === "linear-y") v = (sy - cy) / radius + 0.5;
+  else v = 1 - Math.hypot(sx - cx, sy - cy) / radius;
+  v = Math.max(0, Math.min(1, v));
+  if (String(params?.falloff ?? "linear") === "smooth") v = v * v * (3 - 2 * v);
+  if (params?.invert) v = 1 - v;
+  return v * num(params?.gain, 1);
 }
 
 function applyMathNode(a, b, params) {
