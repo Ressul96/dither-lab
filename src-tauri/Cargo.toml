@@ -2,8 +2,9 @@
 name = "dither-lab"
 version = "0.1.0"
 description = "Local-first dithering studio for video, image, and EXR sequences"
-authors = ["Dither Lab"]
+authors = ["Resul Ercan"]
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "dither_lab_lib"

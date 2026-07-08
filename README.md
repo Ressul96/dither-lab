@@ -20,3 +20,8 @@ npm run dev
 ```sh
 npm run build
 ```
+
+## License
+
+Released under the [MIT License](LICENSE) — free for anyone to use, modify, and
+distribute.
