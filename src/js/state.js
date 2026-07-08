@@ -78,7 +78,7 @@ const state = {
     durationUnit: "frame",      // "frame" | "second"
     zoom: 1,                    // ruler zoom multiplier (0.25 – 8)
     panelOpen: false,           // unified floating overlay body expanded; default collapsed so the canvas isn't covered on first launch
-    selectedPropertyId: null,   // string | null — sol panelde aktif property
+    selectedPropertyId: null,   // string | null — active property in the left panel
     expandedTrackIds: [],       // collapsed-by-default; user opens a lane explicitly
   },
   graphView: { ...DEFAULT_GRAPH_VIEW },
@@ -112,7 +112,10 @@ export function subscribe(topic, fn) {
 
 export function dispatch(topic, patch) {
   const slot = state[topic];
-  if (!slot) return;
+  if (!slot) {
+    console.warn(`[state] dispatch to unknown topic "${topic}" ignored`, patch);
+    return;
+  }
   state[topic] = { ...slot, ...patch };
   const subs = listeners.get(topic);
   if (subs) {
