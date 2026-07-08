@@ -2,6 +2,12 @@
 
 Local-first dithering studio built with Tauri, vanilla HTML/CSS/JS, and a graph-driven preview pipeline.
 
+![Dither Lab — a source image and its Floyd–Steinberg dithered output, produced live through the node graph](assets/hero-dither.png)
+
+Drop in a video, image sequence, or EXR sequence and shape it with a node graph:
+dithering, color, tone, blur/glow, distortion, and compositing — with real-time
+preview and matching export.
+
 ## Current Focus
 
 - Node graph editing and graph-driven preview
