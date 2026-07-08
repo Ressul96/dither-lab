@@ -1937,6 +1937,14 @@ async function renderCurrentFrame(options = {}) {
 
   const currentRenderVersion = ++renderVersion;
   const currentSourceToken = sourceToken;
+  // Passing the readiness guard means a real frame will be committed below. Earlier
+  // renders that fired while the <video> was still loading (readyState < 2) took the
+  // guard's failure branch and hid the viewer canvas; restore it here — the symmetric
+  // inverse of that branch — so a loaded source never stays blank behind the empty
+  // state. Idempotent and cheap; presentPreview() still manages the compare overlay.
+  canvas?.classList.remove("hidden");
+  splitCanvas?.classList.remove("hidden");
+  document.getElementById("emptyState")?.classList.add("hidden");
   // Authoritative composition time for this render. Preview reads the timeline
   // clock (playback.currentTime); export passes the exact frame time through
   // options.timeOverride (seekForExport doesn't write playback state). Single-
