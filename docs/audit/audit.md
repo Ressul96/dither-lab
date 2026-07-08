@@ -1,7 +1,7 @@
 # Dither Lab — İyileştirme Yol Haritası
 
 **Tarih:** 2026-07-02 (EXR source/pass/tonemap + Faz D #1/F22 closure güncellemesi)
-**Girdiler:** [docs/audit/2026-05-18-code-audit.md](2026-05-18-code-audit.md) + [docs/antigravityauditreport.md](../antigravityauditreport.md)
+**Girdiler:** [docs/audit/2026-05-18-code-audit.md](2026-05-18-code-audit.md)
 **Tip:** Audit raporu değil, uygulanabilir faz planı. Her faz "amaç → görev → dokunulacak dosya → başarı kriteri" biçiminde.
 
 > İki kaynak rapordaki bulgular kesişiyor. Bu doküman; Antigravity raporunun mantıklı maddelerini alır, 2026-05-18 auditindeki henüz kapatılmamış maddelerle birleştirir, son commit'lerde halledilenleri ayırır.
