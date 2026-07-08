@@ -28,6 +28,7 @@ import {
 } from "./timeline.js";
 import { selectedPath, tauriErrorMessage, tauriInvoke } from "./tauri-compat.js";
 import { listenWithDispose } from "./ui/lifecycle.js";
+import { showErrorToast } from "./ui/toast.js";
 import {
   addSource,
   compositionFromSource,
@@ -408,6 +409,7 @@ async function loadExrSource(path, options = {}) {
     sequence = await invoke("detect_exr_sequence", { path });
   } catch (error) {
     console.error("[open-source] EXR sequence detection failed", tauriErrorMessage(error));
+    showErrorToast(`Could not read the EXR sequence: ${tauriErrorMessage(error)}`);
     return;
   }
 
@@ -420,6 +422,7 @@ async function loadExrSource(path, options = {}) {
     frame = await invoke("decode_exr_frame", { path: firstPath, selection: null });
   } catch (error) {
     console.error("[open-source] EXR decode failed", tauriErrorMessage(error));
+    showErrorToast(`Could not decode the EXR file: ${tauriErrorMessage(error)}`);
     return;
   }
 
@@ -436,6 +439,7 @@ async function loadExrSource(path, options = {}) {
     });
   } catch (error) {
     console.error("[open-source] EXR decode returned an invalid frame", error);
+    showErrorToast("The EXR decoder returned an invalid frame.");
     return;
   }
 
@@ -511,6 +515,7 @@ async function addSourceFromSrc(src, path) {
       await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
     } catch (err) {
       console.error("[add-source] image load failed", err);
+      showErrorToast("Could not load the image.");
       return null;
     }
     el = new ImageMediaMock(img);
@@ -525,6 +530,7 @@ async function addSourceFromSrc(src, path) {
       await waitFor(el, "loadeddata");
     } catch (err) {
       console.error("[add-source] media load failed", err);
+      showErrorToast("Could not load the media file.");
       try { el.removeAttribute("src"); el.load(); } catch (_) {}
       return null;
     }
@@ -631,6 +637,7 @@ async function loadMedia(src, path, isImage, options = {}) {
       await waitFor(v, "loadeddata");
     } catch (err) {
       console.error("[open-source] media load failed", err);
+      showErrorToast("Could not open the media file.");
       clearSource();
       return;
     }

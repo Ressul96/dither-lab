@@ -1,3 +1,5 @@
+import { showErrorToast } from "./toast.js";
+
 const splashEls = {
   root: null,
   list: null,
@@ -50,6 +52,7 @@ async function handleSplashAction(action) {
     }
   } catch (error) {
     console.error("[splash] action failed", error);
+    showErrorToast(error?.message || "Could not open the project.");
   }
 }
 
@@ -60,6 +63,7 @@ async function openRecent(path) {
     if (project) hideSplash();
   } catch (error) {
     console.error("[splash] failed to open recent project", error);
+    showErrorToast(error?.message || "Could not open the recent project.");
   }
 }
 

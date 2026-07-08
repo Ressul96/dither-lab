@@ -25,6 +25,7 @@ import { initExport, openExport } from "./export.js";
 import { initSource, openSource, togglePlay, stepFrame, restart } from "./source.js";
 import { undo, redo, syncHistoryButtons } from "./state.js";
 import { disposeAll } from "./ui/lifecycle.js";
+import { showErrorToast } from "./ui/toast.js";
 
 initShell();
 initSource();
@@ -87,6 +88,7 @@ if (window.__TAURI__) {
       }
     } catch (err) {
       console.error("[menu:action failed]", payload, err);
+      showErrorToast(err?.message || `Action failed: ${payload}`);
     }
   });
 }
@@ -99,11 +101,24 @@ function initHistoryButtons() {
 }
 
 function initProjectButtons() {
-  bindAction("new-project", () => newProject());
-  bindAction("open-project", () => openProject());
-  bindAction("save-project", () => saveProject());
-  bindAction("save-project-as", () => saveProjectAs());
-  bindAction("export", () => openExport());
+  bindAction("new-project", guarded(() => newProject()));
+  bindAction("open-project", guarded(() => openProject()));
+  bindAction("save-project", guarded(() => saveProject()));
+  bindAction("save-project-as", guarded(() => saveProjectAs()));
+  bindAction("export", guarded(() => openExport()));
+}
+
+// Click handlers swallow promise rejections (a corrupt project file throws out
+// of openProject); surface them instead of failing silently.
+function guarded(fn) {
+  return async () => {
+    try {
+      await fn();
+    } catch (err) {
+      console.error("[action failed]", err);
+      showErrorToast(err?.message || "Operation failed.");
+    }
+  };
 }
 
 function bindAction(action, handler) {
