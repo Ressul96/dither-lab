@@ -4808,3 +4808,34 @@ body.dragging-curve .curve-handle {
     flex: 1 1 0;
   }
 }
+
+/* Toast notifications ------------------------------------------------ */
+
+.toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Above every layer, including the splash (100) and sheet backdrop (14). */
+  z-index: 200;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  max-width: 360px;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  font-size: var(--text-base);
+  cursor: pointer;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.toast--error {
+  border-color: var(--error);
+}
