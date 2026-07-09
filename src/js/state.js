@@ -126,11 +126,31 @@ export function dispatch(topic, patch) {
 const undoStack = [];
 const redoStack = [];
 
+// History-activity hook: fires on every push/undo/redo. Used by project.js to
+// track unsaved changes without a state.js -> project.js import cycle.
+const historyListeners = new Set();
+
+export function subscribeHistory(fn) {
+  historyListeners.add(fn);
+  return () => historyListeners.delete(fn);
+}
+
+function notifyHistoryListeners() {
+  for (const fn of [...historyListeners]) {
+    try {
+      fn();
+    } catch (error) {
+      console.error("[state] history listener failed", error);
+    }
+  }
+}
+
 export function pushHistory(entry) {
   undoStack.push(entry);
   if (undoStack.length > MAX_HISTORY_ENTRIES) undoStack.shift();
   redoStack.length = 0;
   syncHistoryButtons();
+  notifyHistoryListeners();
 }
 
 export function undo() {
@@ -139,6 +159,7 @@ export function undo() {
   e.undo();
   redoStack.push(e);
   syncHistoryButtons();
+  notifyHistoryListeners();
 }
 
 export function redo() {
@@ -147,6 +168,7 @@ export function redo() {
   e.redo();
   undoStack.push(e);
   syncHistoryButtons();
+  notifyHistoryListeners();
 }
 
 export function syncHistoryButtons() {

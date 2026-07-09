@@ -15,6 +15,8 @@ import { initAssetPanel } from "./ui/asset-panel.js";
 import { initTokenPanel } from "./ui/token-panel.js";
 import {
   getRecentProjects,
+  initDirtyTracking,
+  isProjectDirty,
   newProject,
   openProject,
   openRecentProject,
@@ -38,6 +40,7 @@ initTokenPanel();
 initProjectButtons();
 initHistoryButtons();
 initKeyboard();
+initDirtyTracking();
 initSplash({
   getRecentProjects,
   newProject,
@@ -53,6 +56,20 @@ syncHistoryButtons();
 window.addEventListener("beforeunload", disposeAll);
 
 if (window.__TAURI__) {
+  // Closing the window with unsaved changes silently discards them; ask first.
+  try {
+    window.__TAURI__.window.getCurrentWindow().onCloseRequested(async (event) => {
+      if (!isProjectDirty()) return;
+      const leave = await window.__TAURI__.dialog.ask(
+        "You have unsaved changes. Quit anyway?",
+        { title: "Unsaved Changes", kind: "warning" }
+      );
+      if (!leave) event.preventDefault();
+    });
+  } catch (err) {
+    console.error("[main] close guard unavailable", err);
+  }
+
   window.__TAURI__.event.listen("menu:action", async ({ payload }) => {
     try {
       switch (payload) {

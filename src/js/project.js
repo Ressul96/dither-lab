@@ -1,4 +1,4 @@
-import { DEFAULT_GRAPH_VIEW, dispatch, getState } from "./state.js";
+import { DEFAULT_GRAPH_VIEW, dispatch, getState, subscribeHistory } from "./state.js";
 import {
   createBootGraph,
   flushEditableClipGraph,
@@ -22,7 +22,34 @@ const SUPPORTED_PROJECT_VERSIONS = new Set([1]);
 const RECENT_PROJECTS_KEY = "dither-lab:recent-projects";
 const MAX_RECENT_PROJECTS = 8;
 
-export function newProject() {
+// Unsaved-changes tracking. Any undoable edit (history push/undo/redo) marks
+// the project dirty; explicit save, project load, and New Project clear it.
+let dirty = false;
+
+export function isProjectDirty() {
+  return dirty;
+}
+
+export function initDirtyTracking() {
+  subscribeHistory(() => {
+    dirty = true;
+  });
+}
+
+async function confirmDiscardIfDirty() {
+  if (!dirty) return true;
+  const ask = window.__TAURI__?.dialog?.ask;
+  if (typeof ask !== "function") {
+    return window.confirm("You have unsaved changes. Discard them?");
+  }
+  return ask("You have unsaved changes. Discard them?", {
+    title: "Unsaved Changes",
+    kind: "warning",
+  });
+}
+
+export async function newProject() {
+  if (!(await confirmDiscardIfDirty())) return;
   currentProjectPath = "";
   resetClipGraphScope();
   clearSource();
@@ -40,6 +67,7 @@ export function newProject() {
   });
   dispatch("timeline", createDefaultTimeline());
   dispatch("graphView", { ...DEFAULT_GRAPH_VIEW });
+  dirty = false;
 }
 
 export async function saveProject() {
@@ -70,6 +98,7 @@ export async function saveProjectAs() {
 }
 
 export async function openProject() {
+  if (!(await confirmDiscardIfDirty())) return null;
   const tauri = window.__TAURI__;
   if (!tauri?.dialog?.open || !tauri?.fs?.readTextFile) {
     console.warn("[project] open dialog or fs plugin is unavailable");
@@ -103,6 +132,7 @@ export async function openProject() {
 }
 
 export async function openRecentProject(path) {
+  if (!(await confirmDiscardIfDirty())) return null;
   const tauri = window.__TAURI__;
   if (!path || !tauri?.fs?.readTextFile) {
     console.warn("[project] recent project support is unavailable");
@@ -169,6 +199,7 @@ async function writeProjectFile(path) {
   }
 
   rememberRecentProject(path);
+  dirty = false;
   return project;
 }
 
@@ -285,6 +316,7 @@ async function applyProject(project) {
         getState().source.fps
     );
   }
+  dirty = false;
 }
 
 function suggestedProjectPath() {
