@@ -11,6 +11,8 @@ let deps = {
   newProject: () => null,
   openProject: () => null,
   openRecentProject: () => null,
+  recoveryDraft: null,
+  recoverDraft: () => null,
 };
 
 export function initSplash(nextDeps = {}) {
@@ -22,6 +24,26 @@ export function initSplash(nextDeps = {}) {
 
   splashEls.root.addEventListener("click", onSplashClick);
   renderRecentProjects();
+  renderRecoverRow();
+}
+
+// When a recovery draft exists (previous session crashed or quit unsaved), offer
+// a one-click restore above the recent-projects list.
+function renderRecoverRow() {
+  if (!deps.recoveryDraft) return;
+  const anchor = splashEls.root?.querySelector(".splash-recent");
+  if (!anchor) return;
+  const when = new Date(deps.recoveryDraft.recovery?.savedAt ?? Date.now());
+  const label = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "splash-recover";
+  row.textContent = `Recover last session (${label})`;
+  row.addEventListener("click", async () => {
+    await deps.recoverDraft();
+    hideSplash();
+  });
+  anchor.before(row);
 }
 
 function onSplashClick(event) {

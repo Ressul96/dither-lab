@@ -140,6 +140,25 @@ body {
   min-height: 32px;
 }
 
+.splash-recover {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  text-align: left;
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius-md);
+  background: rgba(74, 158, 255, 0.1);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.splash-recover:hover {
+  border-color: var(--accent);
+  background: rgba(74, 158, 255, 0.16);
+}
+
 .splash-recent {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);

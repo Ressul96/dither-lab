@@ -28,6 +28,7 @@ import { initSource, openSource, togglePlay, stepFrame, restart } from "./source
 import { undo, redo, syncHistoryButtons } from "./state.js";
 import { disposeAll } from "./ui/lifecycle.js";
 import { showErrorToast } from "./ui/toast.js";
+import { initAutosave, readRecoveryDraft, applyRecoveryDraft } from "./autosave.js";
 
 initShell();
 initSource();
@@ -41,12 +42,22 @@ initProjectButtons();
 initHistoryButtons();
 initKeyboard();
 initDirtyTracking();
-initSplash({
-  getRecentProjects,
-  newProject,
-  openProject,
-  openRecentProject,
-});
+initAutosave();
+// Reading the recovery draft is async (Tauri fs); resolve it before the splash
+// renders so it can offer to restore. Null without a draft or outside Tauri.
+(async () => {
+  const recoveryDraft = await readRecoveryDraft().catch(() => null);
+  initSplash({
+    getRecentProjects,
+    newProject,
+    openProject,
+    openRecentProject,
+    recoveryDraft,
+    recoverDraft: async () => {
+      if (recoveryDraft) await applyRecoveryDraft(recoveryDraft);
+    },
+  });
+})();
 syncHistoryButtons();
 
 // Tear down registered listeners + observers before the window unloads.
