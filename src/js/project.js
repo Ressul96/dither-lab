@@ -36,6 +36,34 @@ export function initDirtyTracking() {
   });
 }
 
+// "Project settled" fires after an explicit save / new / open — the points that
+// legitimately invalidate a recovery draft. autosave.js subscribes to clear the
+// draft. Deliberately NOT fired from applyProject, which recovery also uses.
+const settledListeners = new Set();
+
+export function subscribeProjectSettled(fn) {
+  settledListeners.add(fn);
+  return () => settledListeners.delete(fn);
+}
+
+function notifyProjectSettled() {
+  for (const fn of [...settledListeners]) {
+    try {
+      fn();
+    } catch (error) {
+      console.error("[project] settled listener failed", error);
+    }
+  }
+}
+
+export function getCurrentProjectPath() {
+  return currentProjectPath;
+}
+
+export function markProjectDirty() {
+  dirty = true;
+}
+
 async function confirmDiscardIfDirty() {
   if (!dirty) return true;
   const ask = window.__TAURI__?.dialog?.ask;
@@ -68,6 +96,7 @@ export async function newProject() {
   dispatch("timeline", createDefaultTimeline());
   dispatch("graphView", { ...DEFAULT_GRAPH_VIEW });
   dirty = false;
+  notifyProjectSettled();
 }
 
 export async function saveProject() {
@@ -128,6 +157,7 @@ export async function openProject() {
   await applyProject(project);
   currentProjectPath = path;
   rememberRecentProject(path);
+  notifyProjectSettled();
   return project;
 }
 
@@ -151,6 +181,7 @@ export async function openRecentProject(path) {
   await applyProject(project);
   currentProjectPath = path;
   rememberRecentProject(path);
+  notifyProjectSettled();
   return project;
 }
 
@@ -170,40 +201,41 @@ export function getRecentProjects() {
   }
 }
 
+// Atomic text write: write to a sibling .tmp then rename over the target, with a
+// remove-then-rename fallback for targets that reject rename-over-existing.
+// Shared by explicit save and autosave so both are crash-safe.
+async function atomicWriteText(path, text) {
+  const tauri = window.__TAURI__;
+  const rename = tauriRenameFn();
+  if (!tauri?.fs?.writeTextFile || typeof rename !== "function") {
+    throw new Error("Atomic write requires filesystem write + rename support.");
+  }
+  const tmpPath = `${path}.tmp`;
+  await tauri.fs.writeTextFile(tmpPath, text);
+  try {
+    await rename(tmpPath, path);
+  } catch (error) {
+    // Some targets reject rename-over-existing; fall back to remove + rename.
+    await tauriRemoveFile(path);
+    await rename(tmpPath, path);
+  }
+}
+
 async function writeProjectFile(path) {
   const tauri = window.__TAURI__;
   if (!tauri?.fs?.writeTextFile) {
     console.warn("[project] fs write support is unavailable");
     return null;
   }
-
   const project = buildProjectPayload();
-  const payload = JSON.stringify(project, null, 2);
-  const tmpPath = `${path}.tmp`;
-  const rename = tauriRenameFn();
-  if (typeof rename !== "function") {
-    throw new Error("Project save requires filesystem rename support for atomic writes.");
-  }
-
-  await tauri.fs.writeTextFile(tmpPath, payload);
-
-  try {
-    await rename(tmpPath, path);
-  } catch (error) {
-    // Some targets reject rename-over-existing; fall back to remove + rename.
-    // The remove is best-effort — if the target file doesn't exist (first
-    // save) or remove fails for another reason, the second rename either
-    // succeeds anyway or surfaces the original error.
-    await tauriRemoveFile(path);
-    await rename(tmpPath, path);
-  }
-
+  await atomicWriteText(path, JSON.stringify(project, null, 2));
   rememberRecentProject(path);
   dirty = false;
+  notifyProjectSettled();
   return project;
 }
 
-function buildProjectPayload() {
+export function buildProjectPayload() {
   const state = getState();
   // If a clip graph is open in the editor, flush its live edits to the registry
   // so the save captures them (and getGlobalGraph below serialises the GLOBAL
@@ -317,6 +349,14 @@ async function applyProject(project) {
     );
   }
   dirty = false;
+}
+
+// Recovery entry point: apply a draft payload, then mark dirty (a recovered
+// draft is not a saved project). Does not emit the settled signal, so the draft
+// it just restored is left in place for a second crash.
+export async function applyProjectPayload(project) {
+  await applyProject(project);
+  markProjectDirty();
 }
 
 function suggestedProjectPath() {
