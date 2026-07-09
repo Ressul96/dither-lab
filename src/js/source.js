@@ -1581,6 +1581,10 @@ export function endExportSession() {
   if (v) syncPlaybackState(v);
 }
 
+export function isExportSessionActive() {
+  return exportSessionActive;
+}
+
 // Seek a <video> to `target` (in-element seconds) and resolve once a fresh
 // frame has actually painted. `seeked` alone is not enough: it reports the
 // position update, but the <video>'s drawImage source can still hold the
